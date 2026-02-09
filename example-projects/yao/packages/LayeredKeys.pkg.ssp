@@ -7,6 +7,8 @@ package LayeredKeys {
         T: Table((Integer, Integer), Table(Bool, Bits(n))),
         z: Table((Integer, Integer), Bool),
         flag: Table((Integer, Integer), Bool),
+        Z1: Table(Bool, Bits(n)),
+        Z: Table(Bool, Bits(n)),
     }
 
 
