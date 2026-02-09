@@ -414,11 +414,19 @@
         (state-right <GameState_HybridReal_<$<!n!><!m!><!p!><!w!><!d!><!hplusone!>$>>)
     )
     Bool
+    true
+)
+
+(define-fun invariants
+    (
+        (state-left <GameState_HybridIdeal_<$<!n!><!m!><!p!><!w!><!d!><!h!>$>>)
+        (state-right <GameState_HybridReal_<$<!n!><!m!><!p!><!w!><!d!><!hplusone!>$>>)
+    )
+    Bool
     (and
-        true
-        ;(equal-z state-left state-right)
-        ;(equal-T state-left state-right)
-        ;(equal-flag state-left state-right)
+        (equal-z state-left state-right)
+        (equal-T state-left state-right)
+        (equal-flag state-left state-right)
     )
 )
 
@@ -1077,11 +1085,7 @@
         (j Int)
     )
     Bool
-    (and 
-        (equal-T old-state-left old-state-right)
-        (equal-z old-state-left old-state-right)
-        (equal-flag old-state-left old-state-right)
-    )
+    (invariants old-state-left old-state-right)
 )
 
 (define-fun <relation-assert-all-invariants-HybridIdeal-HybridReal1-GBLG>
@@ -1102,11 +1106,7 @@
             (state-left (<oracle-return-HybridIdeal-<$<!n!><!m!><!p!><!w!><!d!><!h!>$>-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-GBLG-game-state> return-left))
             (state-right (<oracle-return-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!hplusone!>$>-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-GBLG-game-state> return-right))
         )
-        (and 
-            (equal-T state-left state-right)
-            (equal-z state-left state-right)
-            (equal-flag state-left state-right)
-        )
+        (invariants state-left state-right)
     )
 )
 
