@@ -218,16 +218,21 @@ theorem CoreSecurity {
                     /* debug: [value-of-i]
                     equal-aborts: [value-of-i]
                     same-output: [no-abort, value-of-i] */
-                    case-i-is-hminusone: [case-i-is-hminusone-assumptions]
-                    case-i-lt-hminusone: [case-i-lt-hminusone-assumptions]
-                    assert-all-invariants: [no-abort, assume-all-invariants]
+                    case-i-is-hminusone-assumptions: [assume-all-invariants]
+                    case-i-lt-hminusone-assumptions: [assume-all-invariants]
+                    case-i-is-h-assumptions: [assume-all-invariants]
+                    case-i-is-hplusone-assumptions: [assume-all-invariants]
+                    case-i-is-hplustwo-assumptions: [assume-all-invariants]
+                    case-i-gt-hplustwo-assumptions: [assume-all-invariants]
                     same-output:  [no-abort, case-i-is-h, case-i-is-hplusone, case-i-is-hplustwo, case-i-gt-hplustwo, case-i-lt-hminusone, case-i-is-hminusone]
                     equal-aborts: [case-i-is-h, case-i-is-hplusone, case-i-is-hplustwo, case-i-gt-hplustwo, case-i-lt-hminusone, case-i-is-hminusone]
                     case-i-gt-hplustwo: [case-i-gt-hplustwo-assumptions]
                     case-i-is-hplustwo: [case-i-is-hplustwo-assumptions]
                     case-i-is-h: [case-i-is-h-assumptions]
                     case-i-is-hplusone: [case-i-is-hplusone-assumptions]
-
+                    case-i-is-hminusone: [case-i-is-hminusone-assumptions]
+                    case-i-lt-hminusone: [case-i-lt-hminusone-assumptions]
+                    assert-all-invariants: [no-abort, assume-all-invariants]
                 }
             }
 
