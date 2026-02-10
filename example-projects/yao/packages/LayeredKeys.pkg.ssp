@@ -9,6 +9,8 @@ package LayeredKeys {
         flag: Table((Integer, Integer), Bool),
         Z1: Table(Bool, Bits(n)),
         Z: Table(Bool, Bits(n)),
+        r: Bits(n),
+        rr: Bits(n),
     }
 
 

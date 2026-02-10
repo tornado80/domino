@@ -17,7 +17,6 @@ package Enc1 {
         K <- invoke GETKEYSIN(j);
         z <- invoke GETBIT(j);
         r <-$ Bits(n);
-        /* c <-$ Bits(m); */
         if (d == z) {
             c <- encn(Unwrap(K[d]), nzero, r);
         } else {
@@ -30,7 +29,6 @@ package Enc1 {
         K <- invoke GETKEYSIN(j);
         z <- invoke GETBIT(j);
         r <-$ Bits(n);
-        /* c <-$ Bits(p); */
         if (d == z) {
             c <- encm(Unwrap(K[d]), mzero, r);
         } else {
