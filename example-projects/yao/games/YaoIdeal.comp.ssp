@@ -40,7 +40,8 @@ composition YaoIdeal {
 
     instance Proxy = LayeredSimProxy {
         params {
-            p: p
+            p: p,
+            d: d
         }
     }
 

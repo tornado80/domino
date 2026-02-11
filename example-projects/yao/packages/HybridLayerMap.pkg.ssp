@@ -25,6 +25,7 @@ package HybridLayerMap {
     }
 
     oracle SETBIT(j: Integer, b: Bool) {
+        assert (d > 0); /* for CoreIdeal = LastHybrid */
         if (h == 1) {
             _ <- invoke SETBIT(j, b);
         } else {
@@ -33,6 +34,7 @@ package HybridLayerMap {
     }
 
     oracle GETAOUT(j: Integer) -> Bits(n) {
+        assert (d > 0);
         if (h == 1) {
             k <- invoke GETAOUT(j);
         } else {
@@ -59,7 +61,7 @@ package HybridLayerMap {
         j: Integer) -> Table(Bits(p), Bool)
     {
         assert (i > 0);
-        
+        assert (i <= d);
         if (i < h) {
             C <- invoke LSIMGBLG(i, l, r, op, j);
             return C;

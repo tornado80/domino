@@ -1,6 +1,7 @@
 package LayeredSimProxy {
     params {
         p: Integer,
+        d: Integer, /* number of layers of the circuit */
     }
 
     import oracles {
@@ -21,6 +22,7 @@ package LayeredSimProxy {
         j: Integer
     ) -> Table(Bits(p), Bool) {
         assert (i > 0);
+        assert (i <= d);
         C <- invoke LSIMGBLG(i, l, r, op, j);
         return C;
     }

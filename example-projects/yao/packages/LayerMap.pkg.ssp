@@ -12,10 +12,12 @@ package LayerMap {
     }
 
     oracle SETBIT(j: Integer, b: Bool) {
+        assert (d > 0); /* for CoreIdeal = LastHybrid */
         _ <- invoke LSETBIT(1, j, b);
     }
 
     oracle GETAOUT(j: Integer) -> Bits(n) {
+        assert (d > 0);
         k <- invoke LGETAOUT(1, j);
         return k;
     }

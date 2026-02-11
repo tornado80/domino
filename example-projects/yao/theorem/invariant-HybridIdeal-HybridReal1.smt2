@@ -408,15 +408,6 @@
     )
 )
 
-(define-fun invariant
-    (
-        (state-left <GameState_HybridIdeal_<$<!n!><!m!><!p!><!w!><!d!><!h!>$>>)
-        (state-right <GameState_HybridReal_<$<!n!><!m!><!p!><!w!><!d!><!hplusone!>$>>)
-    )
-    Bool
-    true
-)
-
 (define-fun invariants
     (
         (state-left <GameState_HybridIdeal_<$<!n!><!m!><!p!><!w!><!d!><!h!>$>>)
@@ -428,6 +419,15 @@
         (equal-T state-left state-right)
         (equal-flag state-left state-right)
     )
+)
+
+(define-fun invariant
+    (
+        (state-left <GameState_HybridIdeal_<$<!n!><!m!><!p!><!w!><!d!><!h!>$>>)
+        (state-right <GameState_HybridReal_<$<!n!><!m!><!p!><!w!><!d!><!hplusone!>$>>)
+    )
+    Bool
+    (invariants state-left state-right)
 )
 
 (define-fun <relation-value-of-h-HybridIdeal-HybridReal1-SETBIT>
