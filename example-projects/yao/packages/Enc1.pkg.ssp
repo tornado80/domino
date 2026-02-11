@@ -16,7 +16,7 @@ package Enc1 {
     oracle ENCN(j: Integer, d: Bool, nzero: Bits(n), none: Bits(n)) -> Bits(m) {
         K <- invoke GETKEYSIN(j);
         z <- invoke GETBIT(j);
-        r <-$ Bits(n);
+        r <-$ Bits(n) sample-name r;
         if (d == z) {
             c <- encn(Unwrap(K[d]), nzero, r);
         } else {
@@ -28,7 +28,7 @@ package Enc1 {
     oracle ENCM(j: Integer, d: Bool, mzero: Bits(m), mone: Bits(m)) -> Bits(p) {
         K <- invoke GETKEYSIN(j);
         z <- invoke GETBIT(j);
-        r <-$ Bits(n);
+        r <-$ Bits(n) sample-name r;
         if (d == z) {
             c <- encm(Unwrap(K[d]), mzero, r);
         } else {

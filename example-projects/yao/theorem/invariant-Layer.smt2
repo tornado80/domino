@@ -52,56 +52,56 @@
            (= base-ctr-0 scr-0)
            (= base-ctr-1 scr-1))
       ;; Iteration 0
-      (and (= id-0 (sample-id "enc" "ENCN" "1"))
+      (and (= id-0 (sample-id "enc" "ENCN" "r"))
            (= id-1 (sample-id "simgate" "GBLG" "rin_round_0"))
            (= scr-0 (+ base-ctr-0
                        (* 2 (ite zl 0 1)) ; Select matching round
                        (* 2 (ite zr 0 2)) ; Select matching round
                        0))                ; Offset first/second ENCN call
            (= base-ctr-1 scr-1))
-      (and (= id-0 (sample-id "enc" "ENCM" "1"))
+      (and (= id-0 (sample-id "enc" "ENCM" "r"))
            (= id-1 (sample-id "simgate" "GBLG" "rout_round_0"))
            (= scr-0 (+ base-ctr-0
                        (ite zl 0 1)   ; Select matching round
                        (ite zr 0 2))) ; Select matching round
            (= base-ctr-1 scr-1))
       ;; Iteration 1
-      (and (= id-0 (sample-id "enc" "ENCN" "1"))
+      (and (= id-0 (sample-id "enc" "ENCN" "r"))
            (= id-1 (sample-id "simgate" "GBLG" "rin_round_1"))
            (= scr-0 (+ base-ctr-0
                        (* 2 (ite zl 1 0)) ; Select matching round
                        (* 2 (ite zr 0 2)) ; Select matching round
                        0))                ; Offset first/second ENCN call
            (= base-ctr-1 scr-1))
-      (and (= id-0 (sample-id "enc" "ENCM" "1"))
+      (and (= id-0 (sample-id "enc" "ENCM" "r"))
            (= id-1 (sample-id "simgate" "GBLG" "rout_round_1"))
            (= scr-0 (+ base-ctr-0
                        (ite zl 1 0)   ; Select matching round
                        (ite zr 0 2))) ; Select matching round
            (= base-ctr-1 scr-1))
       ;; iteration 2
-      (and (= id-0 (sample-id "enc" "ENCN" "1"))
+      (and (= id-0 (sample-id "enc" "ENCN" "r"))
            (= id-1 (sample-id "simgate" "GBLG" "rin_round_2"))
            (= scr-0 (+ base-ctr-0
                        (* 2 (ite zl 0 1)) ; Select matching round
                        (* 2 (ite zr 2 0)) ; Select matching round
                        1))                ; Offset first/second ENCN call
            (= base-ctr-1 scr-1))
-      (and (= id-0 (sample-id "enc" "ENCM" "1"))
+      (and (= id-0 (sample-id "enc" "ENCM" "r"))
            (= id-1 (sample-id "simgate" "GBLG" "rout_round_2"))
            (= scr-0 (+ base-ctr-0
                        (ite zl 0 1)   ; Select matching round
                        (ite zr 2 0))) ; Select matching round
            (= base-ctr-1 scr-1))
       ;; iteration 3
-      (and (= id-0 (sample-id "enc" "ENCN" "1"))
+      (and (= id-0 (sample-id "enc" "ENCN" "r"))
            (= id-1 (sample-id "simgate" "GBLG" "rin_round_3"))
            (= scr-0 (+ base-ctr-0
                        (* 2 (ite zl 1 0)) ; Select matching round
                        (* 2 (ite zr 2 0)) ; Select matching round
                        1))                ; Offset first/second ENCN call
            (= base-ctr-1 scr-1))
-      (and (= id-0 (sample-id "enc" "ENCM" "1"))
+      (and (= id-0 (sample-id "enc" "ENCM" "r"))
            (= id-1 (sample-id "simgate" "GBLG" "rout_round_3"))
            (= scr-0 (+ base-ctr-0
                        (ite zl 1 0)   ; Select matching round
