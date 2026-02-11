@@ -6,10 +6,6 @@ package HybridLayerMap {
         p: Integer,
     }
 
-    state {
-        branch: Integer
-    }
-
     import oracles {
         /* non-layered packages */
         SETBIT(j: Integer, b: Bool),
@@ -67,7 +63,6 @@ package HybridLayerMap {
             return C;
         }
         if (i > h) {
-            branch <- 1;
             C <- invoke LGATEGBLG(i, l, r, op, j);
             return C;
         }

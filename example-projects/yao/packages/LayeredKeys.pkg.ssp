@@ -7,8 +7,6 @@ package LayeredKeys {
         T: Table((Integer, Integer), Table(Bool, Bits(n))),
         z: Table((Integer, Integer), Bool),
         flag: Table((Integer, Integer), Bool),
-        Z1: Table(Bool, Bits(n)),
-        Z: Table(Bool, Bits(n)),
         r: Bits(n),
         rr: Bits(n),
     }
@@ -64,8 +62,8 @@ package LayeredKeys {
             Z[false] <- Some(rr);
             T[(i, j)] <- Some(Z);
         }
-        Z1 <- Unwrap(T[(i, j)]);
-        return Z1;
+        Z <- Unwrap(T[(i, j)]);
+        return Z;
     }
 
     oracle LGETBIT(i: Integer, j: Integer) -> Bool {

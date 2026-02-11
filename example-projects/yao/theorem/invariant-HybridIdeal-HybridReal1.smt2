@@ -1632,15 +1632,15 @@
                 (flag-real-left 
                     (<pkg-state-LayeredKeys-<$<!n!>$>-flag> 
                         (<game-HybridIdeal-<$<!n!><!m!><!p!><!w!><!d!><!h!>$>-pkgstate-RealLayersKeys> state-left)))    
-                (Z1-real-left 
-                    (<pkg-state-LayeredKeys-<$<!n!>$>-Z1> 
-                        (<game-HybridIdeal-<$<!n!><!m!><!p!><!w!><!d!><!h!>$>-pkgstate-RealLayersKeys> state-left)))
-                (Z-real-left 
-                    (<pkg-state-LayeredKeys-<$<!n!>$>-Z> 
-                        (<game-HybridIdeal-<$<!n!><!m!><!p!><!w!><!d!><!h!>$>-pkgstate-RealLayersKeys> state-left)))
-                (b-left
-                    (<pkg-state-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-branch>
-                    (<game-HybridIdeal-<$<!n!><!m!><!p!><!w!><!d!><!h!>$>-pkgstate-LayerMap> state-left)))
+                ;(Z1-real-left 
+                ;    (<pkg-state-LayeredKeys-<$<!n!>$>-Z1> 
+                ;        (<game-HybridIdeal-<$<!n!><!m!><!p!><!w!><!d!><!h!>$>-pkgstate-RealLayersKeys> state-left)))
+                ;(Z-real-left 
+                ;    (<pkg-state-LayeredKeys-<$<!n!>$>-Z> 
+                ;        (<game-HybridIdeal-<$<!n!><!m!><!p!><!w!><!d!><!h!>$>-pkgstate-RealLayersKeys> state-left)))
+                ;(b-left
+                ;    (<pkg-state-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-branch>
+                ;    (<game-HybridIdeal-<$<!n!><!m!><!p!><!w!><!d!><!h!>$>-pkgstate-LayerMap> state-left)))
                 (T-real-left 
                     (<pkg-state-LayeredKeys-<$<!n!>$>-T> 
                     (<game-HybridIdeal-<$<!n!><!m!><!p!><!w!><!d!><!h!>$>-pkgstate-RealLayersKeys> state-left)))
@@ -1648,15 +1648,15 @@
                 (flag-real-right 
                     (<pkg-state-LayeredKeys-<$<!n!>$>-flag> 
                         (<game-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!hplusone!>$>-pkgstate-RealLayersKeys> state-right)))
-                (Z1-real-right 
-                    (<pkg-state-LayeredKeys-<$<!n!>$>-Z1> 
-                        (<game-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!hplusone!>$>-pkgstate-RealLayersKeys> state-right)))
-                (Z-real-right 
-                    (<pkg-state-LayeredKeys-<$<!n!>$>-Z> 
-                        (<game-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!hplusone!>$>-pkgstate-RealLayersKeys> state-right)))
-                (b-right
-                    (<pkg-state-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-branch>
-                    (<game-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!hplusone!>$>-pkgstate-LayerMap> state-right)))
+                ;(Z1-real-right 
+                ;    (<pkg-state-LayeredKeys-<$<!n!>$>-Z1> 
+                ;        (<game-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!hplusone!>$>-pkgstate-RealLayersKeys> state-right)))
+                ;(Z-real-right 
+                ;    (<pkg-state-LayeredKeys-<$<!n!>$>-Z> 
+                ;        (<game-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!hplusone!>$>-pkgstate-RealLayersKeys> state-right)))
+                ;(b-right
+                ;    (<pkg-state-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-branch>
+                ;    (<game-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!hplusone!>$>-pkgstate-LayerMap> state-right)))
                 (T-real-right 
                     (<pkg-state-LayeredKeys-<$<!n!>$>-T> 
                     (<game-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!hplusone!>$>-pkgstate-RealLayersKeys> state-right)))

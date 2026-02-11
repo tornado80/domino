@@ -386,6 +386,72 @@
     )
 )
 
+(define-fun <relation-case-i-lt-dminusone-CoreIdeal-LastHybrid-GBLG>
+    (
+        (old-state-left <GameState_CoreIdeal_<$<!n!><!m!><!p!><!w!><!d!>$>>)
+        (old-state-right <GameState_HybridIdeal_<$<!n!><!m!><!p!><!w!><!d!><!d!>$>>)
+        (return-left <OracleReturn_CoreIdeal_<$<!n!><!m!><!p!><!w!><!d!>$>_LayeredSimProxy_<$<!d!><!p!>$>_GBLG>)
+        (return-right <OracleReturn_HybridIdeal_<$<!n!><!m!><!p!><!w!><!d!><!d!>$>_HybridLayerMap_<$<!d!><!h!><!n!><!p!>$>_GBLG>)
+        (i Int)
+        (l Int)
+        (r Int)
+        (op (Array (Tuple2 Bool Bool) (Maybe Bool)))
+        (j Int)
+    )
+    Bool
+    (=>
+        (< i (- d 1))
+        (=
+            (<oracle-return-CoreIdeal-<$<!n!><!m!><!p!><!w!><!d!>$>-LayeredSimProxy-<$<!d!><!p!>$>-GBLG-return-value-or-abort> return-left)
+            (<oracle-return-HybridIdeal-<$<!n!><!m!><!p!><!w!><!d!><!d!>$>-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-GBLG-return-value-or-abort>  return-right)
+        )
+    )
+)
+
+(define-fun <relation-case-i-is-dminusone-CoreIdeal-LastHybrid-GBLG>
+    (
+        (old-state-left <GameState_CoreIdeal_<$<!n!><!m!><!p!><!w!><!d!>$>>)
+        (old-state-right <GameState_HybridIdeal_<$<!n!><!m!><!p!><!w!><!d!><!d!>$>>)
+        (return-left <OracleReturn_CoreIdeal_<$<!n!><!m!><!p!><!w!><!d!>$>_LayeredSimProxy_<$<!d!><!p!>$>_GBLG>)
+        (return-right <OracleReturn_HybridIdeal_<$<!n!><!m!><!p!><!w!><!d!><!d!>$>_HybridLayerMap_<$<!d!><!h!><!n!><!p!>$>_GBLG>)
+        (i Int)
+        (l Int)
+        (r Int)
+        (op (Array (Tuple2 Bool Bool) (Maybe Bool)))
+        (j Int)
+    )
+    Bool
+    (=>
+        (= i (- d 1))
+        (=
+            (<oracle-return-CoreIdeal-<$<!n!><!m!><!p!><!w!><!d!>$>-LayeredSimProxy-<$<!d!><!p!>$>-GBLG-return-value-or-abort> return-left)
+            (<oracle-return-HybridIdeal-<$<!n!><!m!><!p!><!w!><!d!><!d!>$>-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-GBLG-return-value-or-abort>  return-right)
+        )
+    )
+)
+
+(define-fun <relation-case-i-is-d-CoreIdeal-LastHybrid-GBLG>
+    (
+        (old-state-left <GameState_CoreIdeal_<$<!n!><!m!><!p!><!w!><!d!>$>>)
+        (old-state-right <GameState_HybridIdeal_<$<!n!><!m!><!p!><!w!><!d!><!d!>$>>)
+        (return-left <OracleReturn_CoreIdeal_<$<!n!><!m!><!p!><!w!><!d!>$>_LayeredSimProxy_<$<!d!><!p!>$>_GBLG>)
+        (return-right <OracleReturn_HybridIdeal_<$<!n!><!m!><!p!><!w!><!d!><!d!>$>_HybridLayerMap_<$<!d!><!h!><!n!><!p!>$>_GBLG>)
+        (i Int)
+        (l Int)
+        (r Int)
+        (op (Array (Tuple2 Bool Bool) (Maybe Bool)))
+        (j Int)
+    )
+    Bool
+    (=>
+        (= i d)
+        (=
+            (<oracle-return-CoreIdeal-<$<!n!><!m!><!p!><!w!><!d!>$>-LayeredSimProxy-<$<!d!><!p!>$>-GBLG-return-value-or-abort> return-left)
+            (<oracle-return-HybridIdeal-<$<!n!><!m!><!p!><!w!><!d!><!d!>$>-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-GBLG-return-value-or-abort>  return-right)
+        )
+    )
+)
+
 (assert 
     (=
         (<theorem-consts-CoreSecurity-d> <<theorem-consts>>)
