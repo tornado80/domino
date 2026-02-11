@@ -216,16 +216,16 @@
      (= Left-Top-z Right-Top-z)
      (= Left-Bottom-T Right-Bottom-T)
 
-     (wellformed-T Left-Top-T)
-     (wellformed-T Right-Top-T)
-     (wellformed-T Left-Bottom-T)
-     (wellformed-T Right-Bottom-T)
+     (wellformed-T Left-Top-T) ; for left aborts
+     (wellformed-T Right-Top-T) ; for right aborts
+     (wellformed-T Left-Bottom-T) ; for left aborts
+     (wellformed-T Right-Bottom-T) ; for right aborts
 
-     (aout-key-package Left-Top-T Left-Top-z Left-Top-flag)
-     (aout-key-package Left-Bottom-T Left-Bottom-flag Left-Bottom-flag) ; z might not be set but flag is so cheating :-)
-     (aout-key-package Right-Top-T Right-Top-z Right-Top-flag)
-     (aout-key-package Right-Bottom-T Right-Bottom-z Right-Bottom-flag)
-
+     (aout-key-package Left-Top-T Left-Top-z Left-Top-flag) ; for left aborts
+     
+     (aout-key-package Right-Top-T Right-Top-z Right-Top-flag) ; for right aborts
+     
+     ;(forall ((i Int)) (= (is-mk-none (select Right-Bottom-z i)) (not (= (mk-some true) (select Right-Bottom-flag i))))) ; also works
      (forall ((i Int)) (= (is-mk-none (select Right-Bottom-z i)) (not (= (mk-some true) (select Left-Bottom-flag i)))))))))
 
 
