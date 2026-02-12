@@ -127,8 +127,19 @@ composition Hybrid0 {
         }
     }
 
+    instance Mod = Mod3Layer {
+        params {
+            w: w,
+            p: p,
+            n: n,
+        }
+    }
+
     compose {
         adversary: {
+            GARBLE: Mod,
+        }
+        Mod: {
             GETAOUT: keys0,
             SETBIT: keys0,
             GBL1: GBL1,

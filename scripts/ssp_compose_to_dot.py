@@ -16,6 +16,9 @@ Usage:
     # Also render SVG (requires graphviz 'dot' on PATH)
     python scripts/ssp_compose_to_dot.py path/to/Game.comp.ssp --svg
 
+    # Also render PDF (requires graphviz 'dot' on PATH)
+    python scripts/ssp_compose_to_dot.py path/to/Game.comp.ssp --pdf
+
 Then render:
   dot -Tsvg Game.dot > Game.svg
 """
@@ -492,14 +495,14 @@ def parse_file(path: str) -> Tuple[str, List[Edge], dict[str, str]]:
     return name, p.edges, p.instance_types
 
 
-def render_dot_to_svg(dot: str, svg_path: str) -> None:
+def render_dot(dot: str, out_path: str, fmt: str) -> None:
     if shutil.which("dot") is None:
         raise RuntimeError(
             "Graphviz 'dot' not found on PATH. Install graphviz "
-            "or run without --svg."
+            "or run without --svg/--pdf."
         )
     proc = subprocess.run(
-        ["dot", "-Tsvg"],
+        ["dot", f"-T{fmt}"],
         input=dot.encode("utf-8"),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -509,7 +512,7 @@ def render_dot_to_svg(dot: str, svg_path: str) -> None:
         raise RuntimeError(
             "dot failed:\n" + proc.stderr.decode("utf-8", errors="replace")
         )
-    with open(svg_path, "wb") as f:
+    with open(out_path, "wb") as f:
         f.write(proc.stdout)
 
 
@@ -563,6 +566,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         action="store_true",
         help="Only write .svg output (implies --svg)",
     )
+    ap.add_argument(
+        "--pdf",
+        action="store_true",
+        help="Also render a .pdf next to the .dot (requires graphviz 'dot')",
+    )
+    ap.add_argument(
+        "--pdf-only",
+        action="store_true",
+        help="Only write .pdf output (implies --pdf)",
+    )
     args = ap.parse_args(argv)
 
     if len(args.inputs) > 1 and args.out is not None and not (
@@ -582,6 +595,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.svg_only:
         args.svg = True
 
+    if args.pdf_only:
+        args.pdf = True
+
     for inp in args.inputs:
         name, edges, instance_types = parse_file(inp)
         dot = to_dot(
@@ -596,15 +612,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         dot_path = infer_output_path(inp, args.out, ".dot")
         svg_path = infer_output_path(inp, args.out, ".svg")
+        pdf_path = infer_output_path(inp, args.out, ".pdf")
 
-        if not args.svg_only:
+        if not args.svg_only and not args.pdf_only:
             with open(dot_path, "w", encoding="utf-8") as f:
                 f.write(dot)
             print(dot_path)
 
         if args.svg:
-            render_dot_to_svg(dot, svg_path)
+            render_dot(dot, svg_path, fmt="svg")
             print(svg_path)
+
+        if args.pdf:
+            render_dot(dot, pdf_path, fmt="pdf")
+            print(pdf_path)
 
     return 0
 
