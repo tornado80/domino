@@ -120,9 +120,9 @@ theorem LayerSecurity {
                 ]
 
                 lemmas {
-                    aborts: []
+                    /* aborts: [] */
                     same-output: [no-abort]
-                    equal-aborts: [aborts]
+                    equal-aborts: []
                     invariant: [no-abort]
                     
                 }
