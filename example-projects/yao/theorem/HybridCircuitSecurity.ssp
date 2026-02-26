@@ -208,8 +208,6 @@ theorem HybridCircuitSecurity {
                 ]
 
                 lemmas {
-                    /* debug-rand-mapping: [no-abort, value-of-h] */
-                    /* debug-invariant: [no-abort, value-of-h] */
                     same-output:  [no-abort]
                     equal-aborts: []
                     invariant:    [no-abort]

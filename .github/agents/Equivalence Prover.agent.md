@@ -232,6 +232,11 @@ Inside `BODY`, Domino introduces dot-bindings for:
 
 This lets you write custom lemma bodies in a style close to a structured record access rather than raw selector composition.
 
+Style rule for this repo:
+
+- When using `define-lemma`, do **not** include an explicit output sort like `Bool`.
+- Write it as `(define-lemma <name> (args...) BODY)` (same convention as `define-state-relation`).
+
 **Randomness model: SampleId, sampling functions, and counters**
 
 - `SampleId` is a datatype with constructor `sample-id` (triple of strings: package-name, oracle-name, sample-name).

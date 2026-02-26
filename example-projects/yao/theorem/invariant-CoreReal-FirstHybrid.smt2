@@ -155,7 +155,7 @@
     )
 )
 
-(define-fun <relation-case-i-is-one-CoreReal-FirstHybrid-GBLG>
+(define-lemma <relation-case-i-is-one-CoreReal-FirstHybrid-GBLG>
     (
         (old-state-left <GameState_CoreReal_<$<!n!><!m!><!p!><!w!><!d!>$>>)
         (old-state-right <GameState_HybridReal_<$<!n!><!m!><!p!><!w!><!d!><!1!>$>>)
@@ -167,17 +167,13 @@
         (op (Array (Tuple2 Bool Bool) (Maybe Bool)))
         (j Int)
     )
-    Bool
     (=>
         (= i 1)
-        (= 
-            (<oracle-return-CoreReal-<$<!n!><!m!><!p!><!w!><!d!>$>-LayeredGateProxy-<$<!d!><!p!>$>-GBLG-return-value-or-abort> return-left)
-            (<oracle-return-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!1!>$>-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-GBLG-return-value-or-abort> return-right)
-        )
+        (= return-left.value return-right.value)
     )
 )
 
-(define-fun <relation-case-i-is-two-CoreReal-FirstHybrid-GBLG>
+(define-lemma <relation-case-i-is-two-CoreReal-FirstHybrid-GBLG>
     (
         (old-state-left <GameState_CoreReal_<$<!n!><!m!><!p!><!w!><!d!>$>>)
         (old-state-right <GameState_HybridReal_<$<!n!><!m!><!p!><!w!><!d!><!1!>$>>)
@@ -189,17 +185,13 @@
         (op (Array (Tuple2 Bool Bool) (Maybe Bool)))
         (j Int)
     )
-    Bool
     (=>
         (= i 2)
-        (= 
-            (<oracle-return-CoreReal-<$<!n!><!m!><!p!><!w!><!d!>$>-LayeredGateProxy-<$<!d!><!p!>$>-GBLG-return-value-or-abort> return-left)
-            (<oracle-return-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!1!>$>-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-GBLG-return-value-or-abort> return-right)
-        )
+        (= return-left.value return-right.value)
     )
 )
 
-(define-fun <relation-case-i-gt-two-CoreReal-FirstHybrid-GBLG>
+(define-lemma <relation-case-i-gt-two-CoreReal-FirstHybrid-GBLG>
     (
         (old-state-left <GameState_CoreReal_<$<!n!><!m!><!p!><!w!><!d!>$>>)
         (old-state-right <GameState_HybridReal_<$<!n!><!m!><!p!><!w!><!d!><!1!>$>>)
@@ -211,17 +203,13 @@
         (op (Array (Tuple2 Bool Bool) (Maybe Bool)))
         (j Int)
     )
-    Bool
     (=>
         (> i 2)
-        (= 
-            (<oracle-return-CoreReal-<$<!n!><!m!><!p!><!w!><!d!>$>-LayeredGateProxy-<$<!d!><!p!>$>-GBLG-return-value-or-abort> return-left)
-            (<oracle-return-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!1!>$>-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-GBLG-return-value-or-abort> return-right)
-        )
+        (= return-left.value return-right.value)
     )
 )
 
-(define-fun <relation-abort-case-i-is-one-CoreReal-FirstHybrid-GBLG>
+(define-lemma <relation-abort-case-i-is-one-CoreReal-FirstHybrid-GBLG>
     (
         (old-state-left <GameState_CoreReal_<$<!n!><!m!><!p!><!w!><!d!>$>>)
         (old-state-right <GameState_HybridReal_<$<!n!><!m!><!p!><!w!><!d!><!1!>$>>)
@@ -233,17 +221,14 @@
         (op (Array (Tuple2 Bool Bool) (Maybe Bool)))
         (j Int)
     )
-    Bool
     (=>
         (= i 1)
-        (= ((_ is mk-abort)
-              (<oracle-return-CoreReal-<$<!n!><!m!><!p!><!w!><!d!>$>-LayeredGateProxy-<$<!d!><!p!>$>-GBLG-return-value-or-abort> return-left))
-           ((_ is mk-abort)
-              (<oracle-return-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!1!>$>-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-GBLG-return-value-or-abort> return-right)))
+        (= ((_ is mk-abort) return-left.value)
+           ((_ is mk-abort) return-right.value))
     )
 )
 
-(define-fun <relation-abort-case-i-is-two-CoreReal-FirstHybrid-GBLG>
+(define-lemma <relation-abort-case-i-is-two-CoreReal-FirstHybrid-GBLG>
     (
         (old-state-left <GameState_CoreReal_<$<!n!><!m!><!p!><!w!><!d!>$>>)
         (old-state-right <GameState_HybridReal_<$<!n!><!m!><!p!><!w!><!d!><!1!>$>>)
@@ -255,13 +240,10 @@
         (op (Array (Tuple2 Bool Bool) (Maybe Bool)))
         (j Int)
     )
-    Bool
     (=>
         (= i 2)
-        (= ((_ is mk-abort)
-              (<oracle-return-CoreReal-<$<!n!><!m!><!p!><!w!><!d!>$>-LayeredGateProxy-<$<!d!><!p!>$>-GBLG-return-value-or-abort> return-left))
-           ((_ is mk-abort)
-              (<oracle-return-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!1!>$>-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-GBLG-return-value-or-abort> return-right)))
+          (= ((_ is mk-abort) return-left.value)
+              ((_ is mk-abort) return-right.value))
     )
 )
 
@@ -295,7 +277,7 @@
     )
 )
 
-(define-fun <relation-abort-case-i-gt-two-CoreReal-FirstHybrid-GBLG>
+(define-lemma <relation-abort-case-i-gt-two-CoreReal-FirstHybrid-GBLG>
     (
         (old-state-left <GameState_CoreReal_<$<!n!><!m!><!p!><!w!><!d!>$>>)
         (old-state-right <GameState_HybridReal_<$<!n!><!m!><!p!><!w!><!d!><!1!>$>>)
@@ -307,33 +289,9 @@
         (op (Array (Tuple2 Bool Bool) (Maybe Bool)))
         (j Int)
     )
-    Bool
     (=>
         (> i 2)
-        (= ((_ is mk-abort)
-              (<oracle-return-CoreReal-<$<!n!><!m!><!p!><!w!><!d!>$>-LayeredGateProxy-<$<!d!><!p!>$>-GBLG-return-value-or-abort> return-left))
-           ((_ is mk-abort)
-              (<oracle-return-HybridReal-<$<!n!><!m!><!p!><!w!><!d!><!1!>$>-HybridLayerMap-<$<!d!><!h!><!n!><!p!>$>-GBLG-return-value-or-abort> return-right)))
-    )
-)
-
-; Bug-repro lemma for Domino dot-notation expansion in define-lemma.
-; This lemma is intentionally not referenced in HybridCircuitSecurity.ssp.
-(define-lemma <relation-dot-bug-repro-CoreReal-FirstHybrid-GBLG>
-    (
-        (old-state-left <GameState_CoreReal_<$<!n!><!m!><!p!><!w!><!d!>$>>)
-        (old-state-right <GameState_HybridReal_<$<!n!><!m!><!p!><!w!><!d!><!1!>$>>)
-        (ret-left <OracleReturn_CoreReal_<$<!n!><!m!><!p!><!w!><!d!>$>_LayeredGateProxy_<$<!d!><!p!>$>_GBLG>)
-        (ret-right <OracleReturn_HybridReal_<$<!n!><!m!><!p!><!w!><!d!><!1!>$>_HybridLayerMap_<$<!d!><!h!><!n!><!p!>$>_GBLG>)
-        (i Int)
-        (l Int)
-        (r Int)
-        (op (Array (Tuple2 Bool Bool) (Maybe Bool)))
-        (j Int)
-    )
-    (=>
-        (= i 2)
-        (= (select old-state-left.Keys.flag (mk-tuple2 2 j))
-           (select ret-right.state.KeysBot.flag j))
+          (= ((_ is mk-abort) return-left.value)
+              ((_ is mk-abort) return-right.value))
     )
 )
