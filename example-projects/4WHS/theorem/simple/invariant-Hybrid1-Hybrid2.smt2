@@ -47,36 +47,17 @@
              (is-mk-none (select H kid)))))
 
 
-(define-fun invariant
+(define-state-relation invariant
     ((left-game <GameState_Hybrid1_<$<!n!>$>>)
      (right-game <GameState_Hybrid2_<$<!n!>$>>))
-  Bool
-  (let ((left-game-pkg (<game-Hybrid1-<$<!n!>$>-pkgstate-KX> left-game))
-        (right-prf-pkg (<game-Hybrid2-<$<!n!>$>-pkgstate-Prf> right-game))
-        (right-game-pkg (<game-Hybrid2-<$<!n!>$>-pkgstate-KX> right-game)))
-    (let ((left-LTK (<pkg-state-KX_NoKeys-<$<!n!>$>-LTK> left-game-pkg))
-          (left-State (<pkg-state-KX_NoKeys-<$<!n!>$>-State> left-game-pkg))
-          (left-Fresh (<pkg-state-KX_NoKeys-<$<!n!>$>-Fresh> left-game-pkg))
-          (left-RevTested (<pkg-state-KX_NoKeys-<$<!n!>$>-RevTested> left-game-pkg))
-          (left-H (<pkg-state-KX_NoKeys-<$<!n!>$>-H> left-game-pkg))
-          (left-kid (<pkg-state-KX_NoKeys-<$<!n!>$>-kid_> left-game-pkg))
-          (left-ctr (<pkg-state-KX_NoKeys-<$<!n!>$>-ctr_> left-game-pkg))
-          ;;
-          (right-LTK (<pkg-state-PRF-<$<!n!>$>-LTK> right-prf-pkg))
-          (right-State (<pkg-state-KX_NoPrf-<$<!n!>$>-State> right-game-pkg))
-          (right-Fresh (<pkg-state-KX_NoPrf-<$<!n!>$>-Fresh> right-game-pkg))
-          (right-RevTested (<pkg-state-KX_NoPrf-<$<!n!>$>-RevTested> right-game-pkg))
-          (right-H (<pkg-state-PRF-<$<!n!>$>-H> right-prf-pkg))
-          (right-kid (<pkg-state-PRF-<$<!n!>$>-kid_> right-prf-pkg))
-          (right-ctr (<pkg-state-KX_NoPrf-<$<!n!>$>-ctr_> right-game-pkg)))
-      (and
-       (= left-kid right-kid)
-       (= left-ctr right-ctr)
-       (= left-LTK right-LTK)
-       (= left-H right-H)
-       (= left-Fresh right-Fresh)
-       (= left-RevTested right-RevTested)
-       (state= left-State right-State right-LTK)
+  (and
+   (= left-game.KX.kid_ right-game.Prf.kid_)
+   (= left-game.KX.ctr_ right-game.KX.ctr_)
+   (= left-game.KX.LTK right-game.Prf.LTK)
+   (= left-game.KX.H right-game.Prf.H)
+   (= left-game.KX.Fresh right-game.KX.Fresh)
+   (= left-game.KX.RevTested right-game.KX.RevTested)
+   (state= left-game.KX.State right-game.KX.State right-game.Prf.LTK)
 
-       (LTK-table-empty-above-max right-kid right-LTK)
-       (ltk-and-h-set-together right-LTK right-H)))))
+   (LTK-table-empty-above-max right-game.Prf.kid_ right-game.Prf.LTK)
+   (ltk-and-h-set-together right-game.Prf.LTK right-game.Prf.H)))

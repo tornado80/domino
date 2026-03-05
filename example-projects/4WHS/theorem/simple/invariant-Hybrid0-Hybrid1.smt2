@@ -102,39 +102,21 @@
                       (not (is-mk-none sid))))))))
 
 
-(define-fun invariant
+(define-state-relation invariant
     ((left-game <GameState_Hybrid0_<$<!n!>$>>)
      (right-game <GameState_Hybrid1_<$<!n!>$>>))
-  Bool
-  (let ((left-game-pkg (<game-Hybrid0-<$<!n!>$>-pkgstate-KX> left-game))
-        (right-game-pkg (<game-Hybrid1-<$<!n!>$>-pkgstate-KX> right-game)))
-    (let ((left-LTK (<pkg-state-KX-<$<!n!>$>-LTK> left-game-pkg))
-          (left-State (<pkg-state-KX-<$<!n!>$>-State> left-game-pkg))
-          (left-Fresh (<pkg-state-KX-<$<!n!>$>-Fresh> left-game-pkg))
-          (left-RevTested (<pkg-state-KX-<$<!n!>$>-RevTested> left-game-pkg))
-          (left-H (<pkg-state-KX-<$<!n!>$>-H> left-game-pkg))
-          (left-kid (<pkg-state-KX-<$<!n!>$>-kid_> left-game-pkg))
-          (left-ctr (<pkg-state-KX-<$<!n!>$>-ctr_> left-game-pkg))
-          ;;
-          (right-LTK (<pkg-state-KX_NoKeys-<$<!n!>$>-LTK> right-game-pkg))
-          (right-State (<pkg-state-KX_NoKeys-<$<!n!>$>-State> right-game-pkg))
-          (right-Fresh (<pkg-state-KX_NoKeys-<$<!n!>$>-Fresh> right-game-pkg))
-          (right-RevTested (<pkg-state-KX_NoKeys-<$<!n!>$>-RevTested> right-game-pkg))
-          (right-H (<pkg-state-KX_NoKeys-<$<!n!>$>-H> right-game-pkg))
-          (right-kid (<pkg-state-KX_NoKeys-<$<!n!>$>-kid_> right-game-pkg))
-          (right-ctr (<pkg-state-KX_NoKeys-<$<!n!>$>-ctr_> right-game-pkg)))
-      (and
-       (= left-kid right-kid)
-       (= left-ctr right-ctr)
-       (= left-LTK right-LTK)
-       (= left-H right-H)
-       (= left-Fresh right-Fresh)
-       (= left-RevTested right-RevTested)
+  (and
+   (= left-game.KX.kid_ right-game.KX.kid_)
+   (= left-game.KX.ctr_ right-game.KX.ctr_)
+   (= left-game.KX.LTK right-game.KX.LTK)
+   (= left-game.KX.H right-game.KX.H)
+   (= left-game.KX.Fresh right-game.KX.Fresh)
+   (= left-game.KX.RevTested right-game.KX.RevTested)
 
-       (state= left-State right-State)
+   (state= left-game.KX.State right-game.KX.State)
 
-       (keys-computed-correctly left-State)
+   (keys-computed-correctly left-game.KX.State)
 
-       (time-of-nonces left-State)
-       (time-of-sid left-State)
-       (time-of-acceptance left-State)))))
+   (time-of-nonces left-game.KX.State)
+   (time-of-sid left-game.KX.State)
+   (time-of-acceptance left-game.KX.State)))
