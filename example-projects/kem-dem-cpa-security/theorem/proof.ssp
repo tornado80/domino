@@ -187,9 +187,11 @@ theorem Proof {
                 ]
 
                 lemmas {
-                    same-output: [no-abort]
-                    equal-aborts: []
+                    test: [no-abort]
                     invariant: [no-abort]
+                    equal-aborts: []
+                    same-output: [no-abort]
+                    
                 }
             }
         }

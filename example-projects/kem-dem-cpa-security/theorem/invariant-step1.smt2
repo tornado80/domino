@@ -44,6 +44,23 @@
     )
 )
 
+(define-lemma test 
+    (
+        (left-game <GameState_PkeCpaGame>)
+        (right-game <GameState_Hybrid0>)
+        (return-left <OracleReturn_CoreReal_<$<!n!><!m!><!p!><!w!><!d!>$>_LayeredGateProxy_<$<!d!><!p!>$>_GBLG>)
+        (return-right <OracleReturn_HybridReal_<$<!n!><!m!><!p!><!w!><!d!><!1!>$>_HybridLayerMap_<$<!d!><!h!><!n!><!p!>$>_GBLG>)
+        (i Int)
+        (l Int)
+        (r Int)
+        (op (Array (Tuple2 Bool Bool) (Maybe Bool)))
+        (j Int)
+    )
+    Bool
+
+
+)
+
 (define-state-relation invariant
     (
         (left-game <GameState_PkeCpaGame>)

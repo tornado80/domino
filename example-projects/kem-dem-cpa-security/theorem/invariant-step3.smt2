@@ -38,6 +38,12 @@
         (and
             (= sample-ctr-left sample-ctr-old-left)
             (= sample-ctr-right sample-ctr-old-right)
+            (= sample-id-left (sample-id "pkg_KemScheme" "KEM_ENCAPS" "kem_encaps"))
+            (= sample-id-right (sample-id "pkg_KemScheme" "KEM_ENCAPS" "kem_encaps"))
+        )
+        (and
+            (= sample-ctr-left sample-ctr-old-left)
+            (= sample-ctr-right sample-ctr-old-right)
             (= sample-id-left (sample-id "pkg_KEM_CPA" "ENCAPS" "k"))
             (= sample-id-right (sample-id "pkg_Game" "PKENC" "k"))
         )
