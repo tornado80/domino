@@ -689,26 +689,6 @@ impl<'a> EquivalenceContext<'a> {
         //     out.push(constrain);
         // }
 
-        /////// randomess counters
-
-        for (decl_ctr, assert_ctr, decl_val, assert_val) in
-            build_rands(self.sample_info_left(), left)
-        {
-            out.push(decl_ctr);
-            out.push(assert_ctr);
-            out.push(decl_val);
-            out.push(assert_val);
-        }
-
-        for (decl_ctr, assert_ctr, decl_val, assert_val) in
-            build_rands(self.sample_info_right(), right)
-        {
-            out.push(decl_ctr);
-            out.push(assert_ctr);
-            out.push(decl_val);
-            out.push(assert_val);
-        }
-
         /////////// helpers for working with randomness
 
         out.push(self.smt_define_randctr_function(left, self.sample_info_left()));
@@ -1329,9 +1309,9 @@ impl<'a> EquivalenceContext<'a> {
         let randomness_mapping = SmtForall {
             bindings: vec![
                 ("randmap-sample-id-left".into(), "SampleId".into()),
-                ("randmap-sample-ctr-left".into(), Type::integer().into()),
+                ("randmap-sample-offset-left".into(), Type::integer().into()),
                 ("randmap-sample-id-right".into(), "SampleId".into()),
-                ("randmap-sample-ctr-right".into(), Type::integer().into()),
+                ("randmap-sample-offset-right".into(), Type::integer().into()),
             ],
             body: (
                 "=>",
@@ -1354,8 +1334,16 @@ impl<'a> EquivalenceContext<'a> {
                     "rand-is-eq",
                     "randmap-sample-id-left",
                     "randmap-sample-id-right",
-                    "randmap-sample-ctr-left",
-                    "randmap-sample-ctr-right",
+                    (
+                        "+",
+                        "randmap-sample-ctr-left",
+                        
+                    ),
+                    (
+                        "+",
+                        "randmap-sample-ctr-right",
+
+                    )
                 ),
             ),
         };
