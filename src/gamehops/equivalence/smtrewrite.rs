@@ -805,6 +805,8 @@ impl SmtParser<SmtExpr, Error> for SmtRewrite<'_> {
         args: Vec<SmtExpr>,
         body: SmtExpr,
     ) -> Result<SmtExpr> {
+        let expression = format_definition("define-randomness-mapping", oracle_name, &args, &body);
+
         let left_game_inst = self
             .context
             .theorem()
@@ -839,6 +841,9 @@ impl SmtParser<SmtExpr, Error> for SmtRewrite<'_> {
 
         let [left_arg, right_arg, consts_arg] = &args[..] else {
             return Err(Error::IncorrectNumberOfArguments {
+                name: oracle_name.to_string(),
+                file_name: self.file_name.clone(),
+                expression,
                 argument: format!(
                     "({})",
                     args.iter().map(|sexpr| format!("{sexpr}")).join(" ")
@@ -892,14 +897,22 @@ impl SmtParser<SmtExpr, Error> for SmtRewrite<'_> {
                 .game
                 .pkgs
                 .iter()
-                .flat_map(|pkg| gen_varbinding(pkg, &format!("{left_state_name}.{}", pkg.name))),
+                .flat_map(|pkg| {
+                    gen_varbinding(pkg, left_game_inst, &format!("{left_state_name}.{}", pkg.name))
+                }),
         );
         varbindings.extend(
             right_game_inst
                 .game
                 .pkgs
                 .iter()
-                .flat_map(|pkg| gen_varbinding(pkg, &format!("{right_state_name}.{}", pkg.name))),
+                .flat_map(|pkg| {
+                    gen_varbinding(
+                        pkg,
+                        right_game_inst,
+                        &format!("{right_state_name}.{}", pkg.name),
+                    )
+                }),
         );
 
         // oracle arguments: left.args.<name> and right.args.<name> resolve to each side's own
