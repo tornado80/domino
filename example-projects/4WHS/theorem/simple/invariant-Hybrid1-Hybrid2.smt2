@@ -1,4 +1,4 @@
-(define-state-relation state=
+(define-state-relation matching-states
     (left right)
   (and
   (forall ((ctr Int))
@@ -31,4 +31,4 @@
    (= left.KX.H right.Prf.H)
    (= left.KX.Fresh right.KX.Fresh)
    (= left.KX.RevTested right.KX.RevTested)
-   (state= left right)))
+   (matching-states left right)))

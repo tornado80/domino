@@ -47,6 +47,8 @@ package KX {
 
           }
 
+    invariant: [ ./packages/KX.smt2 ]
+
     import oracles {
          Run1(state: (Integer,Bool,Integer,Bits(n),Maybe(Bool),
                         Maybe(Bits(n)),Maybe(Bits(n)),Maybe(Bits(n)),Maybe(Bits(n)),
