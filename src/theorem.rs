@@ -72,6 +72,13 @@ mod instantiate {
             .map(|(ident, ty, span)| (ident, inst_ctx.rewrite_type(ty), span))
             .collect();
 
+        let new_types = pkg_inst
+            .types
+            .iter()
+            .cloned()
+            .map(|(name, ty)| (name, inst_ctx.rewrite_type(ty)))
+            .collect();
+
         let pkg = Package {
             oracles: new_oracles,
             state: new_state,
@@ -103,6 +110,7 @@ mod instantiate {
         PackageInstance {
             pkg,
             params: new_params,
+            types: new_types,
             ..pkg_inst
         }
     }
