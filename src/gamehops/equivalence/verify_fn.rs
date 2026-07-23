@@ -20,6 +20,7 @@ pub(crate) struct EquivalenceSmtDriver<'a, Backend: SmtSolverBackend + Sync, Pro
     backend: &'a Backend,
     transcript: bool,
     req_oracle: Option<&'a str>,
+    req_claim: Option<&'a str>,
     parallel: usize,
 }
 
@@ -32,6 +33,7 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
         backend: &'a Backend,
         transcript: bool,
         req_oracle: Option<&'a str>,
+        req_claim: Option<&'a str>,
         parallel: usize,
     ) -> Self {
         Self {
@@ -40,6 +42,7 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
             backend,
             transcript,
             req_oracle,
+            req_claim,
             parallel,
         }
     }
@@ -210,6 +213,10 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
                     self.eqctx.right_game_inst_ctx().game_inst().name(),
                 ),
             })
+        }
+
+        if let Some(name) = self.req_claim {
+            claims.retain(|claim| claim.name() == name);
         }
 
         ui.lock().unwrap().start_oracle(
