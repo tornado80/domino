@@ -348,7 +348,7 @@ pub struct Theorem<'a> {
 }
 
 impl<'a> Theorem<'a> {
-    pub(crate) fn with_new_instances(&self, instances: Vec<GameInstance>) -> Theorem<'a> {
+    pub fn with_new_instances(&self, instances: Vec<GameInstance>) -> Theorem<'a> {
         Theorem {
             instances,
             ..self.clone()
