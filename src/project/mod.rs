@@ -418,8 +418,7 @@ pub trait Project {
                         ui.proofstep_is_reduction(&theorem.name, &format!("{game_hop}"));
                     }
                     GameHop::Equivalence(eq) => {
-                        let (theorem, auxs) =
-                            EquivalenceTransform.transform_theorem(theorem).unwrap();
+                        let (theorem, auxs) = EquivalenceTransform.transform_theorem(theorem)?;
 
                         let mut eqctx = EquivalenceContext::new(eq, &theorem, &auxs);
                         eqctx.load_invariants(self)?;
@@ -436,8 +435,7 @@ pub trait Project {
                         driver.verify(&mut ui)?;
                     }
                     GameHop::Hybrid(hyb) => {
-                        let (theorem, auxs) =
-                            EquivalenceTransform.transform_theorem(theorem).unwrap();
+                        let (theorem, auxs) = EquivalenceTransform.transform_theorem(theorem)?;
 
                         let mut eqctx = EquivalenceContext::new(hyb.equivalence(), &theorem, &auxs);
                         eqctx.load_invariants(self)?;

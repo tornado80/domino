@@ -52,6 +52,9 @@ pub enum Error {
     InlineError(#[from] crate::inline::Error),
     #[diagnostic(transparent)]
     #[error(transparent)]
+    EquivalenceTransform(#[from] crate::transforms::theorem_transforms::EquivalenceTransformError),
+    #[diagnostic(transparent)]
+    #[error(transparent)]
     ParsePackage(#[from] parser::package::ParsePackageError),
     #[diagnostic(transparent)]
     #[error(transparent)]
