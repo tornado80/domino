@@ -29,6 +29,21 @@ pub(crate) struct Cli {
 #[diagnostic(code(cli::incompatible_arguments))]
 pub struct IncompatibleArgumentsError(pub &'static str);
 
+#[derive(Error, Diagnostic, Debug)]
+#[error(
+    "`domino debug` needs the native cvc5 backend, which is behind the `cvc5-lib` cargo feature"
+)]
+#[diagnostic(help(
+    "rebuild with `cargo build --features cvc5-lib` (see the cvc5-lib section of Readme.md \
+     and scripts/setup-cvc5-lib.sh for the one-time prerequisites)"
+))]
+pub struct Cvc5LibNotEnabled;
+
+#[derive(Error, Diagnostic, Debug)]
+#[error("`domino debug` found unresolved pairs (GOAL FAILS / inconclusive) or stopped early")]
+#[diagnostic(code(debug::claim_not_verified))]
+pub struct DebugNotVerified;
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error, Diagnostic)]
 enum Error {
@@ -43,6 +58,16 @@ enum Error {
     #[error(transparent)]
     #[diagnostic(transparent)]
     ModelViewError(#[from] sspverif::modelview::Error),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Cvc5LibNotEnabled(#[from] Cvc5LibNotEnabled),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    DebugNotVerified(#[from] DebugNotVerified),
+    #[cfg(feature = "cvc5-lib")]
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Debug(#[from] sspverif::debug::driver::DebugError),
 }
 
 fn proofsteps(p: &Proofsteps) -> Result<(), Error> {
@@ -136,6 +161,47 @@ fn inline(i: &Inline) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(feature = "cvc5-lib")]
+fn debug(d: &Debug) -> Result<(), Error> {
+    use sspverif::debug::driver::{render_tree, run_debug_command, DebugOptions};
+
+    let project_root = project::directory::find_project_root(d.path.as_deref())?;
+    let files = project::DirectoryFiles::load(&project_root)?;
+    let project = project::DirectoryProject::load(project_root, &files)?;
+
+    let opts = DebugOptions {
+        check_left: d.check_left,
+        check_right: !d.no_check_right,
+        timeout_ms: d.timeout,
+        max_paths: d.max_paths,
+    };
+
+    let backend = sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.timeout);
+
+    let run = run_debug_command(
+        &project,
+        &d.proof,
+        d.proofstep,
+        &d.oracle,
+        &d.claim,
+        &opts,
+        &backend,
+        d.out.clone(),
+    )?;
+
+    print!("{}", render_tree(&run));
+
+    if !run.is_ok() {
+        return Err(DebugNotVerified.into());
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "cvc5-lib"))]
+fn debug(_d: &Debug) -> Result<(), Error> {
+    Err(Cvc5LibNotEnabled.into())
+}
+
 fn latex(l: &Latex) -> Result<(), Error> {
     let project_root = project::directory::find_project_root(l.project.as_deref())?;
     let files = project::DirectoryFiles::load(&project_root)?;
@@ -177,6 +243,7 @@ fn main() -> miette::Result<()> {
         Commands::Latex(l) => latex(l),
         Commands::Format(f) => format(f),
         Commands::Model(m) => model(m),
+        Commands::Debug(d) => debug(d),
     };
 
     result.map_err(miette::Report::new)
