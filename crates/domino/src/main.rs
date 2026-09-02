@@ -44,6 +44,12 @@ pub struct Cvc5LibNotEnabled;
 #[diagnostic(code(debug::claim_not_verified))]
 pub struct DebugNotVerified;
 
+#[derive(Error, Diagnostic, Debug)]
+#[error("theorem `{0}` not found")]
+#[diagnostic(code(cli::theorem_not_found))]
+pub struct TheoremNotFound(pub String);
+
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error, Diagnostic)]
 enum Error {
@@ -64,6 +70,12 @@ enum Error {
     #[error(transparent)]
     #[diagnostic(transparent)]
     DebugNotVerified(#[from] DebugNotVerified),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    TheoremNotFound(#[from] TheoremNotFound),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    InlineRender(#[from] sspverif::debug::render::RenderError),
     #[cfg(feature = "cvc5-lib")]
     #[error(transparent)]
     #[diagnostic(transparent)]
@@ -151,16 +163,6 @@ fn model(m: &Model) -> Result<(), Error> {
     Ok(())
 }
 
-fn inline(i: &Inline) -> Result<(), Error> {
-    let project_root = project::directory::find_project_root(i.project.as_deref())?;
-    let files = project::DirectoryFiles::load(&project_root)?;
-    let project = project::DirectoryProject::load(project_root, &files)?;
-
-    let rendered = project.inline(&i.proof, i.proofstep, &i.oracle)?;
-    println!("{rendered}");
-    Ok(())
-}
-
 #[cfg(feature = "cvc5-lib")]
 fn debug(d: &Debug) -> Result<(), Error> {
     use sspverif::debug::driver::{render_tree, run_debug_command, DebugOptions};
@@ -205,6 +207,25 @@ fn debug(_d: &Debug) -> Result<(), Error> {
     Err(Cvc5LibNotEnabled.into())
 }
 
+fn inline(i: &Inline) -> Result<(), Error> {
+    let project_root = project::directory::find_project_root(i.path.as_deref())?;
+    let files = project::DirectoryFiles::load(&project_root)?;
+    let project = project::DirectoryProject::load(project_root, &files)?;
+
+    let theorem = project
+        .get_theorem(&i.proof)
+        .ok_or_else(|| TheoremNotFound(i.proof.clone()))?;
+
+    let listing = sspverif::debug::render::render_side_by_side(
+        theorem,
+        i.proofstep,
+        &i.oracle,
+        !i.no_line_numbers,
+    )?;
+    print!("{listing}");
+    Ok(())
+}
+
 fn latex(l: &Latex) -> Result<(), Error> {
     let project_root = project::directory::find_project_root(l.project.as_deref())?;
     let files = project::DirectoryFiles::load(&project_root)?;
@@ -247,6 +268,7 @@ fn main() -> miette::Result<()> {
         Commands::Format(f) => format(f),
         Commands::Model(m) => model(m),
         Commands::Debug(d) => debug(d),
+        Commands::Inline(i) => inline(i),
     };
 
     result.map_err(miette::Report::new)
