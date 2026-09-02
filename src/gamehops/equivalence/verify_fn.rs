@@ -127,7 +127,7 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
             eq.left_name,
             eq.right_name
         );
-        smt.append(&mut self.eqctx.emit_constant_declarations());
+        smt.append(&mut self.eqctx.emit_constant_declarations(None));
 
         let proofstep_name = format!("{} == {}", eq.left_name(), eq.right_name());
         let oracle_sequence = self.oracle_sequence();
