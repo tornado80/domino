@@ -54,6 +54,21 @@
         )
         (and 
             (= left.args.i (- consts.h 1))
+            (or 
+                (= left.id right.id (sample-id "LayeredSim" "LSIMGBLG" "rin_round_0"))
+                (= left.id right.id (sample-id "LayeredSim" "LSIMGBLG" "rin_round_1"))
+                (= left.id right.id (sample-id "LayeredSim" "LSIMGBLG" "rin_round_2"))
+                (= left.id right.id (sample-id "LayeredSim" "LSIMGBLG" "rin_round_3"))
+                (= left.id right.id (sample-id "LayeredSim" "LSIMGBLG" "rout_round_0"))
+                (= left.id right.id (sample-id "LayeredSim" "LSIMGBLG" "rout_round_1"))
+                (= left.id right.id (sample-id "LayeredSim" "LSIMGBLG" "rout_round_2"))
+                (= left.id right.id (sample-id "LayeredSim" "LSIMGBLG" "rout_round_3"))
+            )
+            (= left.ctr 0)
+            (= right.ctr 0)
+        )
+        (and 
+            (= left.args.i (- consts.h 1))
             (= left.id (sample-id "KeysTop" "GETAOUT" "r"))
             (= right.id (sample-id "SimulatedLayersKeys" "LGETAOUT" "r"))
             (= left.ctr 0)
