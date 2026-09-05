@@ -321,7 +321,6 @@ fn main() -> miette::Result<()> {
         Commands::Format(f) => format(f),
         Commands::Model(m) => model(m),
         Commands::Debug(d) => debug(d),
-        Commands::Inline(i) => inline(i),
     };
 
     result.map_err(miette::Report::new)
