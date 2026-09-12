@@ -1,15 +1,19 @@
-(assert (not (=> (and (forall ((randmap-sample-id-left SampleId)
-                               (randmap-sample-offset-left Int)
-                               (randmap-sample-id-right SampleId)
-                               (randmap-sample-offset-right Int))
-                              (=> (randomness-mapping-PKENC randmap-sample-id-left
-                                                            randmap-sample-id-right
-                                                            randmap-sample-offset-left
-                                                            randmap-sample-offset-right)
-                                  (rand-is-eq randmap-sample-id-left
-                                              randmap-sample-id-right
-                                              randmap-sample-offset-left
-                                              randmap-sample-offset-right)))
+(assert (not (=> (and (and (=> (randomness-mapping-PKENC (sample-id "Scheme_KEM"
+                                                                    "KEM_ENCAPS"
+                                                                    "kem_encaps")
+                                                         (sample-id "Scheme_KEM"
+                                                                    "KEM_ENCAPS"
+                                                                    "kem_encaps")
+                                                         0
+                                                         0)
+                               (= (__sample-rand-Game_MON_CCA_PKE-Bits_kencr (sample-id "Scheme_KEM"
+                                                                                        "KEM_ENCAPS"
+                                                                                        "kem_encaps")
+                                                                             0)
+                                  (__sample-rand-Game_MOD_CCA_PKE_Real_KEM-Bits_kencr (sample-id "Scheme_KEM"
+                                                                                                 "KEM_ENCAPS"
+                                                                                                 "kem_encaps")
+                                                                                      0))))
                       (<domino-invariant> <<game-state-Game_MON_CCA_PKE-old>>
                                           <<game-state-Game_MOD_CCA_PKE_Real_KEM-old>>)
                       (relation-no-abort <<game-state-Game_MON_CCA_PKE-new-PKENC>>

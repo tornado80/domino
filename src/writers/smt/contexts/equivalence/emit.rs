@@ -17,7 +17,7 @@ use crate::{
     writers::smt::{
         contexts::{EquivalenceContext, GameInstanceContext, GenericOracleContext},
         declare::declare_const,
-        exprs::{SmtAnd, SmtAssert, SmtEq2, SmtExpr, SmtForall, SmtImplies, SmtIte, SmtNot},
+        exprs::{SmtAnd, SmtAssert, SmtEq2, SmtExpr, SmtImplies, SmtIte, SmtNot},
         names, patterns,
         patterns::{
             const_mapping::GameConstMappingFunction,
@@ -331,31 +331,7 @@ impl<'a> EquivalenceContext<'a> {
             ClaimType::InitialState => unreachable!(),
         };
 
-        let randomness_mapping = SmtForall {
-            bindings: vec![
-                ("randmap-sample-id-left".into(), "SampleId".into()),
-                ("randmap-sample-offset-left".into(), Type::integer().into()),
-                ("randmap-sample-id-right".into(), "SampleId".into()),
-                ("randmap-sample-offset-right".into(), Type::integer().into()),
-            ],
-            body: (
-                "=>",
-                (
-                    format!("randomness-mapping-{oracle_name}"),
-                    "randmap-sample-id-left",
-                    "randmap-sample-id-right",
-                    "randmap-sample-offset-left",
-                    "randmap-sample-offset-right",
-                ),
-                (
-                    "rand-is-eq",
-                    "randmap-sample-id-left",
-                    "randmap-sample-id-right",
-                    "randmap-sample-offset-left",
-                    "randmap-sample-offset-right",
-                ),
-            ),
-        };
+        let randomness_mapping = self.randomness_mapping_condition_expr(oracle_name);
 
         let mut dependencies_code: Vec<SmtExpr> = vec![randomness_mapping.into()];
         match &claim.invariant_scope {
@@ -602,7 +578,10 @@ impl<'a> EquivalenceContext<'a> {
             .collect()
     }
 
-    pub(crate) fn emit_randomness_mapping_condition(&self, oracle_name: &str) -> Vec<SmtExpr> {
+    /// The quantifier-free randomness-mapping condition for `oracle_name`: for every
+    /// type-matching left/right sample-position pair, the mapping relation being true implies
+    /// the two sides' concrete sampled values are equal.
+    fn randomness_mapping_condition_expr(&self, oracle_name: &str) -> SmtExpr {
         let left_game_inst_name = self.left_game_inst_ctx().game_inst().name();
         let right_game_inst_name = self.right_game_inst_ctx().game_inst().name();
 
@@ -638,17 +617,19 @@ impl<'a> EquivalenceContext<'a> {
             })
             .collect();
 
-        let rhs: SmtExpr = if conjuncts.is_empty() {
+        if conjuncts.is_empty() {
             true.into()
         } else {
             SmtAnd(conjuncts).into()
-        };
+        }
+    }
 
+    pub(crate) fn emit_randomness_mapping_condition(&self, oracle_name: &str) -> Vec<SmtExpr> {
         vec![
             declare_const(RANDOMNESS_MAPPING_CONDITION_NAME, Type::boolean().into()),
             SmtAssert(SmtEq2 {
                 lhs: RANDOMNESS_MAPPING_CONDITION_NAME,
-                rhs,
+                rhs: self.randomness_mapping_condition_expr(oracle_name),
             })
             .into(),
         ]
