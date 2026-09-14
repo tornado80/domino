@@ -9,11 +9,14 @@
  */
 use std::path::PathBuf;
 
-use error::Result;
+use error::{Error, Result};
 
 use crate::parser::ast::Identifier;
 use crate::{
-    gamehops::{equivalence::EquivalenceSmtDriver, GameHop},
+    gamehops::{
+        equivalence::{EquivalenceSmtDriver, InvariantSynthesisDriver, InvariantSynthesisEncoding},
+        GameHop,
+    },
     package::{Composition, Package},
     theorem::Theorem,
     transforms::{theorem_transforms::EquivalenceTransform, TheoremTransform, Transformation},
@@ -99,6 +102,9 @@ pub trait Project {
 
     // we might want to return a theorem trace here instead
     // we could then extract the theorem viewer output and other useful info trom the trace
+    /// Proves the requested proofsteps. If `invariant_synthesis` is set, it instead synthesizes an
+    /// invariant for the requested equivalence proofstep, narrowed down by `req_oracle` and
+    /// `req_claim`.
     fn prove(
         &self,
         backend: &(impl SmtSolverBackend + Sync),
@@ -110,6 +116,7 @@ pub trait Project {
         req_claim: &Option<String>,
         invariant_start: bool,
         injective_randmap: bool,
+        invariant_synthesis: Option<InvariantSynthesisEncoding>,
     ) -> Result<()>
     where
         Self: Sized + Sync,
@@ -140,50 +147,51 @@ pub trait Project {
                     }
                 }
 
-                match game_hop {
-                    GameHop::Reduction(_) => {
+                let equivalence = match game_hop {
+                    GameHop::Reduction(_) | GameHop::Conjecture(_) => None,
+                    GameHop::Equivalence(eq) => Some(eq),
+                    GameHop::Hybrid(hyb) => Some(hyb.equivalence()),
+                };
+
+                match equivalence {
+                    None if invariant_synthesis.is_some() => {
+                        return Err(Error::InvariantSynthesisNotEquivalence {
+                            proofstep: format!("{game_hop}"),
+                        });
+                    }
+                    None => {
                         ui.proofstep_is_reduction(&theorem.name, &format!("{game_hop}"));
                     }
-                    GameHop::Conjecture(_) => {
-                        ui.proofstep_is_reduction(&theorem.name, &format!("{game_hop}"));
-                    }
-                    GameHop::Equivalence(eq) => {
+                    Some(eq) => {
                         let (theorem, auxs) = EquivalenceTransform.transform_theorem(theorem)?;
 
                         let mut eqctx = EquivalenceContext::new(eq, &theorem, &auxs);
                         eqctx.load_invariants(self)?;
 
-                        let mut driver = EquivalenceSmtDriver::new(
-                            &eqctx,
-                            self,
-                            backend,
-                            transcript,
-                            req_oracle.as_deref(),
-                            req_claim.as_deref(),
-                            parallel,
-                            invariant_start,
-                            injective_randmap,
-                        );
-                        driver.verify(&mut ui)?;
-                    }
-                    GameHop::Hybrid(hyb) => {
-                        let (theorem, auxs) = EquivalenceTransform.transform_theorem(theorem)?;
-
-                        let mut eqctx = EquivalenceContext::new(hyb.equivalence(), &theorem, &auxs);
-                        eqctx.load_invariants(self)?;
-
-                        let mut driver = EquivalenceSmtDriver::new(
-                            &eqctx,
-                            self,
-                            backend,
-                            transcript,
-                            req_oracle.as_deref(),
-                            req_claim.as_deref(),
-                            parallel,
-                            invariant_start,
-                            injective_randmap,
-                        );
-                        driver.verify(&mut ui)?;
+                        if let Some(encoding) = invariant_synthesis {
+                            InvariantSynthesisDriver::new(
+                                &eqctx,
+                                self,
+                                backend,
+                                encoding,
+                                req_oracle.as_deref(),
+                                req_claim.as_deref(),
+                            )
+                            .synthesize(&mut ui)?;
+                        } else {
+                            let mut driver = EquivalenceSmtDriver::new(
+                                &eqctx,
+                                self,
+                                backend,
+                                transcript,
+                                req_oracle.as_deref(),
+                                req_claim.as_deref(),
+                                parallel,
+                                invariant_start,
+                                injective_randmap,
+                            );
+                            driver.verify(&mut ui)?;
+                        }
                     }
                 }
                 ui.finish_proofstep(&theorem.name, &format!("{game_hop}"));

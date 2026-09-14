@@ -39,6 +39,21 @@ pub struct EquivalenceContext<'a> {
     invariants: Vec<SmtExpr>,
 }
 
+/// The pieces of the implication that is checked for a claim of an oracle:
+/// the hypotheses imply the postcondition.
+pub(crate) struct OracleClaimParts {
+    /// the randomness mapping condition of the oracle
+    pub(crate) randomness_mapping: SmtExpr,
+    /// the invariant on the old game states
+    pub(crate) invariant_old: SmtExpr,
+    /// the package and game invariants on the old game states
+    pub(crate) game_and_package_invariants_old: Vec<SmtExpr>,
+    /// the claims the claim depends on
+    pub(crate) dependencies: Vec<SmtExpr>,
+    /// the claim itself, on the new game states and return values
+    pub(crate) postcondition: SmtExpr,
+}
+
 // simple getters
 impl<'a> EquivalenceContext<'a> {
     pub(crate) fn new(

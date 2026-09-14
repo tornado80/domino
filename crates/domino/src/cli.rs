@@ -53,6 +53,24 @@ pub(crate) struct Prove {
     pub(crate) injective_randmap: bool,
     #[clap(long)]
     pub(crate) invariant_start: bool,
+    /// Instead of proving, synthesize an invariant with an SMT query: `invariant` is an
+    /// uninterpreted function and each clause is a quantified assertion. Needs --proof and
+    /// --proofstep. --oracle and --claim narrow down what the invariant has to prove.
+    #[clap(
+        long,
+        requires = "proofstep",
+        conflicts_with_all = ["invariant_synthesis_sygus", "invariant_start", "injective_randmap"]
+    )]
+    pub(crate) invariant_synthesis_smt: bool,
+    /// Instead of proving, synthesize an invariant by posing the clauses as a SyGuS problem to
+    /// cvc5. Needs --proof and --proofstep. --oracle and --claim narrow down what the invariant
+    /// has to prove.
+    #[clap(
+        long,
+        requires = "proofstep",
+        conflicts_with_all = ["invariant_start", "injective_randmap"]
+    )]
+    pub(crate) invariant_synthesis_sygus: bool,
     #[clap(long)]
     pub(crate) proofstep: Option<usize>,
     #[clap(long)]

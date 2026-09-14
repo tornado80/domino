@@ -44,6 +44,12 @@ pub enum Error {
         pest::error::LineColLocation,
     ),
 
+    #[error("cannot synthesize an invariant for proofstep {proofstep}, because it is not an equivalence")]
+    #[diagnostic(help(
+        "only equivalence and hybrid proofsteps have invariants. `domino proofsteps` lists the proofsteps"
+    ))]
+    InvariantSynthesisNotEquivalence { proofstep: String },
+
     #[diagnostic(transparent)]
     #[error(transparent)]
     EquivalenceError(#[from] crate::gamehops::equivalence::error::Error),

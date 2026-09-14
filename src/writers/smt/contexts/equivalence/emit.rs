@@ -176,11 +176,12 @@ impl<'a> EquivalenceContext<'a> {
         out
     }
 
-    pub(crate) fn emit_invariant_start_assert(&self) -> SmtExpr {
+    /// The invariant on the initial game states.
+    pub(crate) fn invariant_start_call(&self) -> SmtExpr {
         let state_left = self.left_game_inst_ctx().oracle_arg_game_state_pattern();
         let state_right = self.right_game_inst_ctx().oracle_arg_game_state_pattern();
 
-        SmtAssert(SmtNot((
+        (
             "invariant",
             state_left.global_const_name(
                 self.equivalence.left_name(),
@@ -190,8 +191,12 @@ impl<'a> EquivalenceContext<'a> {
                 self.equivalence.right_name(),
                 &patterns::oracle_args::GameStateOracleArgVariant::Initial,
             ),
-        )))
-        .into()
+        )
+            .into()
+    }
+
+    pub(crate) fn emit_invariant_start_assert(&self) -> SmtExpr {
+        SmtAssert(SmtNot(self.invariant_start_call())).into()
     }
 
     pub(crate) fn emit_game_or_package_invariant_start_assert(&self, claim: &Claim) -> SmtExpr {
@@ -214,6 +219,26 @@ impl<'a> EquivalenceContext<'a> {
     }
 
     pub(crate) fn emit_oracle_claim_assert(&self, claim: &Claim, oracle_name: &str) -> SmtExpr {
+        let super::OracleClaimParts {
+            randomness_mapping,
+            invariant_old,
+            game_and_package_invariants_old,
+            dependencies,
+            postcondition,
+        } = self.oracle_claim_parts(claim, oracle_name);
+
+        let mut hypotheses = vec![randomness_mapping, invariant_old];
+        hypotheses.extend(game_and_package_invariants_old);
+        hypotheses.extend(dependencies);
+
+        SmtAssert(SmtNot(SmtImplies(SmtAnd(hypotheses), postcondition))).into()
+    }
+
+    pub(crate) fn oracle_claim_parts(
+        &self,
+        claim: &Claim,
+        oracle_name: &str,
+    ) -> super::OracleClaimParts {
         let gctx_left = self.left_game_inst_ctx();
         let gctx_right = self.right_game_inst_ctx();
 
@@ -373,14 +398,11 @@ impl<'a> EquivalenceContext<'a> {
             ClaimType::RightGameInvariant => build_right_invariant_new_call(&claim.name),
         };
 
-        let mut dependencies_code: Vec<SmtExpr> = vec![
-            RANDOMNESS_MAPPING_CONDITION_NAME.into(),
-            build_invariant_old_call("invariant"),
-        ];
+        let mut game_and_package_invariants_old = Vec::new();
 
         for pkg in &gctx_left.game().pkgs {
             if !pkg.pkg.invariants.is_empty() {
-                dependencies_code.push(build_left_invariant_old_call(&format!(
+                game_and_package_invariants_old.push(build_left_invariant_old_call(&format!(
                     "package-invariant!{}-{}!",
                     game_inst_name_left,
                     pkg.name()
@@ -389,7 +411,7 @@ impl<'a> EquivalenceContext<'a> {
         }
         for pkg in &gctx_right.game().pkgs {
             if !pkg.pkg.invariants.is_empty() {
-                dependencies_code.push(build_right_invariant_old_call(&format!(
+                game_and_package_invariants_old.push(build_right_invariant_old_call(&format!(
                     "package-invariant!{}-{}!",
                     game_inst_name_right,
                     pkg.name()
@@ -398,27 +420,25 @@ impl<'a> EquivalenceContext<'a> {
         }
 
         if !gctx_left.game().invariants.is_empty() {
-            dependencies_code.push(build_left_invariant_old_call(&format!(
+            game_and_package_invariants_old.push(build_left_invariant_old_call(&format!(
                 "game-invariant!{}!",
                 game_inst_name_left,
             )));
         }
         if !gctx_right.game().invariants.is_empty() {
-            dependencies_code.push(build_right_invariant_old_call(&format!(
+            game_and_package_invariants_old.push(build_right_invariant_old_call(&format!(
                 "game-invariant!{}!",
                 game_inst_name_right,
             )));
         }
 
-        for dep in dep_calls {
-            dependencies_code.push(dep)
+        super::OracleClaimParts {
+            randomness_mapping: RANDOMNESS_MAPPING_CONDITION_NAME.into(),
+            invariant_old: build_invariant_old_call("invariant"),
+            game_and_package_invariants_old,
+            dependencies: dep_calls,
+            postcondition: postcond_call,
         }
-
-        crate::writers::smt::exprs::SmtAssert(SmtNot(SmtImplies(
-            SmtAnd(dependencies_code),
-            postcond_call,
-        )))
-        .into()
     }
 
     fn randomness_mapping_candidates(&self, oracle_name: &str) -> Vec<RandomnessMappingEntry> {

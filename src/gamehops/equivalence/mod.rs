@@ -12,9 +12,12 @@ use crate::{
 use error::{Error, ExportSignatureMismatch, Result};
 
 pub mod error;
+mod invariant_synthesis;
 mod smtrewrite;
 mod verify_fn;
 
+pub(crate) use invariant_synthesis::InvariantSynthesisDriver;
+pub use invariant_synthesis::InvariantSynthesisEncoding;
 pub(crate) use verify_fn::EquivalenceSmtDriver;
 
 // Equivalence contains the composisitions/games and the invariant data,

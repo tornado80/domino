@@ -112,6 +112,48 @@ pub enum Error {
         #[related]
         solver_errors: Vec<crate::util::smtsolver::Error>,
     },
+    #[error("could not synthesize an invariant for {scope} of the equivalence {left_game_inst_name} = {right_game_inst_name}. solver answered: {answer}")]
+    #[diagnostic(help("the synthesis query is in {}", .query_file.display()))]
+    InvariantSynthesisFailed {
+        left_game_inst_name: String,
+        right_game_inst_name: String,
+        scope: String,
+        answer: String,
+        query_file: PathBuf,
+    },
+    #[error("cannot synthesize an invariant for oracle {oracle_name}, because game instances {left_game_inst_name} and {right_game_inst_name} don't export it")]
+    #[diagnostic(help("exported oracles: {}", .exported_oracle_names.iter().join(", ")))]
+    InvariantSynthesisUnknownOracle {
+        oracle_name: String,
+        left_game_inst_name: String,
+        right_game_inst_name: String,
+        exported_oracle_names: Vec<String>,
+    },
+    #[error("cannot synthesize an invariant for claim {claim_pattern}, because no claim of oracle {oracle_name} matches it")]
+    #[diagnostic(help("claims of oracle {oracle_name}: {}", .available_claim_names.iter().join(", ")))]
+    InvariantSynthesisUnknownClaim {
+        claim_pattern: String,
+        oracle_name: String,
+        available_claim_names: Vec<String>,
+    },
+    #[error("synthesizing an invariant for claim {claim_pattern} needs an oracle")]
+    #[diagnostic(help(
+        "claims belong to the proof tree of an oracle. pass the oracle with --oracle"
+    ))]
+    InvariantSynthesisClaimWithoutOracle { claim_pattern: String },
+    #[error("error accessing {} during invariant synthesis", .path.display())]
+    InvariantSynthesisIo {
+        path: PathBuf,
+        #[source]
+        err: std::io::Error,
+    },
+    #[error("error running {solver} for invariant synthesis")]
+    #[diagnostic(help("SyGuS invariant synthesis needs {solver} on the PATH"))]
+    InvariantSynthesisSolverSpawn {
+        solver: &'static str,
+        #[source]
+        err: std::io::Error,
+    },
 }
 
 impl Error {

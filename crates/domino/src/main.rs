@@ -81,6 +81,14 @@ fn prove(p: &Prove) -> Result<(), Error> {
         return Err(ReqOracleWithInvariantStart.into());
     }
 
+    let invariant_synthesis = if p.invariant_synthesis_smt {
+        Some(sspverif::gamehops::equivalence::InvariantSynthesisEncoding::Smt)
+    } else if p.invariant_synthesis_sygus {
+        Some(sspverif::gamehops::equivalence::InvariantSynthesisEncoding::Sygus)
+    } else {
+        None
+    };
+
     let smtsolver = sspverif::util::smtsolver::process::ProcessSmtSolverBackend::new(p.smtsolver);
     project.prove(
         &smtsolver,
@@ -92,6 +100,7 @@ fn prove(p: &Prove) -> Result<(), Error> {
         &p.claim,
         p.invariant_start,
         p.injective_randmap,
+        invariant_synthesis,
     )?;
     Ok(())
 }
