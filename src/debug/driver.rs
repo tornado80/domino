@@ -1798,10 +1798,10 @@ mod tests {
     #[test]
     fn goal_smt_is_empty_for_an_admitted_claim() {
         let run = run_in_tmp(
-            "example-projects/kem-dem/kem-dem-cca-ssp",
-            "kem_dem_cca_ssp",
-            "PKDEC",
-            "lemma-kem-correctness",
+            "example-projects/simple-KEM-example",
+            "KEM_Proof",
+            "GetPK",
+            "debugger-test-admitted-claim",
             DebugOptions::default(),
         );
         assert!(run.admitted);
