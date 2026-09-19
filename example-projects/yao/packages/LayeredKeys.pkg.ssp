@@ -1,60 +1,71 @@
 package LayeredKeys {
-    /*
-     * The multi-layer version of Keys: the same state and the same oracles, only
-     * that every wire is addressed by the pair (layer, wire) instead of by a bare
-     * wire index.  Wire layers are numbered 1..(d + 1); the gates of gate layer
-     * `layer` read wire layer `layer` and write wire layer `layer + 1`.
-     */
     params {
         n: Integer,
     }
 
     state {
-        WireKey: Table((Integer, Integer), Table(Bool, Bits(n))),
-        ActiveBit: Table((Integer, Integer), Bool),
+        WireKey: Table(Integer, Table(Integer, Table(Bool, Bits(n)))),
+        ActiveBit: Table(Integer, Table(Integer, Bool)),
     }
 
 
     oracle SetActiveBit(layer: Integer, wire: Integer, bit: Bool) {
-        assert (ActiveBit[(layer, wire)] == None);
-        ActiveBit[(layer, wire)] <- Some(bit);
+        B <- new Table(Integer, Bool);
+        if (ActiveBit[layer] != None) {
+            B <- Unwrap(ActiveBit[layer]);
+        }
+        assert (B[wire] == None);
+        B[wire] <- Some(bit);
+        ActiveBit[layer] <- Some(B);
         return;
     }
 
     oracle GetActiveBit(layer: Integer, wire: Integer) -> Bool {
-        assert (ActiveBit[(layer, wire)] != None);
-        b <- Unwrap(ActiveBit[(layer, wire)]);
+        B <- Unwrap(ActiveBit[layer]);
+        b <- Unwrap(B[wire]);
         return b;
     }
 
     oracle GenerateWireKeys(layer: Integer, wire: Integer) {
-        assert (ActiveBit[(layer, wire)] != None);
-        if (WireKey[(layer, wire)] == None) {
+        B <- Unwrap(ActiveBit[layer]);
+        assert (B[wire] != None);
+        K <- new Table(Integer, Table(Bool, Bits(n)));
+        if (WireKey[layer] != None) {
+            K <- Unwrap(WireKey[layer]);
+        }
+        if (K[wire] == None) {
             W <- new Table(Bool, Bits(n));
-            k1 <-$ Bits(n) sample-name key_true;
+            k1 <- $Bits(n) sample-name key_true;
             W[true] <- Some(k1);
-            k0 <-$ Bits(n) sample-name key_false;
+            k0 <- $Bits(n) sample-name key_false;
             W[false] <- Some(k0);
-            WireKey[(layer, wire)] <- Some(W);
+            K[wire] <- Some(W);
+            WireKey[layer] <- Some(K);
         }
     }
 
     oracle GetWireKeys(layer: Integer, wire: Integer) -> Table(Bool, Bits(n)) {
-        assert (ActiveBit[(layer, wire)] != None);
-        W <- Unwrap(WireKey[(layer, wire)]);
+        B <- Unwrap(ActiveBit[layer]);
+        assert (B[wire] != None);
+        K <- Unwrap(WireKey[layer]);
+        W <- Unwrap(K[wire]);
         return W;
     }
 
     oracle GetActiveWireKey(layer: Integer, wire: Integer) -> Bits(n) {
-        W <- Unwrap(WireKey[(layer, wire)]);
-        b <- Unwrap(ActiveBit[(layer, wire)]);
+        K <- Unwrap(WireKey[layer]);
+        W <- Unwrap(K[wire]);
+        B <- Unwrap(ActiveBit[layer]);
+        b <- Unwrap(B[wire]);
         k <- Unwrap(W[b]);
         return k;
     }
 
     oracle GetInactiveWireKey(layer: Integer, wire: Integer) -> Bits(n) {
-        W <- Unwrap(WireKey[(layer, wire)]);
-        b <- Unwrap(ActiveBit[(layer, wire)]);
+        K <- Unwrap(WireKey[layer]);
+        W <- Unwrap(K[wire]);
+        B <- Unwrap(ActiveBit[layer]);
+        b <- Unwrap(B[wire]);
         k <- Unwrap(W[not b]);
         return k;
     }

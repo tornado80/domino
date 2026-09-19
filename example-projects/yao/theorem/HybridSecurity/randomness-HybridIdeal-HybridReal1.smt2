@@ -1,230 +1,169 @@
-;; TODO: this file still predates the LayeredKeys/Keys refactor.  It refers to
-;; the package-state field `flag` and to `ActiveBitSetAndGenerated`, which no
-;; longer exist, to the game instances `RealLayersKeys`/`SimulatedLayersKeys`,
-;; which have been merged into a single `LayeredKeys`, and (in the randomness
-;; mappings) to the eight coins `rin_round_*`/`rout_round_*` of the old
-;; simulator, which now draws six (`rin_active`, `rout_active`, `rin_inactive`,
-;; `rout_inactive`, `rout_zero_0`, `rout_zero_1`).  The names below have been
-;; propagated mechanically; the statements themselves still need reworking.
+;; Key-generation coins always occur at offset zero. These helpers describe
+;; the package-instance changes made when one whole wire layer moves between a
+;; flat Keys package and LayeredKeys.
+(define-fun same-layered-key-coin
+    ((l SampleId) (r SampleId) (lo Int) (ro Int)) Bool
+    (and (= l r)
+         (or (= l (sample-id "LayeredKeys" "GenerateWireKeys" "key_true"))
+             (= l (sample-id "LayeredKeys" "GenerateWireKeys" "key_false")))
+         (= lo 0) (= ro 0)))
+
+(define-fun top-to-layered-key-coin
+    ((l SampleId) (r SampleId) (lo Int) (ro Int)) Bool
+    (and
+        (or
+            (and (= l (sample-id "KeysTop" "GenerateWireKeys" "key_true"))
+                 (= r (sample-id "LayeredKeys" "GenerateWireKeys" "key_true")))
+            (and (= l (sample-id "KeysTop" "GenerateWireKeys" "key_false"))
+                 (= r (sample-id "LayeredKeys" "GenerateWireKeys" "key_false"))))
+        (= lo 0) (= ro 0)))
+
+(define-fun layered-to-top-key-coin
+    ((l SampleId) (r SampleId) (lo Int) (ro Int)) Bool
+    (and
+        (or
+            (and (= l (sample-id "LayeredKeys" "GenerateWireKeys" "key_true"))
+                 (= r (sample-id "KeysTop" "GenerateWireKeys" "key_true")))
+            (and (= l (sample-id "LayeredKeys" "GenerateWireKeys" "key_false"))
+                 (= r (sample-id "KeysTop" "GenerateWireKeys" "key_false"))))
+        (= lo 0) (= ro 0)))
+
+(define-fun layered-to-bot-key-coin
+    ((l SampleId) (r SampleId) (lo Int) (ro Int)) Bool
+    (and
+        (or
+            (and (= l (sample-id "LayeredKeys" "GenerateWireKeys" "key_true"))
+                 (= r (sample-id "KeysBot" "GenerateWireKeys" "key_true")))
+            (and (= l (sample-id "LayeredKeys" "GenerateWireKeys" "key_false"))
+                 (= r (sample-id "KeysBot" "GenerateWireKeys" "key_false"))))
+        (= lo 0) (= ro 0)))
+
+(define-fun bot-to-layered-key-coin
+    ((l SampleId) (r SampleId) (lo Int) (ro Int)) Bool
+    (and
+        (or
+            (and (= l (sample-id "KeysBot" "GenerateWireKeys" "key_true"))
+                 (= r (sample-id "LayeredKeys" "GenerateWireKeys" "key_true")))
+            (and (= l (sample-id "KeysBot" "GenerateWireKeys" "key_false"))
+                 (= r (sample-id "LayeredKeys" "GenerateWireKeys" "key_false"))))
+        (= lo 0) (= ro 0)))
+
+(define-fun bot-to-top-key-coin
+    ((l SampleId) (r SampleId) (lo Int) (ro Int)) Bool
+    (and
+        (or
+            (and (= l (sample-id "KeysBot" "GenerateWireKeys" "key_true"))
+                 (= r (sample-id "KeysTop" "GenerateWireKeys" "key_true")))
+            (and (= l (sample-id "KeysBot" "GenerateWireKeys" "key_false"))
+                 (= r (sample-id "KeysTop" "GenerateWireKeys" "key_false"))))
+        (= lo 0) (= ro 0)))
+
+(define-fun same-layered-sim-coin
+    ((l SampleId) (r SampleId) (lo Int) (ro Int)) Bool
+    (and (= l r)
+         (or
+             (= l (sample-id "LayeredSim" "SimulateGarbledGate" "rin_active"))
+             (= l (sample-id "LayeredSim" "SimulateGarbledGate" "rout_active"))
+             (= l (sample-id "LayeredSim" "SimulateGarbledGate" "rin_inactive"))
+             (= l (sample-id "LayeredSim" "SimulateGarbledGate" "rout_inactive"))
+             (= l (sample-id "LayeredSim" "SimulateGarbledGate" "rout_zero_0"))
+             (= l (sample-id "LayeredSim" "SimulateGarbledGate" "rout_zero_1")))
+         (= lo 0) (= ro 0)))
+
+(define-fun sim-to-layered-sim-coin
+    ((l SampleId) (r SampleId) (lo Int) (ro Int)) Bool
+    (and
+        (or
+            (and (= l (sample-id "Sim" "SimulateGarbledGate" "rin_active"))
+                 (= r (sample-id "LayeredSim" "SimulateGarbledGate" "rin_active")))
+            (and (= l (sample-id "Sim" "SimulateGarbledGate" "rout_active"))
+                 (= r (sample-id "LayeredSim" "SimulateGarbledGate" "rout_active")))
+            (and (= l (sample-id "Sim" "SimulateGarbledGate" "rin_inactive"))
+                 (= r (sample-id "LayeredSim" "SimulateGarbledGate" "rin_inactive")))
+            (and (= l (sample-id "Sim" "SimulateGarbledGate" "rout_inactive"))
+                 (= r (sample-id "LayeredSim" "SimulateGarbledGate" "rout_inactive")))
+            (and (= l (sample-id "Sim" "SimulateGarbledGate" "rout_zero_0"))
+                 (= r (sample-id "LayeredSim" "SimulateGarbledGate" "rout_zero_0")))
+            (and (= l (sample-id "Sim" "SimulateGarbledGate" "rout_zero_1"))
+                 (= r (sample-id "LayeredSim" "SimulateGarbledGate" "rout_zero_1"))))
+        (= lo 0) (= ro 0)))
+
+(define-fun same-layered-enc-coin
+    ((l SampleId) (r SampleId) (lo Int) (ro Int)) Bool
+    (and (= l r)
+         (or (= l (sample-id "LayeredEnc0" "EncInner" "r"))
+             (= l (sample-id "LayeredEnc0" "EncOuter" "r")))
+         (= lo ro)))
+
+(define-fun layered-to-flat-enc-coin
+    ((l SampleId) (r SampleId) (lo Int) (ro Int)) Bool
+    (and
+        (or
+            (and (= l (sample-id "LayeredEnc0" "EncInner" "r"))
+                 (= r (sample-id "Enc" "EncInner" "r")))
+            (and (= l (sample-id "LayeredEnc0" "EncOuter" "r"))
+                 (= r (sample-id "Enc" "EncOuter" "r"))))
+        (= lo ro)))
 
 (define-fun randomness-mapping-GenerateInputWireKeys
-    (
-        (sample-id-left SampleId)
-        (sample-id-right SampleId)
-        (sample-offset-left Int)
-        (sample-offset-right Int)
-    )
-    Bool
-    (or
-        (and
-            (= (<theorem-consts-HybridSecurity-hybrid$loop> <<theorem-consts>>) 1)
-            (= sample-id-left (sample-id "KeysTop" "GenerateWireKeys" "key_true"))
-            (= sample-id-right (sample-id "SimulatedLayersKeys" "GenerateWireKeys" "key_true"))
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-        )
-        (and
-            (= (<theorem-consts-HybridSecurity-hybrid$loop> <<theorem-consts>>) 1)
-            (= sample-id-left (sample-id "KeysTop" "GenerateWireKeys" "key_false"))
-            (= sample-id-right (sample-id "SimulatedLayersKeys" "GenerateWireKeys" "key_false"))
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-        )
-        (and
-            (> (<theorem-consts-HybridSecurity-hybrid$loop> <<theorem-consts>>) 1)
-            (= sample-id-left (sample-id "SimulatedLayersKeys" "GenerateWireKeys" "key_true"))
-            (= sample-id-right (sample-id "SimulatedLayersKeys" "GenerateWireKeys" "key_true"))
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-        )
-        (and
-            (> (<theorem-consts-HybridSecurity-hybrid$loop> <<theorem-consts>>) 1)
-            (= sample-id-left (sample-id "SimulatedLayersKeys" "GenerateWireKeys" "key_false"))
-            (= sample-id-right (sample-id "SimulatedLayersKeys" "GenerateWireKeys" "key_false"))
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-        )
-    )
-)
+    ((l SampleId) (r SampleId) (lo Int) (ro Int)) Bool
+    (let ((h (<theorem-consts-HybridSecurity-hybrid$loop> <<theorem-consts>>)))
+        (or
+            (and (< h 0) (same-layered-key-coin l r lo ro))
+            (and (= h 0) (layered-to-top-key-coin l r lo ro))
+            (and (= h 1) (top-to-layered-key-coin l r lo ro))
+            (and (> h 1) (same-layered-key-coin l r lo ro)))))
 
 (define-fun randomness-mapping-GarbleGate
-    (
-        (sample-id-left SampleId)
-        (sample-id-right SampleId)
-        (sample-offset-left Int)
-        (sample-offset-right Int)
-    )
-  Bool
-  (let ((h (<theorem-consts-HybridSecurity-hybrid$loop> <<theorem-consts>>)))
-    (or
-        (and 
-            (< <arg-HybridIdeal-GarbleGate-layer> (- h 1))
-            (or 
-                (= sample-id-left sample-id-right (sample-id "SimulatedLayersKeys" "GenerateWireKeys" "key_true"))
-                (= sample-id-left sample-id-right (sample-id "SimulatedLayersKeys" "GenerateWireKeys" "key_false"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rin_round_0"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rin_round_1"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rin_round_2"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rin_round_3"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rout_round_0"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rout_round_1"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rout_round_2"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rout_round_3"))
-            )
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> (- h 1))
-            (= sample-id-left (sample-id "KeysTop" "GenerateWireKeys" "key_true"))
-            (= sample-id-right (sample-id "SimulatedLayersKeys" "GenerateWireKeys" "key_true"))
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> (- h 1))
-            (= sample-id-left (sample-id "KeysTop" "GenerateWireKeys" "key_false"))
-            (= sample-id-right (sample-id "SimulatedLayersKeys" "GenerateWireKeys" "key_false"))
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> (- h 1))
-            (or
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rin_round_0"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rin_round_1"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rin_round_2"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rin_round_3"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rout_round_0"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rout_round_1"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rout_round_2"))
-                (= sample-id-left sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rout_round_3"))
-            )
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> h)
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "KeysBot" "GenerateWireKeys" "key_true"))
-            (= sample-id-right (sample-id "KeysTop" "GenerateWireKeys" "key_true"))
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> h)
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "KeysBot" "GenerateWireKeys" "key_false"))
-            (= sample-id-right (sample-id "KeysTop" "GenerateWireKeys" "key_false"))
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> h)
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "Sim" "SimulateGarbledGate" "rin_round_0"))
-            (= sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rin_round_0"))
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> h)
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "Sim" "SimulateGarbledGate" "rout_round_0"))
-            (= sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rout_round_0"))
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> h)
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "Sim" "SimulateGarbledGate" "rin_round_1"))
-            (= sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rin_round_1"))
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> h)
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "Sim" "SimulateGarbledGate" "rout_round_1"))
-            (= sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rout_round_1"))
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> h)
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "Sim" "SimulateGarbledGate" "rin_round_2"))
-            (= sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rin_round_2"))
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> h)
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "Sim" "SimulateGarbledGate" "rout_round_2"))
-            (= sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rout_round_2"))
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> h)
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "Sim" "SimulateGarbledGate" "rin_round_3"))
-            (= sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rin_round_3"))
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> h)
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "Sim" "SimulateGarbledGate" "rout_round_3"))
-            (= sample-id-right (sample-id "LayeredSim" "SimulateGarbledGate" "rout_round_3"))
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> (+ h 1))
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "RealLayersKeys" "GenerateWireKeys" "key_true"))
-            (= sample-id-right (sample-id "KeysBot" "GenerateWireKeys" "key_true"))
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> (+ h 1))
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "RealLayersKeys" "GenerateWireKeys" "key_false"))
-            (= sample-id-right (sample-id "KeysBot" "GenerateWireKeys" "key_false"))
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> (+ h 1))
-            (= sample-offset-left sample-offset-right)
-            (= sample-id-left (sample-id "LayeredEnc0" "EncInner" "r"))
-            (= sample-id-right (sample-id "Enc" "EncInner" "r"))
-        )
-        (and 
-            (= <arg-HybridIdeal-GarbleGate-layer> (+ h 1))
-            (= sample-offset-left sample-offset-right)
-            (= sample-id-left (sample-id "LayeredEnc0" "EncOuter" "r"))
-            (= sample-id-right (sample-id "Enc" "EncOuter" "r"))
-        )
-        (and 
-            (> <arg-HybridIdeal-GarbleGate-layer> (+ h 1))
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "RealLayersKeys" "GenerateWireKeys" "key_true"))
-            (= sample-id-right (sample-id "RealLayersKeys" "GenerateWireKeys" "key_true"))
-        )
-        (and 
-            (> <arg-HybridIdeal-GarbleGate-layer> (+ h 1))
-            (= sample-offset-left 0)
-            (= sample-offset-right 0)
-            (= sample-id-left (sample-id "RealLayersKeys" "GenerateWireKeys" "key_false"))
-            (= sample-id-right (sample-id "RealLayersKeys" "GenerateWireKeys" "key_false"))
-        )
-        (and 
-            (> <arg-HybridIdeal-GarbleGate-layer> (+ h 1))
-            (= sample-offset-left sample-offset-right)
-            (= sample-id-left (sample-id "LayeredEnc0" "EncInner" "r"))
-            (= sample-id-right (sample-id "LayeredEnc0" "EncInner" "r"))
-        )
-        (and 
-            (> <arg-HybridIdeal-GarbleGate-layer> (+ h 1))
-            (= sample-offset-left sample-offset-right)
-            (= sample-id-left (sample-id "LayeredEnc0" "EncOuter" "r"))
-            (= sample-id-right (sample-id "LayeredEnc0" "EncOuter" "r"))
-        )
-        )
-    )
-)
+    ((l SampleId) (r SampleId) (lo Int) (ro Int)) Bool
+    (let ((h (<theorem-consts-HybridSecurity-hybrid$loop> <<theorem-consts>>))
+          (d (<theorem-consts-HybridSecurity-d> <<theorem-consts>>))
+          (layer <arg-HybridIdeal-GarbleGate-layer>))
+        (or
+            ;; Before the hybrid range both games garble every valid layer.
+            (and (< h 0)
+                 (or (same-layered-key-coin l r lo ro)
+                     (same-layered-enc-coin l r lo ro)))
+
+            ;; Initial bridge: all-real on the left, layer 1 split out on the
+            ;; right, then ordinary real layers on both sides.
+            (and (> d 0) (= h 0) (= layer 1)
+                 (or (layered-to-bot-key-coin l r lo ro)
+                     (layered-to-flat-enc-coin l r lo ro)))
+            (and (> d 0) (= h 0) (> layer 1)
+                 (or (same-layered-key-coin l r lo ro)
+                     (same-layered-enc-coin l r lo ro)))
+
+            ;; Interior bridge.
+            (and (> h 0) (< h d) (< layer (- h 1))
+                 (or (same-layered-key-coin l r lo ro)
+                     (same-layered-sim-coin l r lo ro)))
+            (and (> h 0) (< h d) (= layer (- h 1))
+                 (or (top-to-layered-key-coin l r lo ro)
+                     (same-layered-sim-coin l r lo ro)))
+            (and (> h 0) (< h d) (= layer h)
+                 (or (bot-to-top-key-coin l r lo ro)
+                     (sim-to-layered-sim-coin l r lo ro)))
+            (and (> h 0) (< h d) (= layer (+ h 1))
+                 (or (layered-to-bot-key-coin l r lo ro)
+                     (layered-to-flat-enc-coin l r lo ro)))
+            (and (> h 0) (< h d) (> layer (+ h 1))
+                 (or (same-layered-key-coin l r lo ro)
+                     (same-layered-enc-coin l r lo ro)))
+
+            ;; Final bridge: common simulated prefix, then the left ideal
+            ;; assumption versus the final right simulated layer.
+            (and (> d 0) (= h d) (< layer (- h 1))
+                 (or (same-layered-key-coin l r lo ro)
+                     (same-layered-sim-coin l r lo ro)))
+            (and (> d 0) (= h d) (= layer (- h 1))
+                 (or (top-to-layered-key-coin l r lo ro)
+                     (same-layered-sim-coin l r lo ro)))
+            (and (> d 0) (= h d) (= layer h)
+                 (or (bot-to-layered-key-coin l r lo ro)
+                     (sim-to-layered-sim-coin l r lo ro)))
+
+            ;; After the hybrid range both games simulate every valid layer.
+            (and (> d 0) (> h d)
+                 (or (same-layered-key-coin l r lo ro)
+                     (same-layered-sim-coin l r lo ro))))))
