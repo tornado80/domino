@@ -1,0 +1,52 @@
+package Enc {
+    /*
+     * Real/ideal encryption for the 2CPA game.  When b is false, every
+     * encryption is real.  When b is true, encryptions under the inactive wire
+     * key are replaced by encryptions of zeros.
+     */
+    params {
+        b: Bool,
+        n: Integer,
+        m: Integer,
+        p: Integer,
+        encn: fn Bits(n),Bits(n),Bits(n) -> Bits(m),
+        encm: fn Bits(n),Bits(m),Bits(n) -> Bits(p),
+    }
+
+    import oracles {
+        GetWireKeys(wire: Integer) -> Table(Bool, Bits(n)),
+        GetActiveBit(wire: Integer) -> Bool,
+    }
+
+    oracle EncInner(wire: Integer, bit: Bool, msg: Bits(n)) -> Bits(m) {
+        K <- invoke GetWireKeys(wire);
+        r <-$ Bits(n) sample-name r;
+        if b {
+            active_bit <- invoke GetActiveBit(wire);
+            if (bit == active_bit) {
+                c <- encn(Unwrap(K[bit]), msg, r);
+            } else {
+                c <- encn(Unwrap(K[bit]), 0_n, r);
+            }
+        } else {
+            c <- encn(Unwrap(K[bit]), msg, r);
+        }
+        return c;
+    }
+
+    oracle EncOuter(wire: Integer, bit: Bool, msg: Bits(m)) -> Bits(p) {
+        K <- invoke GetWireKeys(wire);
+        r <-$ Bits(n) sample-name r;
+        if b {
+            active_bit <- invoke GetActiveBit(wire);
+            if (bit == active_bit) {
+                c <- encm(Unwrap(K[bit]), msg, r);
+            } else {
+                c <- encm(Unwrap(K[bit]), 0_m, r);
+            }
+        } else {
+            c <- encm(Unwrap(K[bit]), msg, r);
+        }
+        return c;
+    }
+}

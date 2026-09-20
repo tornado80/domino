@@ -1,0 +1,44 @@
+composition TwocpaViaCpa {
+    const b: Bool;
+    const n: Integer;
+    const m: Integer;
+    const p: Integer;
+    const encn: fn Bits(n),Bits(n),Bits(n) -> Bits(m);
+    const encm: fn Bits(n),Bits(m),Bits(n) -> Bits(p);
+
+    instance cpa = MultiInstanceCpa {
+        params {
+            b: b,
+            n: n,
+            m: m,
+            p: p,
+            encn: encn,
+            encm: encm,
+        }
+    }
+
+    instance reduction = TwocpaReduction {
+        params {
+            n: n,
+            m: m,
+            p: p,
+            encn: encn,
+            encm: encm,
+        }
+    }
+
+    compose {
+        reduction: {
+            SampleKey: cpa,
+            LR_EncInner: EncInner of cpa,
+            LR_EncOuter: EncOuter of cpa,
+        }
+        adversary: {
+            GenerateInputWireKeys: GenerateWireKeys of reduction,
+            GetInputWireKey: GetActiveWireKey of reduction,
+            SetInputBit: SetActiveBit of reduction,
+            EncInner: reduction,
+            EncOuter: reduction,
+        }
+    }
+}

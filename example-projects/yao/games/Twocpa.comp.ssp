@@ -1,0 +1,39 @@
+composition Twocpa {
+    const b: Bool;
+    const n: Integer;
+    const m: Integer;
+    const p: Integer;
+    const encn: fn Bits(n),Bits(n),Bits(n) -> Bits(m);
+    const encm: fn Bits(n),Bits(m),Bits(n) -> Bits(p);
+
+    instance keys_top = Keys {
+        params {
+            n: n,
+        }
+    }
+
+    instance enc = Enc {
+        params {
+            b: b,
+            n: n,
+            m: m,
+            p: p,
+            encn: encn,
+            encm: encm,
+        }
+    }
+
+    compose {
+        adversary: {
+            GenerateInputWireKeys: GenerateWireKeys of keys_top,
+            GetInputWireKey: GetActiveWireKey of keys_top,
+            SetInputBit: SetActiveBit of keys_top,
+            EncInner: enc,
+            EncOuter: enc,
+        }
+        enc: {
+            GetWireKeys: keys_top,
+            GetActiveBit: keys_top,
+        }
+    }
+}
