@@ -110,6 +110,8 @@ impl<'a> ParseGameContext<'a> {
             edges: self.edges,
             exports: self.exports,
             invariants: self.invariants,
+            file_name: self.file_name.to_string(),
+            file_contents: self.file_content.to_string(),
         }
     }
 

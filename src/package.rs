@@ -166,6 +166,9 @@ pub struct Composition {
     pub consts: Vec<(String, Type)>,
 
     pub invariants: Vec<String>,
+
+    pub file_name: String,
+    pub file_contents: String,
 }
 
 impl Composition {

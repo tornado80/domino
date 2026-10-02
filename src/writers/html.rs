@@ -38,7 +38,7 @@ use crate::gamehops::hybrid::Hybrid;
 use crate::gamehops::reduction::Reduction;
 use crate::gamehops::GameHop;
 use crate::identifier::{game_ident::GameIdentifier, theorem_ident::TheoremIdentifier, Identifier};
-use crate::package::Composition;
+use crate::package::{Composition, Edge, Export, OracleSig};
 use crate::packageinstance::PackageInstance;
 use crate::parser::ast::Identifier as _;
 use crate::parser::reduction::ReductionMapping;
@@ -284,7 +284,7 @@ pub fn render_theorem_html<B: SmtSolverBackend>(
          <span class=\"legend\" title=\"colour of Boolean parameters: fixed in the game definition, \
          set by the theorem's game instance, or a proof parameter\">bits:\
          <b class=\"b-fixed\">fixed</b><b class=\"b-inst\">instance</b><b class=\"b-proof\">proof</b></span>\
-         <span class=\"hint\"><kbd>←</kbd><kbd>→</kbd> previous / next game · click a package for its code · <span class=\"assm-key\">- - -</span> assumption packages</span>\
+         <span class=\"hint\"><kbd>←</kbd><kbd>→</kbd> previous / next game · click a package or a game name for its code · <span class=\"assm-key\">- - -</span> assumption packages · <span class=\"ren-key\">New:Old</span> renamed oracle</span>\
          </div></div>\n",
         name = esc(&theorem.name),
         body_class = if lossy { "show-lossy" } else { "" },
@@ -401,12 +401,20 @@ pub fn render_theorem_html<B: SmtSolverBackend>(
                 out,
                 "<th class=\"col{}\" data-col=\"{c}\"><div class=\"gname\">\
                  <span class=\"idx\">{}/{n}</span> {}{}{}</div>\
-                 <div class=\"gsub\">game <code>{}</code></div>{hybrid}{via}</th>",
+                 <div class=\"gsub\">game <code class=\"gamelink\" data-comp=\"{}\" \
+                 data-inst=\"{}\" data-params=\"{}\" title=\"show the game's source\">{}</code></div>\
+                 {hybrid}{via}</th>",
                 if step.hybrid.is_some() { " hyb" } else { "" },
                 c + 1,
                 game_label(theorem, step.game).html(),
                 game_bits_html(&game_bits(step.game)),
                 specialization_html(&step.assignments),
+                esc(step.game.game_name()),
+                esc(&game_label(theorem, step.game).text()),
+                esc(&name_loop_var(
+                    &game_params_text(step.game, &step.assignments),
+                    loop_var(theorem, step.game)
+                )),
                 esc(step.game.game_name()),
             );
         }
@@ -471,6 +479,18 @@ pub fn render_theorem_html<B: SmtSolverBackend>(
         .flat_map(|step| &step.game.game().pkgs)
         .map(|inst| (inst.pkg.name.as_str(), inst.pkg.file_contents.as_str()))
         .collect();
+    // Game sources likewise, once per game.
+    let game_sources: BTreeMap<&str, (&str, &str)> = tabs
+        .iter()
+        .flat_map(|tab| &tab.steps)
+        .map(|step| step.game.game())
+        .map(|comp| {
+            (
+                comp.name.as_str(),
+                (comp.file_name.as_str(), comp.file_contents.as_str()),
+            )
+        })
+        .collect();
     out.push_str("<div hidden>");
     for (name, src) in sources {
         let _ = write!(
@@ -480,12 +500,21 @@ pub fn render_theorem_html<B: SmtSolverBackend>(
             esc(src)
         );
     }
+    for (name, (file, src)) in game_sources {
+        let _ = write!(
+            out,
+            "<pre class=\"gamesrc\" data-comp=\"{}\" data-file=\"{}\">{}</pre>",
+            esc(name),
+            esc(file),
+            esc(src)
+        );
+    }
     out.push_str("</div>\n");
     out.push_str(
         "<aside id=\"pkgpane\"><div class=\"pp-head\"><div><div class=\"pp-title\"></div>\
          <div class=\"pp-sub\"></div></div><button id=\"pp-close\" title=\"close (Esc)\">×</button></div>\
          <div class=\"pp-body\"><h3>instance parameters</h3><pre class=\"pp-params\"></pre>\
-         <h3>package source</h3><pre class=\"pp-src\"></pre></div></aside>\n",
+         <h3 class=\"pp-src-head\">package source</h3><pre class=\"pp-src\"></pre></div></aside>\n",
     );
 
     let _ = write!(out, "<script>{SCRIPT}</script>\n</body></html>\n");
@@ -1166,6 +1195,26 @@ fn params_text(pkg_inst: &PackageInstance, assignments: &[(String, String)]) -> 
         .join("\n")
 }
 
+/// Every constant of a game instance as `name: Type = value`, one per line,
+/// for the side pane; proof parameters the path fixes resolved.
+fn game_params_text(game: &GameInstance, assignments: &[(String, String)]) -> String {
+    game.game()
+        .consts
+        .iter()
+        .map(|(name, ty)| {
+            let value = game
+                .consts
+                .iter()
+                .find(|(id, _)| &id.name == name)
+                .map_or("?".to_string(), |(_, expr)| {
+                    substitute(render_expr(expr), assignments)
+                });
+            format!("{name}: {ty} = {value}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// A package node: its box and label — the package name with the Boolean
 /// parameters as a superscript, and the instance name in parentheses below
 /// when it differs — grouped so a click opens the side pane.
@@ -1247,11 +1296,123 @@ fn package_node(
     node
 }
 
-/// Box: `(column, bottom, top)` in tikz units (y up). Arrow: `(x0, x1, y, labels)`.
+/// Box: `(column, bottom, top)` in tikz units (y up).
 struct Geometry {
     boxes: Vec<(f64, f64, f64)>,
-    arrows: Vec<(f64, f64, f64, Vec<String>)>,
+    arrows: Vec<Arrow>,
 }
+
+/// A horizontal arrow from `x0` to `x1` at height `y`, in tikz units, with
+/// the oracles it carries stacked above it.
+struct Arrow {
+    x0: f64,
+    x1: f64,
+    y: f64,
+    labels: Vec<OracleLabel>,
+    /// From the adversary, with nothing drawn left of it or under it.
+    export: bool,
+}
+
+/// Where an arrow's labels go.
+#[derive(Clone, Copy, PartialEq)]
+enum LabelFit {
+    /// Centred on the arrow, in full: they fit.
+    Centred,
+    /// Right-aligned at the head of an export arrow, in full, running left
+    /// into the empty space before the first package.
+    AtHead,
+    /// Centred, with renamed oracles shortened to their new name: the arrow
+    /// runs between two packages and the full labels would run under them.
+    Short,
+}
+
+impl Arrow {
+    fn fit(&self) -> LabelFit {
+        let widest = self.widest(true);
+        if widest <= self.x1 - self.x0 {
+            LabelFit::Centred
+        } else if self.export {
+            LabelFit::AtHead
+        } else {
+            LabelFit::Short
+        }
+    }
+
+    fn widest(&self, full: bool) -> f64 {
+        let chars = self.labels.iter().map(|l| l.chars(full)).max();
+        chars.unwrap_or(0) as f64 * LABEL_CHAR
+    }
+
+    /// `(left, right)` of the labels, in tikz units.
+    fn label_span(&self) -> (f64, f64) {
+        let mid = (self.x0 + self.x1) / 2.0;
+        match self.fit() {
+            LabelFit::Centred => (mid - self.widest(true) / 2.0, mid + self.widest(true) / 2.0),
+            LabelFit::AtHead => (self.x1 - LABEL_GAP - self.widest(true), self.x1),
+            LabelFit::Short => (
+                mid - self.widest(false) / 2.0,
+                mid + self.widest(false) / 2.0,
+            ),
+        }
+    }
+}
+
+/// Room between a right-aligned label and the arrowhead, in tikz units.
+const LABEL_GAP: f64 = 6.0 / SCALE;
+
+/// An oracle on an arrow: the name the caller (or the adversary) uses, and
+/// for a renamed oracle (`New: Old of inst` in the composition) the name in
+/// the package and the package instance.
+struct OracleLabel {
+    name: String,
+    renamed: Option<(String, String)>,
+}
+
+impl OracleLabel {
+    fn new(name: &str, sig: &OracleSig, callee: &PackageInstance) -> Self {
+        Self {
+            name: name.to_string(),
+            renamed: (name != sig.name).then(|| (sig.name.clone(), callee.name.clone())),
+        }
+    }
+
+    fn of_edge(comp: &Composition, edge: &Edge) -> Self {
+        Self::new(edge.name(), edge.sig(), &comp.pkgs[edge.to()])
+    }
+
+    fn of_export(comp: &Composition, export: &Export) -> Self {
+        Self::new(export.name(), export.sig(), &comp.pkgs[export.to()])
+    }
+
+    /// Characters drawn: `New:Old` for a renamed oracle shown in `full`.
+    fn chars(&self, full: bool) -> usize {
+        let old = match &self.renamed {
+            Some((old, _)) if full => 1 + old.chars().count(),
+            _ => 0,
+        };
+        self.name.chars().count() + old
+    }
+
+    /// The `<text>` content: the new name, then `:Old` in the renamed colour
+    /// (`full`) or the new name in that colour, with the composition's
+    /// `New: Old of inst` on hover.
+    fn svg(&self, full: bool) -> String {
+        let Some((old, inst)) = &self.renamed else {
+            return esc(&self.name);
+        };
+        let (new, old, inst) = (esc(&self.name), esc(old), esc(inst));
+        let title = format!("<title>{new}: {old} of {inst} (the package calls it {old})</title>");
+        if full {
+            format!("{title}{new}<tspan class=\"renamed\">:{old}</tspan>")
+        } else {
+            format!("{title}<tspan class=\"renamed\">{new}</tspan>")
+        }
+    }
+}
+
+/// Approximate width of one character of an oracle label, in tikz units
+/// (10px monospace).
+const LABEL_CHAR: f64 = 6.2 / SCALE;
 
 fn diagram_svg<B: SmtSolverBackend>(
     comp: &Composition,
@@ -1280,11 +1441,12 @@ fn diagram_svg<B: SmtSolverBackend>(
         min_y = min_y.min(bottom);
         max_y = max_y.max(top);
     }
-    for (x0, x1, y, labels) in &geo.arrows {
-        min_x = min_x.min(*x0);
-        max_x = max_x.max(*x1);
-        min_y = min_y.min(*y);
-        max_y = max_y.max(y + 0.35 * labels.len() as f64);
+    for arrow in &geo.arrows {
+        let (left, right) = arrow.label_span();
+        min_x = min_x.min(arrow.x0).min(left);
+        max_x = max_x.max(arrow.x1).max(right);
+        min_y = min_y.min(arrow.y);
+        max_y = max_y.max(arrow.y + 0.35 * arrow.labels.len() as f64);
     }
     for frame in &frames {
         for &(x0, x1, y0, y1) in &frame.rects {
@@ -1313,23 +1475,28 @@ fn diagram_svg<B: SmtSolverBackend>(
         w = (max_x - min_x) * SCALE,
         h = (max_y - min_y) * SCALE,
     );
-    for (x0, x1, y, labels) in &geo.arrows {
+    for arrow in &geo.arrows {
         let _ = write!(
             svg,
             "<line class=\"edge\" x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" \
              marker-end=\"url(#arrowhead)\"/>",
-            px(*x0),
-            py(*y),
-            px(*x1),
-            py(*y),
+            px(arrow.x0),
+            py(arrow.y),
+            px(arrow.x1),
+            py(arrow.y),
         );
-        for (k, label) in labels.iter().rev().enumerate() {
+        let fit = arrow.fit();
+        let (x, anchor) = match fit {
+            LabelFit::AtHead => (arrow.x1 - LABEL_GAP, "end"),
+            LabelFit::Centred | LabelFit::Short => ((arrow.x0 + arrow.x1) / 2.0, "middle"),
+        };
+        for (k, label) in arrow.labels.iter().rev().enumerate() {
             let _ = write!(
                 svg,
-                "<text class=\"oracle\" x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"middle\">{}</text>",
-                px((x0 + x1) / 2.0),
-                py(*y) - 4.0 - 14.0 * k as f64,
-                esc(label),
+                "<text class=\"oracle\" x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"{anchor}\">{}</text>",
+                px(x),
+                py(arrow.y) - 4.0 - 14.0 * k as f64,
+                label.svg(fit != LabelFit::Short),
             );
         }
     }
@@ -1457,41 +1624,43 @@ fn solver_geometry<B: SmtSolverBackend>(
     let mut arrows = Vec::new();
     for from in 0..comp.pkgs.len() {
         for to in 0..comp.pkgs.len() {
-            let labels: Vec<String> = comp
+            let labels: Vec<OracleLabel> = comp
                 .edges
                 .iter()
                 .filter(|e| e.from() == from && e.to() == to)
-                .map(|e| e.name().to_string())
+                .map(|e| OracleLabel::of_edge(comp, e))
                 .collect();
             if labels.is_empty() {
                 continue;
             }
             let (a, b) = (&comp.pkgs[from].name, &comp.pkgs[to].name);
-            arrows.push((
-                int(format!("{a}-column"))? * COLUMN_PITCH + BOX_WIDTH,
-                int(format!("{b}-column"))? * COLUMN_PITCH,
-                int(format!("edge-{a}-{b}-height"))? / 2.0,
+            arrows.push(Arrow {
+                x0: int(format!("{a}-column"))? * COLUMN_PITCH + BOX_WIDTH,
+                x1: int(format!("{b}-column"))? * COLUMN_PITCH,
+                y: int(format!("edge-{a}-{b}-height"))? / 2.0,
                 labels,
-            ));
+                export: false,
+            });
         }
     }
     for to in 0..comp.pkgs.len() {
-        let labels: Vec<String> = comp
+        let labels: Vec<OracleLabel> = comp
             .exports
             .iter()
             .filter(|e| e.to() == to)
-            .map(|e| e.name().to_string())
+            .map(|e| OracleLabel::of_export(comp, e))
             .collect();
         if labels.is_empty() {
             continue;
         }
         let b = &comp.pkgs[to].name;
-        arrows.push((
-            int("--column".to_string())? * COLUMN_PITCH + BOX_WIDTH,
-            int(format!("{b}-column"))? * COLUMN_PITCH,
-            int(format!("edge---{b}-height"))? / 2.0,
+        arrows.push(Arrow {
+            x0: int("--column".to_string())? * COLUMN_PITCH + BOX_WIDTH,
+            x1: int(format!("{b}-column"))? * COLUMN_PITCH,
+            y: int(format!("edge---{b}-height"))? / 2.0,
             labels,
-        ));
+            export: true,
+        });
     }
     Some(Geometry { boxes, arrows })
 }
@@ -1524,31 +1693,38 @@ fn fallback_geometry(comp: &Composition) -> Geometry {
     let mut arrows = Vec::new();
     // Arrows are horizontal at the callee's centre height, like the solver
     // layout's; they may start beside rather than on the caller's box.
-    let mut add = |x0: f64, to: usize, labels: Vec<String>| {
-        arrows.push((x0, boxes[to].0, mid(to), labels));
+    let mut add = |x0: f64, to: usize, labels: Vec<OracleLabel>, export: bool| {
+        arrows.push(Arrow {
+            x0,
+            x1: boxes[to].0,
+            y: mid(to),
+            labels,
+            export,
+        });
     };
     for (from, &(from_x, _, _)) in boxes.iter().enumerate() {
         for to in 0..n {
-            let labels: Vec<String> = comp
+            let labels: Vec<OracleLabel> = comp
                 .edges
                 .iter()
                 .filter(|e| e.from() == from && e.to() == to)
-                .map(|e| e.name().to_string())
+                .map(|e| OracleLabel::of_edge(comp, e))
                 .collect();
             if !labels.is_empty() {
-                add(from_x + BOX_WIDTH, to, labels);
+                add(from_x + BOX_WIDTH, to, labels, false);
             }
         }
     }
-    for to in 0..n {
-        let labels: Vec<String> = comp
+    for (to, &d) in depth.iter().enumerate() {
+        let labels: Vec<OracleLabel> = comp
             .exports
             .iter()
             .filter(|e| e.to() == to)
-            .map(|e| e.name().to_string())
+            .map(|e| OracleLabel::of_export(comp, e))
             .collect();
         if !labels.is_empty() {
-            add(0.0, to, labels);
+            // An arrow to a deeper package runs behind the packages before it.
+            add(0.0, to, labels, d == 1);
         }
     }
     Geometry { boxes, arrows }
@@ -1572,12 +1748,12 @@ const STYLE: &str = r#"
 :root { --bg:#ffffff; --fg:#1b1f24; --muted:#6a737d; --line:#d0d7de; --head:#f6f8fa;
         --accent:#0969da; --accent-bg:#ddf4ff; --pkg:#fff8e1; --pkgline:#8a6d00;
         --edge:#444c56; --proof:#b3261e; --inst:#8250df; --err:#b3261e; --assm:#cf222e;
-        --hyb:#1a7f37; --hyb-bg:#f0fbf3; --code:12px; }
+        --hyb:#1a7f37; --hyb-bg:#f0fbf3; --ren:#bc4c00; --code:12px; }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --line:#30363d; --head:#161b22;
           --accent:#4493f8; --accent-bg:#132339; --pkg:#2d2610; --pkgline:#d4a72c;
           --edge:#adbac7; --proof:#ff7b72; --inst:#d2a8ff; --err:#ff7b72; --assm:#f85149;
-          --hyb:#3fb950; --hyb-bg:#0f2417; }
+          --hyb:#3fb950; --hyb-bg:#0f2417; --ren:#f0883e; }
 }
 html, body { height:100%; }
 body { background:var(--bg); color:var(--fg); margin:0; display:flex; flex-direction:column;
@@ -1646,6 +1822,7 @@ svg .sup { fill:var(--muted); font-size:9px; }
 svg .edge { stroke:var(--edge); stroke-width:1.2; }
 svg .head { fill:var(--edge); }
 svg .oracle { fill:var(--muted); font:10px ui-monospace, Menlo, monospace; }
+svg .oracle .renamed { fill:var(--ren); }
 svg .inst { fill:var(--muted); font:10px ui-monospace, Menlo, monospace; }
 svg .pkgnode { cursor:pointer; }
 svg .pkgnode:hover .pkgbox { stroke-width:2.2; }
@@ -1675,6 +1852,9 @@ body.pp-open header, body.pp-open section.tabpane { margin-right:var(--pane); }
 .pp-body { flex:1; min-height:0; overflow:auto; padding:4px 14px 16px; }
 .pp-body h3 { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:12px 0 4px; }
 .pp-body .kw { color:var(--accent); }
+.gamelink { cursor:pointer; text-decoration:underline dotted; text-underline-offset:2px; }
+.gamelink:hover, .gamelink.selected { color:var(--accent); }
+.ren-key { color:var(--ren); font-family: ui-monospace, Menlo, monospace; }
 .pp-body .cm { color:var(--muted); font-style:italic; }
 "#;
 
@@ -1695,7 +1875,11 @@ const SCRIPT: &str = r#"
   const ppane = document.getElementById('pkgpane');
   const sources = {};
   document.querySelectorAll('pre.pkgsrc').forEach(p => { sources[p.dataset.pkg] = p.textContent; });
-  const TOKENS = /\/\*[\s\S]*?\*\/|\/\/[^\n]*|\b(?:package|composition|theorem|params|state|types|import|oracles|oracle|return|if|else|assert|abort|invoke|for|in|const|Bool|Integer|Bits|Maybe|Table|Some|None|unwrap|true|false)\b/g;
+  const gameSources = {};
+  document.querySelectorAll('pre.gamesrc').forEach(p => {
+    gameSources[p.dataset.comp] = { file: p.dataset.file, text: p.textContent };
+  });
+  const TOKENS = /\/\*[\s\S]*?\*\/|\/\/[^\n]*|\b(?:package|composition|theorem|params|state|types|import|oracles|oracle|instance|compose|adversary|of|return|if|else|assert|abort|invoke|for|in|const|Bool|Integer|Bits|Maybe|Table|Some|None|unwrap|true|false)\b/g;
   function highlight(text) {
     const esc = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     let out = '', last = 0;
@@ -1710,25 +1894,39 @@ const SCRIPT: &str = r#"
     body.classList.toggle('pp-open', open);
     refresh();
   }
-  function openPkg(node) {
-    document.querySelectorAll('.pkgnode.selected').forEach(n => n.classList.remove('selected'));
+  function openSource(node, title, sub, srcHead, src) {
+    document.querySelectorAll('.pkgnode.selected, .gamelink.selected')
+      .forEach(n => n.classList.remove('selected'));
     node.classList.add('selected');
-    const cell = node.closest('td');
-    const pkg = node.dataset.pkg;
-    ppane.querySelector('.pp-title').textContent = 'package ' + pkg;
-    ppane.querySelector('.pp-sub').textContent =
-      'instance ' + node.dataset.inst + (cell ? ' in game instance ' + cell.dataset.game : '');
+    ppane.querySelector('.pp-title').textContent = title;
+    ppane.querySelector('.pp-sub').textContent = sub;
     ppane.querySelector('.pp-params').textContent = node.dataset.params || '(no parameters)';
-    ppane.querySelector('.pp-src').innerHTML = highlight(sources[pkg] || '(source not available)');
+    ppane.querySelector('.pp-src-head').textContent = srcHead;
+    ppane.querySelector('.pp-src').innerHTML = highlight(src || '(source not available)');
     ppane.querySelector('.pp-body').scrollTop = 0;
     setPane(true);
   }
+  function openPkg(node) {
+    const cell = node.closest('td');
+    const pkg = node.dataset.pkg;
+    openSource(node, 'package ' + pkg,
+      'instance ' + node.dataset.inst + (cell ? ' in game instance ' + cell.dataset.game : ''),
+      'package source', sources[pkg]);
+  }
+  function openGame(node) {
+    const game = gameSources[node.dataset.comp];
+    openSource(node, 'game ' + node.dataset.comp,
+      'game instance ' + node.dataset.inst + (game ? ' · ' + game.file : ''),
+      'game source', game && game.text);
+  }
   ppane.querySelector('.pp-title').textContent = 'packages';
-  ppane.querySelector('.pp-sub').textContent = 'click a package in a diagram';
+  ppane.querySelector('.pp-sub').textContent = 'click a package in a diagram or a game name';
   document.addEventListener('click', e => {
     if (!e.target.closest) return;
     const node = e.target.closest('.pkgnode');
     if (node) { openPkg(node); return; }
+    const gamelink = e.target.closest('.gamelink');
+    if (gamelink) { openGame(gamelink); return; }
     // A reduction's label or frame opens its assumption's tab.
     const ref = e.target.closest('[data-assumption]:not(.tab)');
     const tab = ref && tabs.find(b => b.dataset.assumption === ref.dataset.assumption);

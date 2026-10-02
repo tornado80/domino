@@ -8,7 +8,8 @@
 //! written for a person reading the code instead:
 //!
 //! - **No `invoke`.** A call becomes a `// inlined Instance.Oracle` comment
-//!   followed by the callee's body, indented one level; the callee's
+//!   (`// inlined Import: Oracle of Instance` when the composition renames the
+//!   oracle for the caller) followed by the callee's body, indented one level; the callee's
 //!   `return e` becomes `<bind> <- e`. `returnify` only guarantees a return at
 //!   the end of every path, so a return the callee can run before its last
 //!   statement is followed by `goto end_Instance_Oracle;`, a jump to a label
@@ -89,7 +90,17 @@ pub fn render_oracle_view(
         Ret::Top,
         0,
     );
-    view.emit(0, &format!("{} {{", render_signature(export.sig())));
+    // A renamed export shows the name the adversary calls, and where it comes
+    // from as written in the composition: `New: Old of instance`.
+    if let Some(alias) = export.alias() {
+        view.emit(
+            0,
+            &format!("// {alias}: {} of {}", export.sig().name, entry_inst.name),
+        );
+    }
+    let mut sig = export.sig().clone();
+    sig.name = export.name().to_string();
+    view.emit(0, &format!("{} {{", render_signature(&sig)));
     view.block(&odef.code.0, &frame, 1, true)?;
     view.emit(0, "}");
     Ok(view.text)
@@ -805,7 +816,13 @@ impl View<'_> {
             caller.depth + 1,
         );
 
-        self.emit(indent, &format!("// inlined {}", callee.name));
+        match edge.alias() {
+            Some(alias) => self.emit(
+                indent,
+                &format!("// inlined {alias}: {} of {}", sig.name, inst.name),
+            ),
+            None => self.emit(indent, &format!("// inlined {}", callee.name)),
+        }
         for (param, arg) in bindings {
             let (param, arg) = (&callee.names[param.as_str()], self.text_of(&arg));
             if *param != arg {
@@ -1009,5 +1026,33 @@ PKDEC(c_: (Bits(kctl), Bits(dctl))) -> Maybe(Bits(ptl)) {
             "{early}"
         );
         assert!(early.contains("\n        end_Prf_Eval:\n"), "{early}");
+    }
+
+    const ORACLE_RENAME: &str = "example-projects/hello-world-oracle-rename";
+
+    /// `AnotherUsefulOracle: UsefulOracle of fwd` exports `Fwd.UsefulOracle`
+    /// under a new name, and `O: UsefulOracle of rand` wires `Fwd`'s import
+    /// `O`: the listing is headed by the exported name, and both renamings
+    /// read as the composition writes them.
+    #[test]
+    fn renamed_oracles_read_as_in_the_composition() {
+        let text = view(
+            ORACLE_RENAME,
+            "Proof",
+            "big_composition",
+            "AnotherUsefulOracle",
+            &[],
+        );
+        let expected = "\
+// AnotherUsefulOracle: UsefulOracle of fwd
+AnotherUsefulOracle() -> (Integer, Bits(n)) {
+    // inlined O: UsefulOracle of rand
+        rand.ctr <- (rand.ctr + 1);
+        rand <-$ Bits(n) sample-name samplepoint;
+        y <- (rand.ctr, rand);
+    return y;
+}
+";
+        assert_eq!(text, expected);
     }
 }

@@ -176,6 +176,8 @@ impl GameInstance {
             edges: new_edges,
             exports: new_exports,
             invariants: game.invariants.clone(),
+            file_name: game.file_name.clone(),
+            file_contents: game.file_contents.clone(),
         };
 
         GameInstance {
