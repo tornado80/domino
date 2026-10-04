@@ -6,9 +6,9 @@ __REFRESH__<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>domino debug — joint tree</title>
 <style>
 __VIEWER_CSS__
+__GRID_CSS__
 
 /* ---- joint-tree viewer (story 24) ---------------------------------- */
-#left { width: 46%; }
 #stuck-panel { border-bottom: 1px solid var(--border); background: var(--bg-alt); flex: none; max-height: 34%; overflow: auto; }
 #stuck-panel > summary { padding: 6px 12px; }
 .stuck-entry { padding: 6px 12px 8px; border-top: 1px dashed var(--border); cursor: pointer; }
@@ -39,7 +39,7 @@ __VIEWER_CSS__
 .badge.jid { background: var(--bg-inset); color: var(--fg); font-weight: 600; }
 .rels { padding: 2px 12px 4px 44px; font: 11px/1.5 var(--mono); color: var(--fg-muted); }
 .rels .rel { display: flex; gap: 6px; align-items: baseline; }
-#detail h2 { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+#cell-detail h2 { font-size: 14px; margin: 0 0 4px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .vrow { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin: 4px 0; font: 12px/1.4 var(--mono); }
 .vrow .k { color: var(--fg-muted); min-width: 13ch; }
 .vrow a, .path-tbl a, .stuck-entry a { color: var(--accent); }
@@ -54,7 +54,8 @@ table.path-tbl .src { color: var(--fg-muted); display: block; white-space: pre-w
 .listing .row.head { background: var(--amber-bg); border-left-color: var(--amber-fg); }
 .legend-item.head .legend-swatch { background: var(--amber-bg); border-color: var(--amber-fg); }
 .legend-item.cut .legend-swatch { background: var(--amber-bg); border-color: var(--amber-fg); }
-.listing .row { cursor: default; padding: 0; }
+.listing .row { cursor: default; padding: 0; flex-wrap: nowrap; }
+#cell-detail .path-sub { color: var(--fg-muted); font-size: 12px; margin-bottom: 12px; }
 .listing .row:hover { background: inherit; }
 .answers { font: 12px/1.6 var(--mono); }
 .answers span { margin-right: 14px; white-space: nowrap; }
@@ -70,8 +71,8 @@ table.path-tbl .src { color: var(--fg-muted); display: block; white-space: pre-w
   <div class="chips" id="h-opts"></div>
   <div class="chips" id="h-summary"></div>
 </header>
-<main>
-  <div id="left">
+<main class="grid" id="grid">
+  <div class="cell" id="cell-tree">
     <details id="stuck-panel">
       <summary><span class="sec-title" id="stuck-title">Stuck points</span></summary>
       <div id="stuck-list"></div>
@@ -87,7 +88,11 @@ table.path-tbl .src { color: var(--fg-muted); display: block; white-space: pre-w
     </div>
     <div id="tree"></div>
   </div>
-  <div id="detail"><div class="empty">Select a node or a joint path on the left.</div></div>
+  <div class="cell" id="cell-detail"><div class="empty">Select a node or a joint path in the tree.</div></div>
+  <div class="cell lcell" id="cell-left"></div>
+  <div class="cell lcell" id="cell-right"></div>
+  <div class="splitter col" aria-label="column splitter"></div>
+  <div class="splitter row" aria-label="row splitter"></div>
 </main>
 
 <script type="application/json" id="trace">__TRACE_JSON__</script>
@@ -112,6 +117,7 @@ const activatable = (n, fn) => {
   return n;
 };
 __EFFECT_JS__
+__LISTING_JS__
 // ---- the trace, indexed --------------------------------------------------
 const nodes = T.tree.nodes;
 const pairById = new Map(T.pairs.map(p => [p.id, p]));
@@ -380,8 +386,9 @@ document.getElementById("tree-expand").onclick = () => setAll(true);
 // ---- selection + location.hash ---------------------------------------------
 // The hash is the only place a selection lives: a refresh reloads the page, and
 // the hash survives it. `n=<node>[&c=<child>]`, `plumb=hide`, `ts` / `ds` the
-// scroll offsets of the tree and the detail pane.
-const detail = document.getElementById("detail");
+// scroll offsets of the tree and the detail pane, `ls` / `rs` those of the
+// listings, `gc` / `gr` the splitter positions as fractions.
+const detail = document.getElementById("cell-detail");
 function parseHash() {
   const out = {};
   location.hash.replace(/^#/, "").split("&").forEach(kv => {
@@ -414,7 +421,8 @@ function select(nodeIdx, child, opts) {
   if (node.stuck) { const e = document.getElementById("stuck-" + node.stuck); if (e) e.classList.add("sel"); }
   selection = { node: nodeIdx, child };
   writeHash({ n: nodeIdx, c: child });
-  renderDetail(nodeIdx, child, !(opts && opts.keepScroll));
+  renderDetail(nodeIdx, child);
+  showListings(nodeIdx, child);
 }
 
 // ---- detail pane --------------------------------------------------------------
@@ -479,32 +487,6 @@ function legend() {
     wrap.appendChild(item);
   });
   return wrap;
-}
-
-// `spec`: { exec: Set, decisions: Map(label -> text), heads: Set, terminal: {label, abort}, cuts: Set }
-function listingBlock(text, spec) {
-  const wrap = el("div", "listing");
-  const pre = el("pre");
-  pre.appendChild(wrap);
-  text.split("\n").forEach((line, i) => {
-    const n = i + 1;
-    let cls = spec.exec.has(n) ? " exec" : "";
-    if (spec.heads.has(n)) cls = " head";
-    if (spec.terminal && n === spec.terminal.label) cls = spec.terminal.abort ? " abort" : " ret";
-    if (spec.cuts.has(n)) cls = " cut";
-    const row = el("div", "row" + cls);
-    row.dataset.line = String(n);
-    row.appendChild(el("span", "n", String(n)));
-    row.appendChild(el("span", "c", line));
-    const d = spec.decisions.get(n);
-    if (d) row.appendChild(el("span", "dtag", d));
-    if (cls) pre._focus = pre._focus || row;
-    wrap.appendChild(row);
-  });
-  const box = el("div");
-  box.appendChild(legend());
-  box.appendChild(pre);
-  return box;
 }
 
 function listingSpec(path, side, pair, cutStep) {
@@ -626,7 +608,7 @@ function answersBlock(node) {
   return box;
 }
 
-function renderDetail(nodeIdx, childIdx, centre) {
+function renderDetail(nodeIdx, childIdx) {
   const keepScroll = detail.scrollTop;
   detail.innerHTML = "";
   const node = nodes[nodeIdx];
@@ -665,16 +647,78 @@ function renderDetail(nodeIdx, childIdx, centre) {
     detail.appendChild(sec("Effect — return value & new state", effectBlock(pair), false));
     detail.appendChild(sec("Claim assertion", claimBlock(pair), false, "negated goals"));
   }
-  [["left", T.left_listing, T.left_game], ["right", T.right_listing, T.right_game]].forEach(([side, text, game]) => {
-    const spec = listingSpec(path, side, cut ? null : pair, cut);
-    const body = listingBlock(text, spec);
-    const d = sec(`Listing — ${side} (${game})`, body, true,
-      `${text.split("\n").length} lines · ${spec.exec.size} executed`);
-    detail.appendChild(d);
-    const pre = body.querySelector("pre");
-    if (centre && pre && pre._focus) requestAnimationFrame(() => { if (d.open) pre._focus.scrollIntoView({ block: "center" }); });
-  });
   detail.scrollTop = keepScroll;
+}
+
+// ---- the listings: built once, repainted per selection ------------------------
+const listings = {
+  left: makeListing(document.getElementById("cell-left"), `left · ${T.left_game} · ${T.oracle}`, T.left_listing || "", legend()),
+  right: makeListing(document.getElementById("cell-right"), `right · ${T.right_game} · ${T.oracle}`, T.right_listing || "", legend()),
+};
+
+// Where each side stands at the selection: the cut label, the terminal of a
+// joint path, or the head of the node.
+function targetLine(node, side, pair, cut) {
+  if (cut) return cut[side] ? cut[side].label : node[side].head.label;
+  if (pair) return pair[side].terminal.label;
+  return node[side].head.label;
+}
+
+function showListings(nodeIdx, childIdx) {
+  const node = nodes[nodeIdx];
+  const cut = childIdx != null ? node.children[childIdx] : null;
+  const pair = node.pair && pairById.get(node.pair);
+  const path = pathTo(nodeIdx);
+  SIDES.forEach(([side]) => {
+    paintListing(listings[side], listingSpec(path, side, cut ? null : pair, cut));
+    bringListingTo(listings[side], targetLine(node, side, cut ? null : pair, cut));
+  });
+}
+
+// ---- keyboard navigation in the tree ---------------------------------------------
+const visibleRows = () => [...tree.querySelectorAll(".row")].filter(r => r.offsetParent !== null);
+const parentRow = row => {
+  const up = row.parentElement.parentElement.closest(".node");
+  return up && up.querySelector(":scope > .row");
+};
+function stepRow(row, delta) {
+  const rows = visibleRows();
+  return rows[rows.indexOf(row) + delta];
+}
+function rightTarget(row) {
+  const wrap = row.parentElement;
+  if (!wrap._n || !wrap._n.children.length) return null;
+  if (!wrap.classList.contains("open")) { setOpen(wrap, true); return null; }
+  return wrap._kids.querySelector(".row");
+}
+function leftTarget(row) {
+  const wrap = row.parentElement;
+  if (wrap._n && wrap.classList.contains("open")) { setOpen(wrap, false); return null; }
+  return parentRow(row);
+}
+const TREE_KEYS = {
+  ArrowUp: row => stepRow(row, -1),
+  ArrowDown: row => stepRow(row, 1),
+  ArrowRight: rightTarget,
+  ArrowLeft: leftTarget,
+};
+tree.addEventListener("keydown", e => {
+  const go = TREE_KEYS[e.key];
+  const row = e.target.closest && e.target.closest(".row");
+  if (!go || !row) return;
+  e.preventDefault();
+  const next = go(row);
+  if (!next) return;
+  next.focus();
+  next.click();
+});
+
+// ---- the grid splitters ------------------------------------------------------------
+{
+  const h = parseHash();
+  const frac = (v, d) => { const f = Number(v); return v != null && f >= 0.1 && f <= 0.9 ? f : d; };
+  initGrid(document.getElementById("grid"), { gc: frac(h.gc, 0.5), gr: frac(h.gr, 0.45) },
+    pos => writeHash({ gc: pos.gc, gr: pos.gr }));
 }
 
 // ---- plumbing toggle ------------------------------------------------------------
@@ -703,9 +747,9 @@ function restore() {
     const c = h.c != null && Number.isInteger(Number(h.c)) && nodes[n].children[Number(h.c)] && nodes[n].children[Number(h.c)].outcome.kind !== "explored" ? Number(h.c) : null;
     select(n, c, { keepScroll: true });
   }
-  const ts = Number(h.ts), ds = Number(h.ds);
-  if (Number.isFinite(ts)) tree.scrollTop = ts;
-  if (Number.isFinite(ds)) detail.scrollTop = ds;
+  [[tree, h.ts], [detail, h.ds], [listings.left.pre, h.ls], [listings.right.pre, h.rs]].forEach(([pane, v]) => {
+    if (v != null && Number.isFinite(Number(v))) pane.scrollTop = Number(v);
+  });
 }
 restore();
 window.addEventListener("hashchange", () => { const h = parseHash(); if (h.n != null && (!selection || String(selection.node) !== h.n || String(selection.child) !== String(h.c))) restore(); });
@@ -713,10 +757,12 @@ window.addEventListener("hashchange", () => { const h = parseHash(); if (h.n != 
 let scrollTimer = null;
 const rememberScroll = () => {
   clearTimeout(scrollTimer);
-  scrollTimer = setTimeout(() => writeHash({ ts: Math.round(tree.scrollTop), ds: Math.round(detail.scrollTop) }), 200);
+  scrollTimer = setTimeout(() => writeHash({
+    ts: Math.round(tree.scrollTop), ds: Math.round(detail.scrollTop),
+    ls: Math.round(listings.left.pre.scrollTop), rs: Math.round(listings.right.pre.scrollTop),
+  }), 200);
 };
-tree.addEventListener("scroll", rememberScroll);
-detail.addEventListener("scroll", rememberScroll);
+[tree, detail, listings.left.pre, listings.right.pre].forEach(p => p.addEventListener("scroll", rememberScroll));
 </script>
 </body>
 </html>

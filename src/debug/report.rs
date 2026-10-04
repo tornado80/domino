@@ -1403,6 +1403,136 @@ function effectColumn(gameName, eff, terminal) {
 }
 "##;
 
+/// The 2×2 debug grid (story 48): tree and detail on top, the two listings
+/// below, one column splitter shared by both rows and one row splitter. Spliced
+/// in at `__GRID_CSS__`, after `VIEWER_CSS`.
+pub(crate) const GRID_CSS: &str = r##"header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 6px 12px; }
+header h1 { margin: 0; }
+header .sub { font-size: 12px; }
+header .chips { margin-top: 0; gap: 4px; }
+main.grid {
+  --gc: 50%; --gr: 45%;
+  flex: 1; min-height: 0; display: grid;
+  grid-template-columns: calc(var(--gc) - 3px) 6px minmax(0, 1fr);
+  grid-template-rows: calc(var(--gr) - 3px) 6px minmax(0, 1fr);
+}
+.cell { min-width: 0; min-height: 0; overflow: auto; }
+#cell-tree { grid-area: 1 / 1; display: flex; flex-direction: column; overflow: hidden; }
+#cell-detail { grid-area: 1 / 3; padding: 10px 16px 40px; }
+#cell-left { grid-area: 3 / 1; }
+#cell-right { grid-area: 3 / 3; }
+.lcell { display: flex; flex-direction: column; overflow: hidden; }
+.splitter { background: var(--border); z-index: 1; }
+.splitter:hover, .splitter:focus { background: var(--accent); outline: none; }
+.splitter.col { grid-area: 1 / 2 / 4 / 3; cursor: col-resize; }
+.splitter.row { grid-area: 2 / 1 / 3 / 4; cursor: row-resize; }
+.ltitle { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 6px 12px 2px; flex: none; }
+.ltitle-name { font: 600 12px var(--mono); }
+.ltitle-meta { font: 11px var(--mono); color: var(--fg-muted); }
+.lcell > .legend { padding: 0 12px; flex: none; }
+.lcell > pre.lscroll { flex: 1; min-height: 0; overflow: auto; margin: 0 8px 8px; position: relative; }
+.listing .row.pulse { animation: target-pulse 1.2s ease-out; }
+@keyframes target-pulse { from { outline: 2px solid var(--accent); } to { outline: 2px solid transparent; } }
+@media (prefers-reduced-motion: reduce) { .listing .row.pulse { animation: none; outline: 2px solid var(--accent); } }
+@media (max-width: 900px) {
+  main.grid { display: flex; flex-direction: column; overflow: auto; }
+  .cell { flex: none; max-height: 70vh; border-bottom: 1px solid var(--border); }
+  #cell-tree, .lcell { height: 70vh; }
+  .splitter { display: none; }
+}"##;
+
+/// The persistent listings and the grid splitters (story 48), shared by both
+/// viewers. Spliced in at `__LISTING_JS__`; needs an `el(tag, cls, text)` helper.
+/// A listing is built once; a selection repaints it from a spec
+/// `{ exec: Set, decisions: Map, heads: Set, terminal: {label, abort} | null, cuts: Set }`
+/// and brings it to a target line.
+pub(crate) const LISTING_JS: &str = r##"function makeListing(cell, title, text, legendEl) {
+  const head = el("div", "ltitle");
+  head.appendChild(el("span", "ltitle-name", title));
+  const meta = el("span", "ltitle-meta");
+  head.appendChild(meta);
+  const pre = el("pre", "lscroll");
+  const wrap = el("div", "listing");
+  pre.appendChild(wrap);
+  const rows = text.split("\n").map((line, i) => {
+    const row = el("div", "row");
+    row.dataset.line = String(i + 1);
+    row.appendChild(el("span", "n", String(i + 1)));
+    row.appendChild(el("span", "c", line));
+    wrap.appendChild(row);
+    return row;
+  });
+  cell.append(head, legendEl, pre);
+  return { rows, meta, pre };
+}
+const PAINT_CLASSES = ["exec", "head", "ret", "abort", "cut"];
+function paintClass(spec, n) {
+  if (spec.cuts.has(n)) return "cut";
+  if (spec.terminal && n === spec.terminal.label) return spec.terminal.abort ? "abort" : "ret";
+  if (spec.heads.has(n)) return "head";
+  return spec.exec.has(n) ? "exec" : null;
+}
+function paintListing(L, spec) {
+  L.rows.forEach((row, i) => {
+    const n = i + 1;
+    row.classList.remove(...PAINT_CLASSES);
+    const cls = paintClass(spec, n);
+    if (cls) row.classList.add(cls);
+    const old = row.querySelector(".dtag");
+    if (old) old.remove();
+    const d = spec.decisions.get(n);
+    if (d) row.appendChild(el("span", "dtag", d));
+  });
+  L.meta.textContent = `${L.rows.length} lines · ${spec.exec.size} executed`;
+}
+function bringListingTo(L, line) {
+  const row = L.rows[line - 1];
+  if (!row) return;
+  const top = row.offsetTop - (L.pre.clientHeight - row.offsetHeight) / 2;
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  L.pre.scrollTo({ top: Math.max(0, top), behavior: reduced ? "auto" : "smooth" });
+  row.classList.remove("pulse");
+  void row.offsetWidth;
+  row.classList.add("pulse");
+  setTimeout(() => row.classList.remove("pulse"), 1200);
+}
+// `pos` is { gc, gr }: the column and row splitter positions as fractions.
+function initGrid(grid, pos, onChange) {
+  const apply = () => {
+    grid.style.setProperty("--gc", `${pos.gc * 100}%`);
+    grid.style.setProperty("--gr", `${pos.gr * 100}%`);
+  };
+  const move = (key, f) => {
+    pos[key] = Math.round(Math.min(0.9, Math.max(0.1, f)) * 100) / 100;
+    apply();
+    onChange(pos);
+  };
+  bindSplitter(grid, grid.querySelector(".splitter.col"), "x", f => move("gc", f), () => pos.gc);
+  bindSplitter(grid, grid.querySelector(".splitter.row"), "y", f => move("gr", f), () => pos.gr);
+  apply();
+}
+function bindSplitter(grid, bar, axis, move, current) {
+  bar.tabIndex = 0;
+  bar.setAttribute("role", "separator");
+  bar.setAttribute("aria-orientation", axis === "x" ? "vertical" : "horizontal");
+  const fraction = e => {
+    const r = grid.getBoundingClientRect();
+    return axis === "x" ? (e.clientX - r.left) / r.width : (e.clientY - r.top) / r.height;
+  };
+  bar.onpointerdown = e => {
+    e.preventDefault();
+    bar.setPointerCapture(e.pointerId);
+    bar.onpointermove = m => move(fraction(m));
+    bar.onpointerup = () => { bar.onpointermove = null; };
+  };
+  const steps = axis === "x" ? { ArrowLeft: -1, ArrowRight: 1 } : { ArrowUp: -1, ArrowDown: 1 };
+  bar.onkeydown = e => {
+    if (!steps[e.key]) return;
+    e.preventDefault();
+    move(current() + steps[e.key] * 0.02);
+  };
+}"##;
+
 #[cfg(test)]
 mod tests {
     use super::*;

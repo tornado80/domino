@@ -26,7 +26,7 @@ use serde_derive::Serialize;
 use crate::debug::driver::ClaimInfo;
 use crate::debug::lockstep::{ChildOutcome, LockstepOutcome, PairRecord};
 use crate::debug::lockstep_run::{ClaimCounts, VerdictCounts};
-use crate::debug::report::{EFFECT_JS, VIEWER_CSS};
+use crate::debug::report::{EFFECT_JS, GRID_CSS, LISTING_JS, VIEWER_CSS};
 
 /// What the Domino verdicts say about everything below one stuck point: how
 /// many joint paths lie below it, how each claim fared on them, and which state
@@ -135,7 +135,9 @@ pub fn render_html(trace_json: &str, rollups: &[StuckRollup], live: bool) -> Str
     TEMPLATE
         .replace("__REFRESH__", if live { REFRESH_TAG } else { "" })
         .replace("__VIEWER_CSS__", VIEWER_CSS)
+        .replace("__GRID_CSS__", GRID_CSS)
         .replace("__EFFECT_JS__", EFFECT_JS)
+        .replace("__LISTING_JS__", LISTING_JS)
         .replace("__ROLLUPS_JSON__", &escape(&rollups_json))
         .replace("__TRACE_JSON__", &escape(trace_json))
 }
@@ -391,6 +393,24 @@ mod tests {
         let page = render_html(r#"{"line":"</script><b>"}"#, &[], false);
         assert!(!page.contains("</script><b>"));
         assert!(page.contains("\\u003c/script>"));
+    }
+
+    #[test]
+    fn the_grid_and_the_persistent_listings_are_spliced_from_report() {
+        let page = render_html("{}", &[], false);
+        assert!(page.contains(GRID_CSS));
+        assert!(page.contains(LISTING_JS));
+        assert!(!page.contains("__GRID_CSS__") && !page.contains("__LISTING_JS__"));
+        for id in ["cell-tree", "cell-detail", "cell-left", "cell-right"] {
+            assert!(page.contains(&format!("id=\"{id}\"")), "the grid has the cell {id}");
+        }
+    }
+
+    #[test]
+    fn the_viewer_keeps_no_private_copy_of_the_listing_code() {
+        assert!(!TEMPLATE.contains("function makeListing"));
+        assert!(!TEMPLATE.contains("function paintListing"));
+        assert!(!TEMPLATE.contains("function initGrid"));
     }
 
     #[test]
