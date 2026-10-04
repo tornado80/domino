@@ -6,8 +6,8 @@
 //! into one state record type per package, a pair of game-state records that
 //! nest them (`docs/adr/0007-invariant-game-state-nests-package-state-records.md`,
 //! story 42), plus a closed set of EasyCrypt operators, one per
-//! `define-fun`/`define-state-relation` in the source file(s), folded into
-//! `op inv`.
+//! `define-fun`/`define-state-relation` in the source file(s). `op inv`
+//! guards only the relation named `invariant` (story 47).
 //!
 //! The SMT-LIB text is parsed with the existing `src/util/smtparser`
 //! (`smt.pest`) grammar via its `SmtParser` trait; this module supplies its
@@ -78,6 +78,18 @@ pub enum InvariantError {
         a: String,
         b: String,
         mangled: String,
+    },
+
+    /// None of the equivalence's invariant files defines the state
+    /// relation `invariant`. Domino assumes only `invariant` on the states
+    /// before an oracle call, so `inv` guards only that relation (story 47).
+    #[error(
+        "equivalence `{equivalence}` has no invariant: none of its invariant files ({}) defines a `define-state-relation` named `invariant`",
+        files.join(", ")
+    )]
+    MissingInvariant {
+        equivalence: String,
+        files: Vec<String>,
     },
 
     #[error("game instance `{name}` not found for this equivalence")]
@@ -249,6 +261,14 @@ pub fn build_invariant_file(
         state.parse_stmts(&contents)?;
     }
 
+    let invariant_app = EcExpr::App {
+        head: state.invariant_op().ok_or_else(|| InvariantError::MissingInvariant {
+            equivalence: format!("{} ~ {}", equivalence.left_name(), equivalence.right_name()),
+            files: equivalence.invariants().to_vec(),
+        })?,
+        args: vec![EcExpr::Var("l".to_string()), EcExpr::Var("r".to_string())],
+    };
+
     let params_inv_expr = build_params_inv(&left_side, &right_side)?;
 
     let mut items: Vec<EcItem> = pkg_state_types
@@ -283,24 +303,13 @@ pub fn build_invariant_file(
         field_expr("r", &right_side.abort_field),
     );
 
-    let state_relation_conj = fold_and(
-        state
-            .state_relations
-            .iter()
-            .map(|name| EcExpr::App {
-                head: name.clone(),
-                args: vec![EcExpr::Var("l".to_string()), EcExpr::Var("r".to_string())],
-            })
-            .collect(),
-    );
-
     let guarded = EcExpr::Binop {
         op: EcBinop::Implies,
         lhs: Box::new(EcExpr::Unop {
             op: EcUnop::Not,
             arg: Box::new(field_expr("l", &left_side.abort_field)),
         }),
-        rhs: Box::new(state_relation_conj),
+        rhs: Box::new(invariant_app),
     };
 
     let inv_body = fold_and(vec![
@@ -1747,11 +1756,20 @@ struct InvariantParserState<'a> {
     ops: OpRegistry,
     items: Vec<EcItem>,
     /// Mangled names of every translated `define-state-relation`, file
-    /// order — folded into `op inv`'s guarded conjunction. `define-fun`
-    /// helpers are *not* included here (only referenced via calls from
-    /// inside a state relation's own body, if at all).
+    /// order. `define-fun` helpers are *not* included here. Only the one
+    /// named `invariant` reaches `op inv` (see [`Self::invariant_op`]).
     state_relations: Vec<String>,
     skipped: Vec<String>,
+}
+
+impl InvariantParserState<'_> {
+    /// The mangled op of the `define-state-relation` whose SMT name is
+    /// exactly `invariant`, if one was translated. A `define-fun invariant`
+    /// is not a state relation and does not count.
+    fn invariant_op(&self) -> Option<String> {
+        let (mangled, _) = self.ops.lookup("invariant")?;
+        self.state_relations.contains(mangled).then(|| mangled.clone())
+    }
 }
 
 impl SmtParser<InvariantError> for InvariantParserState<'_> {
@@ -2735,6 +2753,52 @@ mod tests {
         );
         let message = err.to_string();
         assert!(message.contains("Ctr") && message.contains("CtrToo"), "{message}");
+    }
+
+    #[test]
+    fn inv_guards_only_the_invariant() {
+        let rendered = params_project_file("Params", "L", "R").unwrap();
+        assert_eq!(
+            item_text(&rendered, "op inv"),
+            concat!(
+                "op inv (l : L_state) (r : R_state) : bool =\n",
+                "     params_inv l r\n",
+                "  /\\ l.`l_abort_flag = r.`r_abort_flag\n",
+                "  /\\ (   !l.`l_abort_flag\n",
+                "      => Domino_invariant l r)."
+            )
+        );
+        // Every relation still has its own op, in file order.
+        let order: Vec<usize> = [
+            "op Domino_dotted_state ",
+            "op Domino_dotted_param ",
+            "op Domino_same_package_with_state ",
+            "op Domino_same_package_stateless ",
+            "op Domino_invariant ",
+        ]
+        .iter()
+        .map(|h| rendered.find(h).unwrap_or_else(|| panic!("no `{h}`")))
+        .collect();
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{rendered}");
+    }
+
+    #[test]
+    fn an_equivalence_without_an_invariant_relation_is_a_hard_error() {
+        let err = params_project_file("ParamsNoInvariant", "L", "R").unwrap_err();
+        let EcExportError::Invariant(InvariantError::MissingInvariant { equivalence, files }) =
+            &err
+        else {
+            panic!("expected MissingInvariant, got {err:?}");
+        };
+        assert_eq!(equivalence, "L ~ R");
+        assert_eq!(files, &vec!["./theorem/invariant-missing.smt2".to_string()]);
+        let message = err.to_string();
+        assert!(
+            message.contains("L ~ R")
+                && message.contains("invariant-missing.smt2")
+                && message.contains("define-state-relation"),
+            "{message}"
+        );
     }
 
     #[test]

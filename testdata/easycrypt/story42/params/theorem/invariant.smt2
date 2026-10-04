@@ -11,3 +11,9 @@
 
 (define-state-relation same-package-stateless (state-left state-right)
   (= state-left.Front state-right.Front))
+
+(define-state-relation invariant (left right)
+  (and (dotted-state left right)
+       (dotted-param left right)
+       (same-package-with-state left right)
+       (same-package-stateless left right)))

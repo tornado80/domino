@@ -130,9 +130,4 @@ op inv (l : Hybrid0_state) (r : Hybrid1_state) : bool =
      params_inv l r
   /\ l.`l_abort_flag = r.`r_abort_flag
   /\ (   !l.`l_abort_flag
-      =>    Domino_state_eq l r
-         /\ Domino_keys_computed_correctly l r
-         /\ Domino_time_of_acceptance l r
-         /\ Domino_time_of_nonces l r
-         /\ Domino_time_of_sid l r
-         /\ Domino_invariant l r).
+      => Domino_invariant l r).

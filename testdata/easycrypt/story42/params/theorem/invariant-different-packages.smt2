@@ -2,3 +2,6 @@
 
 (define-state-relation different-packages (left right)
   (= left.Store right.Keep))
+
+(define-state-relation invariant (left right)
+  (different-packages left right))
