@@ -55,6 +55,11 @@ obligations are discharged per exported oracle.
 **State relation** — a predicate over the left and right game states, hand-written in SMT-LIB, that
 an equivalence maintains. One set of state relations per equivalence.
 
+**Invariant** — the state relation named `invariant`: the one, and only, relation assumed to hold
+on the states before every oracle call. Every other state relation is a claim to prove or a helper
+the invariant calls; it is assumed only as far as the invariant includes it. Every equivalence has
+exactly one. _Distinguish_: **state relation** (any of them).
+
 **Randomness mapping** — a per-oracle predicate, hand-written in SMT-LIB or chosen by name, that
 says which left sampling draws the same value as which right sampling. It may depend on the state
 and the oracle's arguments, so whether two particular samplings are paired is a question for the
@@ -216,6 +221,13 @@ Oracles already done are never re-proved, whatever the mode.
 **Tactics run** — the proving pass of one proof job against a live EasyCrypt. Its defining
 property: the proof file on disk always holds what has been proved so far, so stopping it early
 costs no proved oracle. _Avoid_: proof translation.
+
+**Leaf** — a joint node with no further branching: both programs have run to their end and only
+the postcondition is left to prove.
+
+**Leaf budget** — an optional limit, set only by the user, on the time a tactics run may spend
+taking one leaf apart; when it runs out, the leaf's remaining parts are admitted. Without one, a
+leaf takes as long as its sentences do, each still bounded by the per-sentence timeout.
 
 **Seal** — to close every goal an oracle still has open with `admit`, so the oracle's proof is
 complete as written even though the walk had not finished it. Sealing is what makes a stopped

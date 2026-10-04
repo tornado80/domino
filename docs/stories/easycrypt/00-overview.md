@@ -175,6 +175,8 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 43 | Invariant operators and the invariant `call` are laid out one fact per line | `43-readable-invariant-operators.md` | 06, 07 |
 | 44 | `easycrypt debug` shows its stages and progress | `44-easycrypt-debug-shows-stages-and-progress.md` | 35, 39 |
 | 45 | Translation is `domino easycrypt export` | `45-translation-is-the-export-subcommand.md` | 35 |
+| 46 | The leaf budget applies only when the user asks for it | `46-leaf-budget-only-when-asked-for.md` | 27, 35 |
+| 47 | `inv` guards only the invariant | `47-inv-guards-only-the-invariant.md` | 06, 42, 43 |
 
 Stories 01–05 are a walking skeleton: after 05 the 4WHS packages and games compile under
 `easycrypt compile`. 06 may be done in parallel with 05. 08 may be done in parallel with 06/07.
@@ -227,6 +229,13 @@ Stories 44–45 come from the sixth design session and are about the **shape of 
 including what `prove` writes to the export tree. 45 makes translation the `export` subcommand and
 leaves nothing but subcommands on `domino easycrypt`. They are independent and can be done in
 either order.
+
+Stories 46–47 come from the seventh design session, about **making proof generation cheaper**.
+46 makes `--leaf-budget` opt-in, so that, unless asked, a run no longer depends on timing for which
+parts of a leaf it admits. 47 makes `inv` guard only `Domino_invariant`, as Domino assumes only
+`invariant`, instead of repeating every state relation that `invariant` already calls. They are
+independent. How a leaf is taken apart (`do split`, `auto => />` in place of `sp; skip`, and
+what that does to per-claim admit labels) is still open and has no story yet.
 
 ## 6. Working agreement (important)
 
