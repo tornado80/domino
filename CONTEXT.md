@@ -95,6 +95,9 @@ telling the two apart is what stops an all-green run from being mistaken for a p
 **Decision point** — where one side of a lockstep execution cannot continue as straight-line
 code: a branch, a sampling, or the end of the oracle.
 
+**Waiting side** — a side of lockstep execution that has reached the end of its oracle while the
+other side still has decision points to resolve. It stands at its return until both sides end.
+
 **Synchronized branch** — both sides at a branch whose conditions are equivalent under the path
 condition and the assumptions, so both take *then* or both take *else*. A branch that is not
 synchronized is **split**: every combination of the two sides' outcomes is considered, and the
@@ -112,10 +115,12 @@ it with Domino's randomness semantics, so the paths below still get verdicts.
 **Joint path** — one path of a lockstep execution: the sequence of joint decisions from the start
 of both oracles to a pair of terminals.
 
-**Plumbing branch** — a branch that exists in the EasyCrypt code only because EasyCrypt allows one
-exit point: a *done flag* guard, the guard on an inlined call's result, or the router's abort-flag
-guard. It decides nothing Domino would call a decision, but an EasyCrypt proof has to step over it
-like any other branch.
+**Exit guard** — a branch that exists in the EasyCrypt code only because EasyCrypt allows one
+exit point, and whose only job is to skip code after something earlier already returned or
+aborted. Three kinds: the **done-flag guard**, the **call-result guard** on an inlined call's
+result, and the router's **abort-flag guard**. It decides nothing Domino would call a decision, but
+an EasyCrypt proof has to step over it like any other branch.
+_Avoid_: plumbing branch, plumbing node.
 
 **Decision skeleton** — a program with its straight-line code erased: the tree of its branches,
 samplings and ends. Two programs that differ only in assignments have the same skeleton.
@@ -228,6 +233,15 @@ the postcondition is left to prove.
 **Leaf budget** — an optional limit, set only by the user, on the time a tactics run may spend
 taking one leaf apart; when it runs out, the leaf's remaining parts are admitted. Without one, a
 leaf takes as long as its sentences do, each still bounded by the per-sentence timeout.
+
+**Quick close** — the one cheap closing attempt every program goal of a tactics run gets first,
+before any structural tactic: `auto => /#` under a short timeout.
+_Avoid_: rung 0.
+
+**Fallback sequence** — the fixed, ordered list of closing tactics a tactics run tries on a side
+goal or a leaf part, cheapest first, ending in an admit. Its members are **fallbacks**, numbered
+from one.
+_Avoid_: ladder, rung.
 
 **Seal** — to close every goal an oracle still has open with `admit`, so the oracle's proof is
 complete as written even though the walk had not finished it. Sealing is what makes a stopped

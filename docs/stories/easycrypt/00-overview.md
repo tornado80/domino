@@ -177,6 +177,16 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 45 | Translation is `domino easycrypt export` | `45-translation-is-the-export-subcommand.md` | 35 |
 | 46 | The leaf budget applies only when the user asks for it | `46-leaf-budget-only-when-asked-for.md` | 27, 35 |
 | 47 | `inv` guards only the invariant | `47-inv-guards-only-the-invariant.md` | 06, 42, 43 |
+| 48 | The joint-tree viewer is a 2×2 grid, and a click brings both listings to the node | `48-debug-viewer-grid.md` | 24 |
+| 49 | The EasyCrypt listing paints what EasyCrypt runs, returns at `return`, and shows a waiting side | `49-easycrypt-listing-painting.md` | 22, 24, 48 |
+| 50 | "Plumbing" becomes "exit guard" | `50-exit-guards.md` | 22, 24 |
+| 51 | The progress page shows the goal, not just its context | `51-progress-page-shows-the-goal.md` | 28, 31, 41 |
+| 52 | "Rung" becomes quick close and fallbacks, and the page says what closed a node | `52-quick-close-and-fallbacks.md` | 27, 28, 40 |
+
+Stories 48–52 come from the owner's review of the debug and progress pages. They are UI-only:
+translation does not change, and the export tree is byte-identical before and after each one. 48
+comes before 49 and before symbolic-execution story 20 (the sequential report in the same grid);
+50, 51 and 52 are independent of each other and of 48.
 
 Stories 01–05 are a walking skeleton: after 05 the 4WHS packages and games compile under
 `easycrypt compile`. 06 may be done in parallel with 05. 08 may be done in parallel with 06/07.
