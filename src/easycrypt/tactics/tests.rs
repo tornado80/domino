@@ -978,7 +978,7 @@ mod live {
             },
             rung0: false,
             oracle: "UsefulOracle",
-            leaf_budget: Duration::from_secs(60),
+            leaf_budget: None,
             deadline: None,
             stats: OracleStats::default(),
             live: None,
@@ -2377,4 +2377,25 @@ fn the_translation_files_line_names_few_files_and_counts_many() {
         translation_files_line("Eq_A_B", &names(6)),
         "easycrypt prove: Eq_A_B — wrote 6 missing translation files"
     );
+}
+
+#[test]
+fn a_leaf_has_no_deadline_unless_a_budget_is_given() {
+    let now = std::time::Instant::now();
+    assert_eq!(super::driver::leaf_deadline(None, now), None);
+    let budget = Duration::from_secs(5);
+    assert_eq!(
+        super::driver::leaf_deadline(Some(budget), now),
+        Some(now + budget)
+    );
+    // `0` has no special meaning: the deadline is now, so every part is admitted at once.
+    assert_eq!(
+        super::driver::leaf_deadline(Some(Duration::ZERO), now),
+        Some(now)
+    );
+}
+
+#[test]
+fn the_leaf_budget_is_off_by_default() {
+    assert_eq!(TacticsOptions::default().leaf_budget, None);
 }

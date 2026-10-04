@@ -120,8 +120,8 @@ pub struct TacticsOptions {
     /// Rung 0, `auto => /#.` on every program goal (§3.3). Off only to exercise the walk.
     pub rung0: bool,
     /// The most time splitting one leaf by meaning may take before its remaining parts are
-    /// admitted.
-    pub leaf_budget: Duration,
+    /// admitted; `None` (the default) for no limit.
+    pub leaf_budget: Option<Duration>,
     /// What `ec-transcript.jsonl` keeps of EasyCrypt's answers (`--ec-transcript`).
     pub ec_transcript: EcTranscriptMode,
     /// How often `Eq_*.ec` and its report are written (`--write-granularity`).
@@ -297,7 +297,7 @@ impl Default for TacticsOptions {
             smt_hints: Vec::new(),
             lockstep_timeout_ms: None,
             rung0: true,
-            leaf_budget: Duration::from_secs(300),
+            leaf_budget: None,
             ec_transcript: EcTranscriptMode::Capped,
             write_granularity: WriteGranularity::Tactic,
             stop: None,

@@ -431,9 +431,9 @@ pub(super) struct Prover<'a> {
     pub rung0: bool,
     /// The exported oracle, for the transcript's notes.
     pub oracle: &'a str,
-    /// The most time splitting one leaf by meaning may take: every sentence of a deep goal
-    /// costs seconds (EasyCrypt prints all open goals as JSON), and a leaf has a dozen parts.
-    pub leaf_budget: Duration,
+    /// The most time splitting one leaf by meaning may take (`--leaf-budget`), or `None` for
+    /// no limit: each sentence is still bounded by its timeout, so a leaf always ends.
+    pub leaf_budget: Option<Duration>,
     /// When the current leaf's budget runs out.
     pub deadline: Option<std::time::Instant>,
     pub stats: OracleStats,
@@ -1427,7 +1427,7 @@ impl Prover<'_> {
             return self.admit_ec_failed(node, &Part::Whole, "equal-output+invariant");
         }
         self.unfold_premise(premise)?;
-        self.deadline = Some(std::time::Instant::now() + self.leaf_budget);
+        self.deadline = leaf_deadline(self.leaf_budget, std::time::Instant::now());
         let result = self.solve_ambient(node, pair, Part::Whole);
         self.deadline = None;
         result
@@ -1740,4 +1740,13 @@ impl Prover<'_> {
         }
         admit_mismatch(self)
     }
+}
+
+/// When a leaf that starts being split by meaning at `now` runs out of time: `None` when the
+/// user gave no leaf budget. A budget of zero is a deadline of `now`.
+pub(super) fn leaf_deadline(
+    budget: Option<Duration>,
+    now: std::time::Instant,
+) -> Option<std::time::Instant> {
+    budget.map(|b| now + b)
 }

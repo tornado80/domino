@@ -196,14 +196,12 @@ impl SweepEntry {
         let mut failures = Vec::new();
         for lp in &run.left_paths {
             for rp in &lp.right_paths {
-                if rp.claims.is_empty() {
-                    if rp.verdict.is_failure() {
-                        failures.push(Failure {
-                            claim: run.claim.clone(),
-                            pair: format!("#{}", rp.id),
-                            verdict: rp.verdict.slug(),
-                        });
-                    }
+                if rp.claims.is_empty() && rp.verdict.is_failure() {
+                    failures.push(Failure {
+                        claim: run.claim.clone(),
+                        pair: format!("#{}", rp.id),
+                        verdict: rp.verdict.slug(),
+                    });
                 }
                 for c in rp.claims.iter().filter(|c| c.verdict.is_failure()) {
                     failures.push(Failure {

@@ -178,10 +178,10 @@ pub(crate) struct EcProve {
     /// Seconds one EasyCrypt sentence may run before it is interrupted.
     #[clap(long, default_value_t = 60)]
     pub(crate) ec_timeout: u64,
-    /// The seconds splitting one leaf by meaning may take before its remaining parts are
-    /// admitted (each sentence of a deep goal costs seconds).
-    #[clap(long, default_value_t = 300)]
-    pub(crate) leaf_budget: u64,
+    /// The seconds one leaf may spend being split by meaning before its remaining parts are
+    /// admitted. Off unless given; each sentence is still bounded by `--ec-timeout`.
+    #[clap(long)]
+    pub(crate) leaf_budget: Option<u64>,
     /// Skip rung 0 (`auto => /#.` on every program goal), so the walk of the joint tree is
     /// exercised even where one tactic closes an oracle. For testing.
     #[clap(long, hide = true)]

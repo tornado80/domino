@@ -808,7 +808,7 @@ fn easycrypt_prove<P: project::Project>(
             smt_hints: read_smt_hints(project_root)?,
             lockstep_timeout_ms: None,
             rung0: !p.no_rung0,
-            leaf_budget: std::time::Duration::from_secs(p.leaf_budget),
+            leaf_budget: p.leaf_budget.map(std::time::Duration::from_secs),
             ec_transcript: match p.ec_transcript {
                 EcTranscriptArg::Capped => EcTranscriptMode::Capped,
                 EcTranscriptArg::Full => EcTranscriptMode::Full,
