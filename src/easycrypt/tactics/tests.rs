@@ -891,12 +891,12 @@ mod live {
 
     #[test]
     fn the_walk_of_the_joint_tree_alone_closes_hello_world_too() {
-        // rung 0 closes hello-world in one step: turn it off to see the tactics per node
+        // the quick close closes hello-world in one step: turn it off to see the tactics per node
         let Some((result, out)) = run(
             "example-projects/hello-world",
             "Proof",
             &TacticsOptions {
-                rung0: false,
+                quick_close: false,
                 ..TacticsOptions::default()
             },
         ) else {
@@ -974,9 +974,9 @@ mod live {
             unfold_ops: &["inv".to_string(), "params_inv".to_string()],
             timeouts: Timeouts {
                 general: Duration::from_secs(60),
-                rung0: Duration::from_secs(2),
+                quick_close: Duration::from_secs(2),
             },
-            rung0: false,
+            quick_close: false,
             oracle: "UsefulOracle",
             leaf_budget: None,
             deadline: None,
@@ -1010,7 +1010,7 @@ mod live {
     #[test]
     fn two_runs_on_an_unchanged_project_write_the_same_file() {
         let options = TacticsOptions {
-            rung0: false,
+            quick_close: false,
             ..TacticsOptions::default()
         };
         let Some((a, out_a)) = run("example-projects/hello-world", "Proof", &options) else {
@@ -1029,7 +1029,7 @@ mod live {
     #[test]
     fn the_page_is_the_same_under_a_capped_and_a_full_transcript() {
         let with = |ec_transcript| TacticsOptions {
-            rung0: false,
+            quick_close: false,
             ec_transcript,
             ..TacticsOptions::default()
         };
@@ -1073,7 +1073,7 @@ mod live {
             "example-projects/hello-world",
             "Proof",
             &TacticsOptions {
-                rung0: false,
+                quick_close: false,
                 ..TacticsOptions::default()
             },
         ) else {
@@ -1126,7 +1126,7 @@ mod live {
 
     fn walk(write_granularity: WriteGranularity) -> TacticsOptions {
         TacticsOptions {
-            rung0: false,
+            quick_close: false,
             write_granularity,
             ..TacticsOptions::default()
         }
@@ -1959,7 +1959,7 @@ wait $ec
     const TWO_BRANCHES: &str = "testdata/easycrypt/resume/two-branches";
 
     /// The oracle of [`TWO_BRANCHES`] stopped once its `then` branch has closed, at `tactic`
-    /// granularity, rung 0 off: in flight at `N3`, below `N0`, with `N1` closed.
+    /// granularity, quick close off: in flight at `N3`, below `N0`, with `N1` closed.
     fn stopped_mid_oracle() -> Option<(TheoremTactics, tempfile::TempDir)> {
         let (result, out, _) = run_stopped_at(
             TWO_BRANCHES,
@@ -2040,7 +2040,7 @@ wait $ec
 
         let replay_out = copy_export(out.path());
         walk_events();
-        // trust, rung 0 on: the in-flight node's ancestors skip it
+        // trust, quick close on: the in-flight node's ancestors skip it
         let trust = run_again_on(
             TWO_BRANCHES,
             out.path(),
@@ -2054,7 +2054,7 @@ wait $ec
             let at = events.iter().position(|e| e.starts_with(&format!("node {node}/")))?;
             events[at..].iter().find(|e| e.starts_with("sentence ")).cloned()
         };
-        // N0, above the in-flight node, starts with its structural step; N3 from rung 0
+        // N0, above the in-flight node, starts with its structural step; N3 from the quick close
         assert_eq!(first_after("N0").as_deref(), Some("sentence sp 2 2."), "{events:#?}");
         assert_eq!(first_after("N1").as_deref(), Some("sentence kept"), "{events:#?}");
         assert_eq!(first_after("N3").as_deref(), Some("sentence auto => /#."), "{events:#?}");
@@ -2313,7 +2313,7 @@ wait $ec
         let result = run_again_on(TWO_BRANCHES, out.path(), &resume_with(ResumeMode::Replay));
         let events = walk_events();
         let n1 = events.iter().position(|e| e == "node N1/5").unwrap();
-        // rejected at once, undone, and N1 proved from its first rung
+        // rejected at once, undone, and N1 proved from its first fallback
         assert_eq!(
             events[n1 + 1..n1 + 3],
             ["sentence sp 9 9.", "sentence auto => /#."],

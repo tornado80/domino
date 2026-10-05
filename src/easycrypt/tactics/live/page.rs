@@ -6,7 +6,9 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use super::{GoalTexts, GoalView, Live, NodeRec, RunState, StepStatus};
+use super::{
+    AttemptOutcome, AttemptRec, Closing, GoalTexts, GoalView, Live, NodeRec, RunState, StepStatus,
+};
 
 const CSS: &str = r##"
 :root { --bg:#fff; --fg:#1b1f24; --dim:#68707a; --line:#d5d9de; --card:#f5f6f8; --ok:#1a7f37; --bad:#c62828;
@@ -33,6 +35,8 @@ details.oracle { border-left:none; margin-left:0; padding-left:0; }
 summary { cursor:pointer; padding:2px 0; }
 .nid { font-weight:600; } .kind, .ids { color:var(--dim); }
 .st-open { color:var(--warn); } .st-closed { color:var(--ok); } .st-admitted { color:var(--bad); }
+details.attempts { margin:2px 0; color:var(--dim); } ol.attempts { margin:2px 0 4px; padding-left:20px; }
+ol.attempts code { margin:0 8px; }
 ol.steps { list-style:none; margin:2px 0 4px; padding:0; }
 li.step { padding:1px 4px; border-radius:4px; cursor:pointer; }
 li.step:hover { background:var(--card); } li.step.sel, .flash { background:var(--sel); }
@@ -494,8 +498,8 @@ impl Live {
         if let (Some(href), Some(ln)) = (&oracle.lockstep_href, node.lockstep_node) {
             let _ = write!(out, " <a href=\"{}#n={ln}\">tree</a>", esc(href));
         }
-        if let Some(rung) = node.rungs.last() {
-            let _ = write!(out, " <span class=\"chip\">rung: {}</span>", esc(rung));
+        if let Some(chip) = attempt_chip(node, current) {
+            let _ = write!(out, " <span class=\"chip\">{}</span>", esc(&chip));
         }
         let _ = writeln!(
             out,
@@ -508,6 +512,7 @@ impl Live {
                 esc(&admit.label)
             );
         }
+        attempts_list(out, &node.attempts);
         if !node.steps.is_empty() {
             out.push_str("<ol class=\"steps\">\n");
             for &id in &node.steps {
@@ -647,4 +652,58 @@ impl Live {
             "<script id=\"timings\" type=\"application/json\">{json}</script>"
         );
     }
+}
+
+fn closing_name(closing: Closing) -> String {
+    match closing {
+        Closing::QuickClose => "quick close".to_string(),
+        Closing::Fallback { k, of } => format!("fallback {k}/{of}"),
+    }
+}
+
+/// The chip of a node (story 52 §3.2): the attempt in flight on a node being worked on, or the
+/// attempt that closed a closed node; nothing on an admitted or open node.
+fn attempt_chip(node: &NodeRec, current: bool) -> Option<String> {
+    let last = node.attempts.last()?;
+    let name = closing_name(last.closing);
+    match last.outcome {
+        None if current => Some(format!("trying {name}: {}", last.shown)),
+        Some(AttemptOutcome::Closed) if node.done && node.admits.is_empty() && !node.kept => {
+            Some(format!("closed by {name}: {}", last.shown))
+        }
+        _ => None,
+    }
+}
+
+fn outcome_text(attempt: &AttemptRec) -> String {
+    match attempt.outcome {
+        None => "… in flight".to_string(),
+        Some(AttemptOutcome::Closed) => "✓ closed".to_string(),
+        Some(AttemptOutcome::Failed) => "✗ failed".to_string(),
+        Some(AttemptOutcome::TimedOut) => {
+            format!("✗ timed out ({} s)", attempt.timeout.as_secs())
+        }
+    }
+}
+
+/// The node's closing attempts in order, collapsed.
+fn attempts_list(out: &mut String, attempts: &[AttemptRec]) {
+    if attempts.is_empty() {
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "<details class=\"attempts\"><summary>closing attempts ({})</summary><ol class=\"attempts\">",
+        attempts.len()
+    );
+    for attempt in attempts {
+        let _ = writeln!(
+            out,
+            "<li>{} <code>{}</code> {}</li>",
+            closing_name(attempt.closing),
+            esc(&attempt.shown),
+            outcome_text(attempt)
+        );
+    }
+    out.push_str("</ol></details>\n");
 }

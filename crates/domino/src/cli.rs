@@ -182,10 +182,10 @@ pub(crate) struct EcProve {
     /// admitted. Off unless given; each sentence is still bounded by `--ec-timeout`.
     #[clap(long)]
     pub(crate) leaf_budget: Option<u64>,
-    /// Skip rung 0 (`auto => /#.` on every program goal), so the walk of the joint tree is
-    /// exercised even where one tactic closes an oracle. For testing.
-    #[clap(long, hide = true)]
-    pub(crate) no_rung0: bool,
+    /// Skip the quick close (`auto => /#.` on every program goal), so the walk of the joint
+    /// tree is exercised even where one tactic closes an oracle. For testing.
+    #[clap(long, alias = "no-rung0")]
+    pub(crate) no_quick_close: bool,
     /// What `progress/ec-transcript.jsonl` keeps of EasyCrypt's answers. Not `--transcript`,
     /// which is the solver transcript of `domino debug`/`prove`.
     #[clap(long, value_enum, default_value_t = EcTranscriptArg::Capped)]
@@ -402,4 +402,30 @@ pub(crate) struct Proofsteps {
     /// directory and its ancestors for an `ssp.toml`.
     #[clap(long)]
     pub(crate) path: Option<std::path::PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::EcProve;
+
+    #[derive(Parser)]
+    struct Wrap {
+        #[clap(flatten)]
+        prove: EcProve,
+    }
+
+    fn skips_quick_close(flag: &str) -> bool {
+        Wrap::try_parse_from(["prove", "--theorem", "T", flag])
+            .unwrap()
+            .prove
+            .no_quick_close
+    }
+
+    #[test]
+    fn no_quick_close_and_its_hidden_alias_no_rung0_both_skip_the_quick_close() {
+        assert!(skips_quick_close("--no-quick-close"));
+        assert!(skips_quick_close("--no-rung0"));
+    }
 }

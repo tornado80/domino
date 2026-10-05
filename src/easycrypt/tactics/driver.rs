@@ -26,7 +26,7 @@ use crate::easycrypt::json::{Goal, Status};
 use crate::easycrypt::session::{Session, SessionError};
 
 use super::goals;
-use super::live::LiveHandle;
+use super::live::{Closing, LiveHandle};
 use super::ResumeMode;
 use super::script::{Mark, Script};
 use crate::easycrypt::job::{AdmitRecord, ClosedNode};
@@ -325,17 +325,21 @@ pub(super) fn pair_view(pair: &PairRecord, part: &Part) -> DominoView {
     }
 }
 
-/// The lemmas every `smt(…)` of the last rungs is given (§3.5 step 5); the project's own come
+/// The lemmas every `smt(…)` of the last fallbacks is given (§3.5 step 5); the project's own come
 /// from `ssp.toml`.
 const BASE_SMT_LEMMAS: [&str; 3] = ["get_setE", "mem_set", "emptyE"];
+
+/// The length of the fallback sequence: `smt()` and `smt(hints)`, each also with the premise
+/// unfolded.
+const FALLBACKS: usize = 4;
 
 /// Timeouts of the prover.
 #[derive(Debug, Clone, Copy)]
 pub struct Timeouts {
-    /// Every sentence but rung 0.
+    /// Every sentence but the quick close.
     pub general: Duration,
-    /// Rung 0 (`auto => /#.` on every program goal): short.
-    pub rung0: Duration,
+    /// The quick close (`auto => /#.` on every program goal): short.
+    pub quick_close: Duration,
 }
 
 /// An oracle's proof as it stands, sealed (story 33): the script with every goal still open
@@ -360,8 +364,8 @@ pub(super) struct Resume {
     pub mode: ResumeMode,
     /// The session record's closed nodes, by node index.
     pub closed: BTreeMap<usize, ClosedNode>,
-    /// The ancestors of the in-flight node: the earlier job got past their rung 0.
-    pub skip_rung0: HashSet<usize>,
+    /// The ancestors of the in-flight node: the earlier job got past their quick close.
+    pub skip_quick_close: HashSet<usize>,
     /// The closed nodes the walk has kept or proved again so far, in order; an undone attempt
     /// takes back what it reached. A closed node not reached is kept by a seal.
     pub reached: Vec<usize>,
@@ -390,7 +394,7 @@ impl Resume {
                 .filter(|&k| k < total)
                 .unwrap_or_else(|| panic!("node {id} of the session record is not in the saved tree"))
         };
-        let skip_rung0 = if in_flight == "router" {
+        let skip_quick_close = if in_flight == "router" {
             HashSet::new()
         } else {
             tree.ancestors(index(in_flight)).into_iter().collect()
@@ -398,7 +402,7 @@ impl Resume {
         Resume {
             mode,
             closed: closed.into_iter().map(|c| (index(&c.id), c)).collect(),
-            skip_rung0,
+            skip_quick_close,
             reached: Vec::new(),
             kept: 0,
             replaying: None,
@@ -426,9 +430,9 @@ pub(super) struct Prover<'a> {
     /// `rewrite /… in` unfolds them.
     pub unfold_ops: &'a [String],
     pub timeouts: Timeouts,
-    /// Rung 0 (`auto => /#.` on every program goal) is on unless a test turns it off to
+    /// The quick close (`auto => /#.` on every program goal) is on unless a test turns it off to
     /// exercise the walk.
-    pub rung0: bool,
+    pub quick_close: bool,
     /// The exported oracle, for the transcript's notes.
     pub oracle: &'a str,
     /// The most time splitting one leaf by meaning may take (`--leaf-budget`), or `None` for
@@ -437,7 +441,7 @@ pub(super) struct Prover<'a> {
     /// When the current leaf's budget runs out.
     pub deadline: Option<std::time::Instant>,
     pub stats: OracleStats,
-    /// The live translation page (story 28), told which node and rung the walk is at.
+    /// The live translation page (story 28), told which node and closing attempt the walk is at.
     pub live: Option<LiveHandle>,
     /// Called with the sealed oracle after every joint node (`--write-granularity node`).
     pub checkpoint: Option<&'a mut dyn FnMut(Sealed)>,
@@ -518,7 +522,7 @@ impl Prover<'_> {
     // ------------------------------------------------------------------
 
     /// Where the walk stops if the run was asked to stop: the oracle is sealed as it stands
-    /// ([`Self::stopped`]) and [`SessionError::Stopped`] unwinds the walk, ladders and leaf
+    /// ([`Self::stopped`]) and [`SessionError::Stopped`] unwinds the walk, fallback sequences and leaf
     /// splits included. Called before every sentence the walk sends, so after an interrupted
     /// sentence has been rolled back like any failed attempt. The seal reads only the script and
     /// the goal count, which agree between any two sentences.
@@ -770,7 +774,7 @@ impl Prover<'_> {
     }
 
     // ------------------------------------------------------------------
-    // Closing ambient goals: side goals, the ladder
+    // Closing ambient goals: side goals, the fallback sequence
     // ------------------------------------------------------------------
 
     /// Brings the front goal to a plain formula: introduces the memory of a quantified program
@@ -852,29 +856,59 @@ impl Prover<'_> {
         Ok(false)
     }
 
-    /// The ladder (§3.5): `smt()`, then the same with the premise introduced and the invariant
-    /// unfolded in it (`/#` on a quantified goal), then the hint list likewise.
-    fn ladder(&mut self) -> R<bool> {
+    /// The fallback sequence (§3.5): `smt()`, then the same with the premise introduced and the
+    /// invariant unfolded in it (`/#` on a quantified goal), then the hint list likewise.
+    fn fallbacks(&mut self) -> R<bool> {
         self.reduce_to_ambient()?;
         let hints = self.hint_sentence();
         for (i, tail) in ["smt().", hints.as_str()].into_iter().enumerate() {
-            let hinted = if i == 0 { "" } else { " with hints" };
-            self.note_rung(&format!("ladder: {}", tail.trim_end_matches('.')));
-            if self.try_close(&[tail])? {
+            let k = 2 * i + 1;
+            let shown = tail.trim_end_matches('.');
+            let plain = Closing::Fallback { k, of: FALLBACKS };
+            if self.closing_attempt(plain, shown, |p| p.try_close(&[tail]))? {
                 return Ok(true);
             }
-            self.note_rung(&format!("ladder: premise unfolded, smt{hinted}"));
-            if self.try_with_premise(tail)? {
+            let unfolded = Closing::Fallback { k: k + 1, of: FALLBACKS };
+            let shown = format!("{shown} (premise unfolded)");
+            if self.closing_attempt(unfolded, &shown, |p| p.try_with_premise(tail))? {
                 return Ok(true);
             }
         }
         Ok(false)
     }
 
-    fn note_rung(&self, name: &str) {
+    /// Runs `f`, a closing attempt, and tells the live page what it was and how it ended.
+    fn closing_attempt(
+        &mut self,
+        closing: Closing,
+        shown: &str,
+        f: impl FnOnce(&mut Self) -> R<bool>,
+    ) -> R<bool> {
         if let Some(live) = &self.live {
-            live.rung(name);
+            live.attempt(closing, shown, self.session.timeout());
         }
+        let closed = f(self)?;
+        if let Some(live) = &self.live {
+            live.attempt_ended(closed);
+        }
+        Ok(closed)
+    }
+
+    /// `auto => /#.` as a closing attempt.
+    fn try_quick_close(&mut self) -> R<bool> {
+        self.closing_attempt(Closing::QuickClose, "auto => /#", |p| {
+            p.try_close(&["auto => /#."])
+        })
+    }
+
+    /// The quick close of a program goal (§3.3), under its short timeout; `Ok(false)` without
+    /// sending anything when it is off.
+    fn quick_close_program(&mut self) -> R<bool> {
+        if !self.quick_close {
+            return Ok(false);
+        }
+        let timeout = self.timeouts.quick_close;
+        self.with_timeout(timeout, Self::try_quick_close)
     }
 
     fn hint_sentence(&self) -> String {
@@ -883,11 +917,11 @@ impl Prover<'_> {
         format!("smt({}).", names.join(" "))
     }
 
-    /// A side goal (a condition, the side goal of `rcondt`): `auto => /#`, then the ladder,
+    /// A side goal (a condition, the side goal of `rcondt`): the quick close, then the fallbacks,
     /// else an admit whose reason is `Router` for the router prelude and otherwise
     /// `domino-verified-ec-failed`: Domino decided this branch under its assumptions.
     fn close_side_goal(&mut self, node: usize, claim: &str, router: bool) -> R<()> {
-        if self.try_close(&["auto => /#."])? || self.ladder()? {
+        if self.try_quick_close()? || self.fallbacks()? {
             return Ok(());
         }
         if router {
@@ -1092,18 +1126,14 @@ impl Prover<'_> {
             }
         }
 
-        // rung 0 (§3.3): most abort branches close in one step. Resuming, the in-flight node's
+        // the quick close (§3.3): most abort branches close in one step. Resuming, the in-flight node's
         // ancestors skip it: the earlier job got past it into a child.
         let resumed_past = self
             .resume
             .as_ref()
-            .is_some_and(|r| r.skip_rung0.contains(&idx));
-        if node.kind != NodeKind::TerminalPair && self.rung0 && !resumed_past {
-            let rung0 = self.timeouts.rung0;
-            self.note_rung("0: auto => /#");
-            if self.with_timeout(rung0, |p| p.try_close(&["auto => /#."]))? {
-                return Ok(());
-            }
+            .is_some_and(|r| r.skip_quick_close.contains(&idx));
+        if node.kind != NodeKind::TerminalPair && !resumed_past && self.quick_close_program()? {
+            return Ok(());
         }
 
         match node.kind {
@@ -1631,8 +1661,7 @@ impl Prover<'_> {
             self.bullet(|p| p.prove_blind(0, 64))?;
         }
         self.bullet(|p| {
-            let rung0 = p.timeouts.rung0;
-            if p.rung0 && p.with_timeout(rung0, |p| p.try_close(&["auto => /#."]))? {
+            if p.quick_close_program()? {
                 return Ok(());
             }
             p.close_side_goal(0, "both-aborted", true)
@@ -1659,8 +1688,7 @@ impl Prover<'_> {
         if budget == 0 || !self.front().is_some_and(goals::is_program) {
             return admit_mismatch(self);
         }
-        let rung0 = self.timeouts.rung0;
-        if self.rung0 && self.with_timeout(rung0, |p| p.try_close(&["auto => /#."]))? {
+        if self.quick_close_program()? {
             return Ok(());
         }
         if !self.sp_front()? {

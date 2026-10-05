@@ -6,7 +6,7 @@
 //!
 //! - the **session's**: every sentence about to run, a tick while it runs, its answer
 //!   ([`SessionEvent`]);
-//! - the **prover's**: which joint node it is working on, which ladder rung it tries, which
+//! - the **prover's**: which joint node it is working on, which closing attempt it makes, which
 //!   `admit` it wrote.
 //!
 //! From them it keeps a small model (equivalences, oracles, the goal tree, the steps of each
@@ -111,6 +111,34 @@ pub(super) struct AdmitRec {
     pub reason: &'static str,
 }
 
+/// What a closing attempt is: the quick close, or fallback `k` of the `of` in the fallback
+/// sequence, from one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Closing {
+    QuickClose,
+    Fallback { k: usize, of: usize },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AttemptOutcome {
+    Closed,
+    /// EasyCrypt refused a sentence, or goals remained.
+    Failed,
+    TimedOut,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct AttemptRec {
+    pub closing: Closing,
+    /// The sentences sent, as the page shows them.
+    pub shown: String,
+    pub timeout: Duration,
+    /// The first step sent for this attempt.
+    pub first_step: usize,
+    /// `None` while it is in flight (or the run stopped in it).
+    pub outcome: Option<AttemptOutcome>,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct NodeRec {
     pub label: String,
@@ -121,7 +149,7 @@ pub(super) struct NodeRec {
     pub lockstep_node: Option<usize>,
     pub children: Vec<usize>,
     pub steps: Vec<usize>,
-    pub rungs: Vec<String>,
+    pub attempts: Vec<AttemptRec>,
     pub admits: Vec<AdmitRec>,
     pub done: bool,
     /// Closed by an earlier job and kept from the session record, not proved by this run.
@@ -453,7 +481,7 @@ impl LiveHandle {
             lockstep_node,
             children: Vec::new(),
             steps: Vec::new(),
-            rungs: Vec::new(),
+            attempts: Vec::new(),
             admits: Vec::new(),
             done: false,
             kept: false,
@@ -506,14 +534,47 @@ impl LiveHandle {
         live.touch(false);
     }
 
-    /// The prover is about to try a rung of the ladder (`rung 0`, `smt()`, …).
-    pub fn rung(&self, name: &str) {
+    /// The prover starts a closing attempt on the current node, each sentence bounded by
+    /// `timeout`.
+    pub fn attempt(&self, closing: Closing, shown: &str, timeout: Duration) {
         let mut live = self.0.borrow_mut();
+        let first_step = live.steps.len();
         if let Some(node) = live.current_node_mut() {
-            if node.rungs.last().map(String::as_str) != Some(name) {
-                node.rungs.push(name.to_string());
-            }
+            node.attempts.push(AttemptRec {
+                closing,
+                shown: shown.to_string(),
+                timeout,
+                first_step,
+                outcome: None,
+            });
         }
+        live.touch(false);
+    }
+
+    /// The current node's attempt in flight ended: `closed`, or else failed or timed out, as
+    /// its steps say.
+    pub fn attempt_ended(&self, closed: bool) {
+        let mut live = self.0.borrow_mut();
+        let Some(first) = live
+            .current_node_mut()
+            .and_then(|n| n.attempts.last())
+            .filter(|a| a.outcome.is_none())
+            .map(|a| a.first_step)
+        else {
+            return;
+        };
+        let timed_out = live.steps[first.min(live.steps.len())..]
+            .iter()
+            .any(|s| s.status == StepStatus::TimedOut);
+        let outcome = match (closed, timed_out) {
+            (true, _) => AttemptOutcome::Closed,
+            (false, true) => AttemptOutcome::TimedOut,
+            (false, false) => AttemptOutcome::Failed,
+        };
+        if let Some(a) = live.current_node_mut().and_then(|n| n.attempts.last_mut()) {
+            a.outcome = Some(outcome);
+        }
+        live.touch(false);
     }
 
     pub fn admitted(&self, admit: &Admit) {

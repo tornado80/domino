@@ -129,7 +129,7 @@ fn a_run_killed_mid_oracle_leaves_its_last_write_intact() {
         "hello-world-oracle-rename-new",
         &dir.join("out"),
         &easycrypt,
-        &["--write-granularity", "node", "--no-rung0"],
+        &["--write-granularity", "node", "--no-quick-close"],
     );
     // wait for a write that sealed an oracle part way, then SIGKILL
     let began = Instant::now();
@@ -192,7 +192,7 @@ fn a_run_killed_at_the_default_granularity_leaves_a_compiling_file_and_a_record_
         "hello-world-oracle-rename-new",
         &out,
         &easycrypt,
-        &["--no-rung0"],
+        &["--no-quick-close"],
     );
     // the record is written right after the file: wait for both, so the kill is between writes
     let record = theorem.join("Eq_medium_composition_small_composition.session.json");
@@ -242,7 +242,7 @@ fn a_run_killed_at_the_default_granularity_leaves_a_compiling_file_and_a_record_
         .arg(workspace().join("example-projects/hello-world-oracle-rename-new"))
         .arg("--out")
         .arg(&out)
-        .arg("--no-rung0")
+        .arg("--no-quick-close")
         .env("DOMINO_EASYCRYPT", &easycrypt)
         .stdout(Stdio::null())
         .stderr(Stdio::null())

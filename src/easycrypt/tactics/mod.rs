@@ -115,12 +115,12 @@ pub struct TacticsOptions {
     pub oracle: Option<String>,
     /// How long one EasyCrypt sentence may run (`--ec-timeout`).
     pub ec_timeout: Duration,
-    /// Lemma names for the last `smt(…)` rungs: `ssp.toml` `[easycrypt] smt_hints`.
+    /// Lemma names for the last `smt(…)` fallbacks: `ssp.toml` `[easycrypt] smt_hints`.
     pub smt_hints: Vec<String>,
     /// Per-query timeout of the lockstep engine's solver, in milliseconds.
     pub lockstep_timeout_ms: Option<u64>,
-    /// Rung 0, `auto => /#.` on every program goal (§3.3). Off only to exercise the walk.
-    pub rung0: bool,
+    /// The quick close, `auto => /#.` on every program goal (§3.3). Off only to exercise the walk.
+    pub quick_close: bool,
     /// The most time splitting one leaf by meaning may take before its remaining parts are
     /// admitted; `None` (the default) for no limit.
     pub leaf_budget: Option<Duration>,
@@ -298,7 +298,7 @@ impl Default for TacticsOptions {
             ec_timeout: Duration::from_secs(60),
             smt_hints: Vec::new(),
             lockstep_timeout_ms: None,
-            rung0: true,
+            quick_close: true,
             leaf_budget: None,
             ec_transcript: EcTranscriptMode::Capped,
             write_granularity: WriteGranularity::Tactic,
@@ -310,8 +310,8 @@ impl Default for TacticsOptions {
     }
 }
 
-/// Rung 0's timeout, at most (`auto => /#.` on every program goal).
-const RUNG0_TIMEOUT: Duration = Duration::from_secs(2);
+/// The quick close's timeout, at most (`auto => /#.` on every program goal).
+const QUICK_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The lemma names of `ssp.toml`'s `[easycrypt] smt_hints = [...]` (optional).
 pub fn read_smt_hints(project_root: &Path) -> Result<Vec<String>, TacticsError> {
@@ -1666,13 +1666,13 @@ where
         tree: &tree,
         hints: &options.smt_hints,
         unfold_ops: &unfold_ops,
-        rung0: options.rung0,
+        quick_close: options.quick_close,
         oracle,
         leaf_budget: options.leaf_budget,
         deadline: None,
         timeouts: Timeouts {
             general: options.ec_timeout,
-            rung0: RUNG0_TIMEOUT.min(options.ec_timeout),
+            quick_close: QUICK_CLOSE_TIMEOUT.min(options.ec_timeout),
         },
         stats: OracleStats::default(),
         live: Some(live.clone()),

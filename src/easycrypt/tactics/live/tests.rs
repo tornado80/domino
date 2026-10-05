@@ -491,16 +491,93 @@ fn html_in_sentences_and_goals_is_escaped() {
     assert!(page.contains("1 &lt; 2"));
 }
 
+const QUICK: Closing = Closing::QuickClose;
+const TWO_S: Duration = Duration::from_secs(2);
+
 #[test]
-fn rungs_are_shown_on_the_goal_and_the_last_one_wins() {
+fn a_node_closed_by_its_quick_close_says_so() {
+    let mut rig = Rig::new();
+    rig.one_oracle();
+    rig.live.node_entered("N0", "determined", vec![], Some(0));
+    rig.live.attempt(QUICK, "auto => /#", TWO_S);
+    rig.sending("auto => /#.");
+    rig.answer("auto => /#.", "ok", None, &[], 3);
+    rig.live.attempt_ended(true);
+    rig.live.node_left();
+    rig.live.finish();
+    let page = rig.page();
+    assert!(page.contains("closed by quick close: auto =&gt; /#"), "{page}");
+    assert!(page.contains("closing attempts (1)"));
+    assert!(page.contains("✓ closed"));
+}
+
+#[test]
+fn a_timed_out_quick_close_is_listed_but_names_no_chip() {
+    let mut rig = Rig::new();
+    rig.one_oracle();
+    rig.live.node_entered("N0", "determined", vec![], Some(0));
+    rig.live.attempt(QUICK, "auto => /#", TWO_S);
+    rig.sending("auto => /#.");
+    rig.answer("auto => /#.", "interrupted", None, &[], 2000);
+    rig.live.attempt_ended(false);
+    rig.sending("sp.");
+    rig.answer("sp.", "ok", None, &[], 1);
+    rig.live.node_left();
+    rig.live.finish();
+    let page = rig.page();
+    assert!(page.contains("✗ timed out (2 s)"), "{page}");
+    assert!(!page.contains("closed by"));
+    assert!(!page.contains("trying"));
+}
+
+#[test]
+fn every_attempt_is_listed_in_order_and_the_last_closing_one_is_on_the_chip() {
+    let mut rig = Rig::new();
+    rig.one_oracle();
+    rig.live.node_entered("N0", "determined", vec![], Some(0));
+    rig.live.attempt(QUICK, "auto => /#", TWO_S);
+    rig.sending("auto => /#.");
+    rig.answer("auto => /#.", "error", Some("cannot close"), &["g"], 1);
+    rig.live.attempt_ended(false);
+    rig.live.attempt(Closing::Fallback { k: 1, of: 4 }, "smt()", TWO_S);
+    rig.sending("smt().");
+    rig.answer("smt().", "ok", None, &[], 1);
+    rig.live.attempt_ended(true);
+    rig.live.node_left();
+    rig.live.finish();
+    let page = rig.page();
+    assert!(page.contains("closed by fallback 1/4: smt()"), "{page}");
+    assert!(page.contains("closing attempts (2)"));
+    let failed = page.find("✗ failed").unwrap();
+    let closed = page.find("✓ closed").unwrap();
+    assert!(failed < closed);
+}
+
+#[test]
+fn the_attempt_in_flight_is_on_the_chip() {
     let rig = Rig::new();
     rig.one_oracle();
     rig.live.node_entered("N0", "determined", vec![], Some(0));
-    rig.live.rung("0: auto => /#");
-    rig.live.rung("ladder: smt()");
+    rig.live
+        .attempt(Closing::Fallback { k: 2, of: 4 }, "smt() (premise unfolded)", TWO_S);
+    assert!(rig
+        .page()
+        .contains("trying fallback 2/4: smt() (premise unfolded)"));
+}
+
+#[test]
+fn an_admitted_node_has_no_chip() {
+    let rig = Rig::new();
+    rig.one_oracle();
+    rig.live.node_entered("N0", "determined", vec![], Some(0));
+    rig.live.attempt(QUICK, "auto => /#", TWO_S);
+    rig.live.attempt_ended(false);
+    rig.live.admitted(&admit());
     rig.live.node_left();
     rig.live.finish();
-    assert!(rig.page().contains("rung: ladder: smt()"));
+    let page = rig.page();
+    assert!(!page.contains("closed by") && !page.contains("trying"));
+    assert!(page.contains("closing attempts (1)"));
 }
 
 #[test]
