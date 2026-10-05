@@ -423,7 +423,9 @@ fn render_html(trace_json: &str) -> String {
     let safe = trace_json.replace('<', "\\u003c");
     TEMPLATE
         .replace("__VIEWER_CSS__", VIEWER_CSS)
+        .replace("__GRID_CSS__", GRID_CSS)
         .replace("__EFFECT_JS__", EFFECT_JS)
+        .replace("__LISTING_JS__", LISTING_JS)
         .replace("__TRACE_JSON__", &safe)
 }
 
@@ -435,6 +437,8 @@ const TEMPLATE: &str = r##"<!doctype html>
 <title>domino debug — execution tree</title>
 <style>
 __VIEWER_CSS__
+__GRID_CSS__
+.lp-head:focus, .rp:focus { outline: 1px dotted var(--accent); outline-offset: -1px; }
 </style>
 </head>
 <body>
@@ -444,8 +448,8 @@ __VIEWER_CSS__
   <div class="chips" id="h-opts"></div>
   <div class="chips" id="h-summary"></div>
 </header>
-<main>
-  <div id="left">
+<main class="grid" id="grid">
+  <div class="cell" id="cell-tree">
     <div id="filter">
       <input type="text" id="q" placeholder="filter by path id or source text…" autocomplete="off">
       <div class="toggles" id="vtoggles"></div>
@@ -456,7 +460,11 @@ __VIEWER_CSS__
     </div>
     <div id="tree"></div>
   </div>
-  <div id="detail"><div class="empty">Select a path on the left.</div></div>
+  <div class="cell" id="cell-detail"><div class="empty">Select a path in the tree.</div></div>
+  <div class="cell lcell" id="cell-left"></div>
+  <div class="cell lcell" id="cell-right"></div>
+  <div class="splitter col" aria-label="column splitter"></div>
+  <div class="splitter row" aria-label="row splitter"></div>
 </main>
 
 <script type="application/json" id="trace">__TRACE_JSON__</script>
@@ -570,13 +578,14 @@ const tree = document.getElementById("tree");
 const rpRow = (lp, rp) => {
   const k = verdictKind(rp.verdict);
   const row = el("div", "rp");
-  row._lp = lp; row._rp = rp; row._vk = k;
+  row._lp = lp; row._rp = rp; row._vk = k; row._pid = rp.id;
+  row.tabIndex = 0;
   row.appendChild(el("span", "twist", ""));
   row.appendChild(el("span", "pid", "#" + rp.id));
   row.appendChild(chainSpan(rp.steps, rp.terminal, rp.pruned));
   const bt = rp.pruned ? `pruned at L${rp.terminal.label} (unsat)` : badgeText(k);
   row.appendChild(el("span", "badge " + badgeClass(k), bt));
-  row.onclick = () => select(row, lp, rp);
+  row.onclick = () => select(row, row, lp, rp);
   return row;
 };
 
@@ -590,6 +599,8 @@ T.left_paths.forEach(lp => {
   // nothing here is persisted.
   if (kids.length > 25) node.classList.add("collapsed");
   const head = el("div", "lp-head");
+  head._pid = lp.id;
+  head.tabIndex = 0;
   const twist = el("span", "twist", kids.length ? (node.classList.contains("collapsed") ? "▸" : "▾") : "");
   head.appendChild(twist);
   head.appendChild(el("span", "pid", "#" + lp.id));
@@ -609,11 +620,10 @@ T.left_paths.forEach(lp => {
 
   head.onclick = e => {
     if (e.target === twist) {
-      node.classList.toggle("collapsed");
-      if (kids.length) twist.textContent = node.classList.contains("collapsed") ? "▸" : "▾";
+      setCollapsed(node, !node.classList.contains("collapsed"));
       return;
     }
-    select(node, lp, null);
+    select(node, head, lp, null);
   };
   node.appendChild(head);
 
@@ -631,36 +641,41 @@ T.left_paths.forEach(lp => {
   const node = el("div", "node lp");
   node._lp = null; node._leftPrune = rp;
   const head = el("div", "lp-head");
+  head._pid = rp.id;
+  head.tabIndex = 0;
   head.appendChild(el("span", "twist", ""));
   head.appendChild(el("span", "pid", "#" + rp.id));
   head.appendChild(chainSpan(rp.steps, rp.terminal, true));
   head.appendChild(el("span", "badge pruned", `pruned at L${rp.terminal.label} (unsat)`));
-  head.onclick = () => select(node, rp, null);
+  head.onclick = () => select(node, head, rp, null);
   node.appendChild(head);
   tree.appendChild(node);
 });
 
-function select(domNode, lp, rp) {
+// `domNode` carries the `sel` mark; `row` is the focusable row whose `_pid` goes in the hash.
+function select(domNode, row, lp, rp) {
   if (selected) selected.classList.remove("sel");
   selected = domNode;
   selected.classList.add("sel");
+  writeHash({ p: row._pid });
   renderDetail(lp, rp);
+  showListings(lp, rp);
 }
 
-// ---- tree collapse / expand all (story 13; not persisted — cheap to redo) ---
+// ---- tree collapse / expand (story 13; not persisted — cheap to redo) -------
+function setCollapsed(node, collapsed) {
+  if (!node.querySelector(".rp-list")) return;
+  node.classList.toggle("collapsed", collapsed);
+  node.querySelector(".lp-head > .twist").textContent = collapsed ? "▸" : "▾";
+}
 function setAllNodes(collapsed) {
-  tree.querySelectorAll(".node.lp").forEach(node => {
-    const hasKids = !!node.querySelector(".rp-list");
-    const twist = node.querySelector(".lp-head > .twist");
-    node.classList.toggle("collapsed", collapsed);
-    if (twist && hasKids) twist.textContent = collapsed ? "▸" : "▾";
-  });
+  tree.querySelectorAll(".node.lp").forEach(node => setCollapsed(node, collapsed));
 }
 document.getElementById("tree-collapse").onclick = () => setAllNodes(true);
 document.getElementById("tree-expand").onclick = () => setAllNodes(false);
 
 // ---- detail -----------------------------------------------------------
-const detail = document.getElementById("detail");
+const detail = document.getElementById("cell-detail");
 
 // `localStorage` can *throw* (not just return null) on a file:// page in a
 // browser with site data blocked — every access is guarded (story 13).
@@ -668,11 +683,11 @@ function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return n
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 const secKey = title => "domino.debug.sec." + title;
 
-// One shared legend, used above both listings (story 16). Colour is never the
+// One shared legend, one copy per listing (story 16). Colour is never the
 // only signal — the left rule on each row carries the same distinction.
 function legend() {
   const wrap = el("div", "legend");
-  [["exec", "executed"], ["ret", "return"], ["abort", "abort"], ["", "not executed"]]
+  [["exec", "executed"], ["ret", "return"], ["abort", "abort"], ["cut", "branch cut"], ["", "not executed"]]
     .forEach(([cls, label]) => {
       const item = el("span", "legend-item" + (cls ? " " + cls : ""));
       item.appendChild(el("span", "legend-swatch"));
@@ -682,41 +697,23 @@ function legend() {
   return wrap;
 }
 
-// `path` is a LeftPath / RightPath / PrunedBranch (or the synthetic `prunedRow`
-// wrapper over one): `{ lines, steps, pruned? }`. `terminal` is its terminal
-// (or, for a `PrunedBranch`, the synthetic `{label, line, is_abort:false}` at
-// the cut). Story 16: every executed line is painted, not just the branching
-// decisions, and the terminal / cut row gets a stronger colour on top.
-function listingBlock(text, path, terminal) {
-  const execSet = new Set();
-  (path.lines || []).forEach(([a, b]) => { for (let n = a; n <= b; n++) execSet.add(n); });
-  const decisionByLabel = new Map((path.steps || []).map(s => [s.label, s.decision]));
-
-  const wrap = el("div", "listing");
-  const pre = el("pre");
-  pre.appendChild(wrap);
-  const lines = text.split("\n");
-  lines.forEach((line, i) => {
-    const n = i + 1;
-    let cls = execSet.has(n) ? " exec" : "";
-    if (terminal && n === terminal.label) {
-      cls = path.pruned ? " cut" : (terminal.is_abort ? " abort" : " ret");
-    }
-    const row = el("div", "row" + cls);
-    row.appendChild(el("span", "n", String(n)));
-    row.appendChild(el("span", "c", line));
-    const decision = decisionByLabel.get(n);
-    if (decision) row.appendChild(el("span", "dtag", decision));
-    // Centring now happens when the section opens (see `sec`), not on a
-    // render-time setTimeout, so a collapsed listing never scrolls the pane.
-    if (terminal && n === terminal.label) pre._termRow = row;
-    wrap.appendChild(row);
-  });
-  const container = el("div");
-  container.appendChild(legend());
-  container.appendChild(pre);
-  return container;
+// `path` is a LeftPath / RightPath or the synthetic `prunedRow`: `{ lines, steps,
+// terminal, pruned? }`. Story 16: every executed line is painted; the terminal,
+// or the cut fork line of a prune, gets a stronger colour on top.
+function pathSpec(path) {
+  const exec = new Set();
+  (path.lines || []).forEach(([a, b]) => { for (let n = a; n <= b; n++) exec.add(n); });
+  const t = path.terminal;
+  return {
+    exec,
+    decisions: new Map((path.steps || []).map(s => [s.label, s.decision])),
+    heads: new Set(), waits: new Set(), tags: new Map(),
+    terminal: path.pruned ? null : { label: t.label, abort: t.is_abort },
+    cuts: new Set(path.pruned ? [t.label] : []),
+  };
 }
+const CLEAR_SPEC = { exec: new Set(), decisions: new Map(), heads: new Set(), waits: new Set(),
+  tags: new Map(), terminal: null, cuts: new Set() };
 
 // A collapsible detail section. `title` keys its open/closed state in
 // localStorage, so the choice persists across selections and reloads; `meta`
@@ -736,14 +733,6 @@ function sec(title, body, defaultOpen, meta) {
   d.appendChild(wrap);
 
   d.addEventListener("toggle", () => lsSet(secKey(title), d.open ? "1" : "0"));
-
-  // If this section holds a listing, centre its terminal line when it opens.
-  const pre = body.tagName === "PRE" ? body
-    : (body.querySelector ? body.querySelector("pre") : null);
-  const centre = () => { if (d.open && pre && pre._termRow) pre._termRow.scrollIntoView({ block: "center" }); };
-  d.addEventListener("toggle", centre);
-  if (d.open && pre && pre._termRow) requestAnimationFrame(centre);
-
   return d;
 }
 
@@ -785,10 +774,6 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
 const pathMeta = (steps, terminal) =>
   `${plural(steps.length, "step")} → L${terminal.label} ${termWord(terminal)}`;
-const listingMeta = (text, path) => {
-  const executed = (path.lines || []).reduce((n, [a, b]) => n + (b - a + 1), 0);
-  return `${text.split("\n").length} lines · ${executed} executed`;
-};
 const smtMeta = (lp, rp) =>
   `${plural(lp.smt.length + (rp ? rp.smt.length : 0), "assertion")} + base frame`;
 
@@ -950,9 +935,6 @@ function renderDetail(lp, rp) {
     addSecToolbar();
     detail.appendChild(sec("Path — left", stepsTable(lp.steps, T.left_sites), true,
       pathMeta(lp.steps, lp.terminal)));
-    detail.appendChild(sec("Listing — left (" + T.left_game + ")",
-      listingBlock(T.left_listing, lp, lp.terminal), false,
-      listingMeta(T.left_listing, lp)));
     return;
   }
 
@@ -983,15 +965,7 @@ function renderDetail(lp, rp) {
     pathMeta(rp.steps, rp.terminal)));
 
   // A right-branch prune never reached a terminal: no claim assertion, no SMT.
-  if (rightPruned) {
-    detail.appendChild(sec("Listing — left (" + T.left_game + ")",
-      listingBlock(T.left_listing, lp, lp.terminal), false,
-      listingMeta(T.left_listing, lp)));
-    detail.appendChild(sec("Listing — right (" + T.right_game + ")",
-      listingBlock(T.right_listing, rp, rp.terminal), false,
-      listingMeta(T.right_listing, rp)));
-    return;
-  }
+  if (rightPruned) return;
 
   // What the path actually computed (story 18) — the first thing you read.
   detail.appendChild(effectSec(lp, isRight ? rp : null));
@@ -1006,13 +980,28 @@ function renderDetail(lp, rp) {
 
   detail.appendChild(sec("SMT asserted", smtBlock(lp, isRight ? rp : null), false,
     smtMeta(lp, isRight ? rp : null)));
+}
 
-  detail.appendChild(sec("Listing — left (" + T.left_game + ")",
-    listingBlock(T.left_listing, lp, lp.terminal), false,
-    listingMeta(T.left_listing, lp)));
-  if (isRight) detail.appendChild(sec("Listing — right (" + T.right_game + ")",
-    listingBlock(T.right_listing, rp, rp.terminal), false,
-    listingMeta(T.right_listing, rp)));
+// ---- the listings: built once, repainted per selection (story 20) ---------
+
+__LISTING_JS__
+const listings = {
+  left: makeListing(document.getElementById("cell-left"), `left · ${T.left_game} · ${T.oracle}`, T.left_listing || "", legend()),
+  right: makeListing(document.getElementById("cell-right"), `right · ${T.right_game} · ${T.oracle}`, T.right_listing || "", legend()),
+};
+
+// `lp` is the left path, or the synthetic row of a top-level left-branch prune;
+// `rp` is the right path or right-branch prune, or null.
+function showListings(lp, rp) {
+  paintListing(listings.left, pathSpec(lp));
+  bringListingTo(listings.left, lp.terminal.label);
+  if (rp) {
+    paintListing(listings.right, pathSpec(rp));
+    bringListingTo(listings.right, rp.terminal.label);
+    return;
+  }
+  paintListing(listings.right, CLEAR_SPEC);
+  listings.right.meta.textContent = "no right path selected";
 }
 
 // ---- filter ---------------------------------------------------------
@@ -1062,6 +1051,85 @@ function applyFilter() {
   });
 }
 applyFilter();
+
+// ---- location.hash (story 20) ---------------------------------------------
+// `p` the selected row's path id, `gc` / `gr` the splitter fractions, `ls` /
+// `rs` the listing scroll offsets.
+function parseHash() {
+  const out = {};
+  location.hash.replace(/^#/, "").split("&").forEach(kv => {
+    const [k, v] = kv.split("=");
+    if (k && v != null) out[k] = decodeURIComponent(v);
+  });
+  return out;
+}
+function writeHash(patch) {
+  const h = parseHash();
+  Object.keys(patch).forEach(k => { if (patch[k] == null) delete h[k]; else h[k] = String(patch[k]); });
+  const s = "#" + Object.entries(h).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+  try { history.replaceState(null, "", s === "#" ? location.pathname + location.search : s); }
+  catch (e) { /* the state just does not survive a reload */ }
+}
+
+// ---- keyboard navigation in the tree (story 20) ------------------------------
+const treeRows = () => [...tree.querySelectorAll(".lp-head, .rp")].filter(r => r.offsetParent !== null);
+function stepRow(row, delta) {
+  const rows = treeRows();
+  return rows[rows.indexOf(row) + delta];
+}
+function rightTarget(row) {
+  const node = row.parentElement;
+  if (!row.classList.contains("lp-head") || !node.querySelector(".rp-list")) return null;
+  if (node.classList.contains("collapsed")) { setCollapsed(node, false); return null; }
+  return [...node.querySelectorAll(".rp")].find(r => r.offsetParent !== null) || null;
+}
+function leftTarget(row) {
+  if (row.classList.contains("rp")) return row.closest(".node").querySelector(".lp-head");
+  const node = row.parentElement;
+  if (node.querySelector(".rp-list") && !node.classList.contains("collapsed")) setCollapsed(node, true);
+  return null;
+}
+const TREE_KEYS = {
+  ArrowUp: row => stepRow(row, -1),
+  ArrowDown: row => stepRow(row, 1),
+  ArrowRight: rightTarget,
+  ArrowLeft: leftTarget,
+};
+tree.addEventListener("keydown", e => {
+  const go = TREE_KEYS[e.key];
+  const row = e.target.closest && e.target.closest(".lp-head, .rp");
+  if (!go || !row) return;
+  e.preventDefault();
+  const next = go(row);
+  if (!next) return;
+  next.focus();
+  next.click();
+});
+
+// ---- the grid splitters and the restore from the hash -------------------------
+{
+  const h = parseHash();
+  const frac = (v, d) => { const f = Number(v); return v != null && f >= 0.1 && f <= 0.9 ? f : d; };
+  initGrid(document.getElementById("grid"), { gc: frac(h.gc, 0.42), gr: frac(h.gr, 0.45) },
+    pos => writeHash({ gc: pos.gc, gr: pos.gr }));
+  const row = [...tree.querySelectorAll(".lp-head, .rp")].find(r => String(r._pid) === h.p);
+  if (row) {
+    const node = row.closest(".node");
+    if (row.classList.contains("rp")) setCollapsed(node, false);
+    row.click();
+  }
+  [[listings.left.pre, h.ls], [listings.right.pre, h.rs]].forEach(([pane, v]) => {
+    if (v != null && Number.isFinite(Number(v))) pane.scrollTop = Number(v);
+  });
+}
+let scrollTimer = null;
+const rememberScroll = () => {
+  clearTimeout(scrollTimer);
+  scrollTimer = setTimeout(() => writeHash({
+    ls: Math.round(listings.left.pre.scrollTop), rs: Math.round(listings.right.pre.scrollTop),
+  }), 200);
+};
+[listings.left.pre, listings.right.pre].forEach(p => p.addEventListener("scroll", rememberScroll));
 </script>
 </body>
 </html>
@@ -1134,14 +1202,6 @@ header .sub { color: var(--fg-muted); font-size: 13px; }
 .chip.amber { background: var(--amber-bg); color: var(--amber-fg); }
 
 main { flex: 1; display: flex; min-height: 0; }
-#left {
-  width: 42%;
-  min-width: 280px;
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
 #filter {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
@@ -1193,9 +1253,8 @@ main { flex: 1; display: flex; min-height: 0; }
 .badge.pruned { background: var(--unreach-bg); color: var(--unreach-fg); text-decoration: line-through; }
 .mini { font: 11px var(--mono); color: var(--fg-muted); flex: none; }
 
-#detail { flex: 1; overflow: auto; padding: 14px 18px 60px; min-width: 0; }
-#detail h2 { font-size: 14px; margin: 0 0 4px; }
-#detail .path-sub { color: var(--fg-muted); font-size: 12px; margin-bottom: 12px; }
+#cell-detail h2 { font-size: 14px; margin: 0 0 4px; }
+#cell-detail .path-sub { color: var(--fg-muted); font-size: 12px; margin-bottom: 12px; }
 /* Detail-pane toolbar + tree toolbar (story 13). */
 .sectoolbar { display: flex; gap: 8px; margin-bottom: 14px; }
 .sectoolbar button, .treetoolbar button {
@@ -1328,6 +1387,7 @@ pre {
 .legend-item.exec .legend-swatch { background: var(--exec-bg); border-color: var(--exec-edge); }
 .legend-item.ret .legend-swatch { background: var(--ok-bg); border-color: var(--ok-fg); }
 .legend-item.abort .legend-swatch { background: var(--fail-bg); border-color: var(--fail-fg); }
+.legend-item.cut .legend-swatch { background: var(--amber-bg); border-color: var(--amber-fg); }
 details { margin-top: 6px; }
 summary { cursor: pointer; color: var(--fg-muted); font: 12px var(--mono); }
 .empty { color: var(--fg-muted); padding: 20px; }
@@ -1863,6 +1923,25 @@ mod tests {
         let start = html.find("id=\"trace\">").unwrap() + "id=\"trace\">".len();
         let end = html[start..].find("</script>").unwrap() + start;
         let _: serde_json::Value = serde_json::from_str(&html[start..end]).unwrap();
+    }
+
+    #[test]
+    fn the_sequential_page_is_the_grid_from_the_shared_code() {
+        let page = render_html("{}");
+        assert!(page.contains(GRID_CSS));
+        assert!(page.contains(LISTING_JS));
+        assert!(!page.contains("__GRID_CSS__") && !page.contains("__LISTING_JS__"));
+        for id in ["cell-tree", "cell-detail", "cell-left", "cell-right"] {
+            assert!(page.contains(&format!("id=\"{id}\"")), "the grid has the cell {id}");
+        }
+    }
+
+    #[test]
+    fn the_sequential_page_keeps_no_private_listing_code() {
+        assert!(!TEMPLATE.contains("function makeListing"));
+        assert!(!TEMPLATE.contains("function paintListing"));
+        assert!(!TEMPLATE.contains("function initGrid"));
+        assert!(!TEMPLATE.contains("listingBlock"), "listings are built once, not per selection");
     }
 
     #[test]
