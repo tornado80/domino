@@ -9,8 +9,9 @@
 //! [`EcTranscriptMode::Full`] writes EasyCrypt's answer verbatim as `response`, which prints
 //! every open goal in full, 100–700 kB per record. [`EcTranscriptMode::Capped`] (the default)
 //! writes the same answer with its goals cut to what the live page embeds ([`cap_response`]):
-//! the first goal only, its text cut at [`GOAL_TEXT_CAP`] characters, so at most ~2 kB of goal
-//! text per record (story 41; story 31 kept 3 goals of 12 000).
+//! the first goal only, split into its conclusion (cut at [`GOAL_CONCL_CAP`] characters) and its
+//! hypotheses (cut at [`GOAL_HYPS_CAP`]), so at most ~5 kB of goal text per record (story 51;
+//! story 41 kept ~2 kB of the goal's start, story 31 3 goals of 12 000).
 //!
 //! **The byte offsets constraint.** The live page (`tactics::live`) remembers where each record
 //! starts in the file (byte offset and length) and reads goal text back from there. Anything that
@@ -21,7 +22,7 @@
 
 use serde::de::{MapAccess, Visitor};
 use serde::Deserialize as _;
-use serde_derive::Deserialize;
+use serde_derive::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 /// The most goals of one answer kept in a capped record, and embedded per step in the live page.
@@ -29,9 +30,78 @@ use serde_json::value::RawValue;
 /// A contract between the transcript and the page: a capped record holds exactly what the page
 /// shows, so the page renders the same from either mode. Defined here and nowhere else.
 pub const GOALS_PER_STEP: usize = 1;
-/// The most characters of one goal's text kept in a capped record, and embedded in the page
-/// (see [`GOALS_PER_STEP`]).
-pub const GOAL_TEXT_CAP: usize = 2_000;
+/// The most characters of one goal's conclusion kept in a capped record, and embedded in the page
+/// (see [`GOALS_PER_STEP`]). A longer conclusion keeps its head and its tail.
+pub const GOAL_CONCL_CAP: usize = 4_000;
+/// How much of a cut conclusion is its head; the rest of [`GOAL_CONCL_CAP`] is its tail (the
+/// post-condition). The page finds the cut from it.
+pub const GOAL_CONCL_HEAD: usize = GOAL_CONCL_CAP * 3 / 5;
+/// The most characters of one goal's hypotheses kept in a capped record, cut at the end.
+pub const GOAL_HYPS_CAP: usize = 1_000;
+
+/// One goal as the page shows it: what `cli` prints below the separator rule (the conclusion),
+/// and above it (the hypotheses, one per line), each cut to its cap with the characters cut.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GoalParts {
+    pub concl: String,
+    pub concl_cut: usize,
+    pub hyps: String,
+    pub hyps_cut: usize,
+}
+
+impl GoalParts {
+    /// The parts of a goal's `text`, cut to the caps. A text without the rule is all conclusion.
+    pub fn of_text(text: &str) -> GoalParts {
+        let (hyps, concl) = split_at_rule(text);
+        let (concl, concl_cut) = cut_middle(concl.trim_matches('\n'));
+        let hyps = hyps.trim_matches('\n');
+        let hyps_chars = hyps.chars().count();
+        GoalParts {
+            concl,
+            concl_cut,
+            hyps: hyps.chars().take(GOAL_HYPS_CAP).collect(),
+            hyps_cut: hyps_chars.saturating_sub(GOAL_HYPS_CAP),
+        }
+    }
+
+    /// The conclusion around its cut: the whole conclusion and `""` when nothing was cut.
+    pub fn concl_head_tail(&self) -> (&str, &str) {
+        if self.concl_cut == 0 {
+            return (&self.concl, "");
+        }
+        let at = self
+            .concl
+            .char_indices()
+            .nth(GOAL_CONCL_HEAD)
+            .map_or(self.concl.len(), |(i, _)| i);
+        self.concl.split_at(at)
+    }
+}
+
+/// `(hypotheses, conclusion)`: the text above and below the first line made only of `-`.
+fn split_at_rule(text: &str) -> (&str, &str) {
+    let mut start = 0;
+    for line in text.split_inclusive('\n') {
+        let rule = line.trim_end();
+        if rule.len() >= 10 && rule.bytes().all(|b| b == b'-') {
+            return (&text[..start], &text[start + line.len()..]);
+        }
+        start += line.len();
+    }
+    ("", text)
+}
+
+/// `text` cut to [`GOAL_CONCL_CAP`] characters by dropping its middle, and how many were cut.
+fn cut_middle(text: &str) -> (String, usize) {
+    let chars = text.chars().count();
+    if chars <= GOAL_CONCL_CAP {
+        return (text.to_string(), 0);
+    }
+    let tail = GOAL_CONCL_CAP - GOAL_CONCL_HEAD;
+    let mut kept: String = text.chars().take(GOAL_CONCL_HEAD).collect();
+    kept.extend(text.chars().skip(chars - tail));
+    (kept, chars - GOAL_CONCL_CAP)
+}
 
 /// What `ec-transcript.jsonl` holds of EasyCrypt's answers (`--ec-transcript`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -78,19 +148,25 @@ pub fn record(
 ///
 /// Every field but `proof` is kept verbatim and in order: `status`, `state`, `error` and
 /// `messages` are small and the page shows them all. `proof.goals` keeps its first
-/// [`GOALS_PER_STEP`] goals, each reduced to its `id` and its `text` cut at [`GOAL_TEXT_CAP`]
-/// characters, and says what was cut:
+/// [`GOALS_PER_STEP`] goals, each reduced to its `id` and the [`GoalParts`] of its `text`, and
+/// says what was cut:
 ///
 /// ```json
-/// "proof": {"goals_dropped": 7, "goals": [{"id": 1, "text": "…", "text_dropped": 48000}]}
+/// "proof": {"goals_dropped": 7, "goals": [{"id": 1, "concl": "…", "concl_cut": 41000,
+///                                          "hyps": "…", "hyps_cut": 3000}]}
 /// ```
 ///
 /// The structured goal (`hyps`, `concl`, …) is what makes an answer large, and nothing reads it
-/// back from the transcript. `goals_dropped` and `text_dropped` are always written, so a capped
-/// record is told from a full one by their presence.
+/// back from the transcript. Its `concl.pp` prints the programs as `{...}`, so the conclusion is
+/// taken from `text`. `goals_dropped` is always written, so a capped record is told from a full
+/// one by its presence.
 pub fn cap_response(answer: &str) -> Option<String> {
     let fields = serde_json::from_str::<Fields>(answer).ok()?.0;
-    let mut out = String::with_capacity(answer.len().min(4 * GOAL_TEXT_CAP * GOALS_PER_STEP));
+    let mut out = String::with_capacity(
+        answer
+            .len()
+            .min(4 * (GOAL_CONCL_CAP + GOAL_HYPS_CAP) * GOALS_PER_STEP),
+    );
     out.push('{');
     for (i, (key, value)) in fields.iter().enumerate() {
         if i > 0 {
@@ -154,16 +230,10 @@ fn capped_proof(proof: &RawValue) -> Option<String> {
         .into_iter()
         .take(GOALS_PER_STEP)
         .map(|goal| {
-            let chars = goal.text.chars().count();
-            let kept: String = goal.text.chars().take(GOAL_TEXT_CAP).collect();
-            format!(
-                "{{\"id\":{},\"text\":{},\"text_dropped\":{}}}",
-                goal.id.get(),
-                serde_json::Value::from(kept),
-                chars.saturating_sub(GOAL_TEXT_CAP)
-            )
+            let parts = serde_json::to_string(&GoalParts::of_text(&goal.text)).ok()?;
+            Some(format!("{{\"id\":{},{}", goal.id.get(), &parts[1..]))
         })
-        .collect();
+        .collect::<Option<_>>()?;
     Some(format!(
         "{{\"goals_dropped\":{goals_dropped},\"goals\":[{}]}}",
         goals.join(",")
@@ -191,7 +261,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_capped_answer_keeps_the_first_goal_cut_at_the_cap_and_says_what_it_cut() {
+    fn a_capped_answer_keeps_the_first_goal_cut_to_the_caps_and_says_what_it_cut() {
         let answer = answer_with_goals(10, 50_000);
         let capped = cap_response(&answer).unwrap();
         let v: serde_json::Value = serde_json::from_str(&capped).unwrap();
@@ -202,11 +272,13 @@ pub(crate) mod tests {
         for (i, goal) in goals.iter().enumerate() {
             assert_eq!(goal["id"], i + 1);
             assert_eq!(
-                goal["text"].as_str().unwrap().chars().count(),
-                GOAL_TEXT_CAP
+                goal["concl"].as_str().unwrap().chars().count(),
+                GOAL_CONCL_CAP
             );
-            assert_eq!(goal["text_dropped"], 50_000 - GOAL_TEXT_CAP);
-            assert!(goal.get("concl").is_none() && goal.get("hyps").is_none());
+            assert_eq!(goal["concl_cut"], 50_000 - GOAL_CONCL_CAP);
+            assert_eq!(goal["hyps"], "");
+            assert_eq!(goal["hyps_cut"], 0);
+            assert!(goal.get("text").is_none());
         }
         // everything else is intact, in order
         let full: serde_json::Value = serde_json::from_str(&answer).unwrap();
@@ -215,7 +287,7 @@ pub(crate) mod tests {
         }
         assert!(capped.starts_with("{\"version\":\"domino-json/1\",\"state\":7,\"status\":\"error\",\"error\":{\"loc\":{\"start\":0,\"end\":4},\"msg\":\"no\"},\"messages\":[{\"level\":\"warning\",\"text\":\"careful\"}],\"proof\":"));
         assert!(
-            capped.len() < GOAL_TEXT_CAP * 2 + 1_000,
+            capped.len() < (GOAL_CONCL_CAP + GOAL_HYPS_CAP) * 2 + 1_000,
             "{}",
             capped.len()
         );
@@ -235,8 +307,8 @@ pub(crate) mod tests {
         let answer = answer_with_goals(1, 10);
         let v: serde_json::Value = serde_json::from_str(&cap_response(&answer).unwrap()).unwrap();
         assert_eq!(v["proof"]["goals_dropped"], 0);
-        assert_eq!(v["proof"]["goals"][0]["text"], "é".repeat(10));
-        assert_eq!(v["proof"]["goals"][0]["text_dropped"], 0);
+        assert_eq!(v["proof"]["goals"][0]["concl"], "é".repeat(10));
+        assert_eq!(v["proof"]["goals"][0]["concl_cut"], 0);
         let no_proof = "{\"version\":\"domino-json/1\",\"state\":0,\"status\":\"ok\",\"messages\":[],\"proof\":null}";
         assert_eq!(cap_response(no_proof).unwrap(), no_proof);
         assert_eq!(cap_response("not json"), None);
@@ -280,9 +352,73 @@ pub(crate) mod tests {
             .iter()
             .zip(goals)
         {
-            assert_eq!(capped["text"], full["text"]);
+            let parts = GoalParts::of_text(full["text"].as_str().unwrap());
+            assert_eq!(capped["concl"], parts.concl.as_str());
+            assert_eq!(capped["hyps"], parts.hyps.as_str());
             assert_eq!(capped["id"], full["id"]);
         }
         assert!(record.len() < answer.len());
+    }
+
+    const RULE: &str = "--------------------------------------------------------------------------";
+
+    #[test]
+    fn a_goal_splits_at_the_rule_into_hypotheses_and_conclusion() {
+        let parts = GoalParts::of_text(&format!(
+            "Type variables: <none>\n\nx: int\ny: int\n{RULE}\nx + y = y + x\n"
+        ));
+        assert_eq!(parts.hyps, "Type variables: <none>\n\nx: int\ny: int");
+        assert_eq!(parts.concl, "x + y = y + x");
+        assert_eq!((parts.concl_cut, parts.hyps_cut), (0, 0));
+        assert_eq!(parts.concl_head_tail(), ("x + y = y + x", ""));
+    }
+
+    #[test]
+    fn a_goal_without_hypotheses_is_all_conclusion() {
+        let parts = GoalParts::of_text("x = x\n");
+        assert_eq!(parts.concl, "x = x");
+        assert_eq!(parts.hyps, "");
+        let parts = GoalParts::of_text(&format!("{RULE}\nx = x\n"));
+        assert_eq!((parts.hyps.as_str(), parts.concl.as_str()), ("", "x = x"));
+    }
+
+    #[test]
+    fn a_long_conclusion_keeps_its_head_and_tail_and_counts_the_middle() {
+        let concl = format!(
+            "{}{}{}",
+            "h".repeat(GOAL_CONCL_HEAD),
+            "m".repeat(3_412),
+            "t".repeat(GOAL_CONCL_CAP - GOAL_CONCL_HEAD)
+        );
+        let parts = GoalParts::of_text(&format!("x: int\n{RULE}\n{concl}"));
+        assert_eq!(parts.concl_cut, 3_412);
+        assert_eq!(parts.concl.chars().count(), GOAL_CONCL_CAP);
+        let (head, tail) = parts.concl_head_tail();
+        assert_eq!(head, "h".repeat(GOAL_CONCL_HEAD));
+        assert_eq!(tail, "t".repeat(GOAL_CONCL_CAP - GOAL_CONCL_HEAD));
+    }
+
+    #[test]
+    fn long_hypotheses_are_cut_at_the_end_and_counted() {
+        let hyps = "é".repeat(GOAL_HYPS_CAP + 77);
+        let parts = GoalParts::of_text(&format!("{hyps}\n{RULE}\npost"));
+        assert_eq!(parts.hyps, "é".repeat(GOAL_HYPS_CAP));
+        assert_eq!(parts.hyps_cut, 77);
+        assert_eq!(parts.concl, "post");
+    }
+
+    #[test]
+    fn a_real_program_goal_keeps_the_judgment_with_its_post_condition() {
+        let answer = std::fs::read_to_string(
+            "testdata/easycrypt/story25/hello_world_useful_oracle_after_inline.json",
+        )
+        .unwrap();
+        let capped: serde_json::Value =
+            serde_json::from_str(&cap_response(&answer).unwrap()).unwrap();
+        let goal = &capped["proof"]["goals"][0];
+        let concl = goal["concl"].as_str().unwrap();
+        assert!(concl.starts_with("&1 (left ) : {"), "{concl}");
+        assert!(concl.contains("pre =") && concl.contains("post ="), "{concl}");
+        assert_eq!(goal["hyps"], "Type variables: <none>\n\n&m: {}");
     }
 }

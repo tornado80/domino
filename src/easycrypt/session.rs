@@ -1090,7 +1090,7 @@ done
     }
 
     #[test]
-    fn the_sink_caps_a_large_answer_to_its_first_goal_of_two_thousand_characters() {
+    fn the_sink_caps_a_large_answer_to_its_first_goal_cut_to_the_caps() {
         let dir = tempfile::tempdir().unwrap();
         let answer = crate::easycrypt::transcript::tests::answer_with_goals(10, 50_000);
         let sink = TestSink::new(usize::MAX);
@@ -1112,8 +1112,8 @@ done
         assert_eq!(goals.len(), 1);
         assert_eq!(capped["proof"]["goals_dropped"], 9);
         for goal in goals {
-            assert_eq!(goal["text"].as_str().unwrap().chars().count(), 2_000);
-            assert_eq!(goal["text_dropped"], 48_000);
+            assert_eq!(goal["concl"].as_str().unwrap().chars().count(), 4_000);
+            assert_eq!(goal["concl_cut"], 46_000);
         }
     }
 

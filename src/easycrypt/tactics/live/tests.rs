@@ -304,23 +304,37 @@ fn while_running_the_goal_being_worked_on_is_embedded() {
     assert!(page.contains("GOAL-AFTER-SP") && page.contains("GOAL-AFTER-IF"));
 }
 
+const RULE: &str = "--------------------------------------------------------------------------";
+
+/// A program goal: `hyps` lines of hypotheses, then a judgment of `body` characters with its
+/// post-condition last.
+fn program_goal(hyps: usize, body: usize) -> String {
+    let hyps: Vec<String> = (0..hyps).map(|i| format!("h{i}: int")).collect();
+    format!(
+        "{}\n{RULE}\n&1 (left ) : {{x : int}}\npre = true\n{}\npost = POST-CONDITION\n",
+        hyps.join("\n"),
+        "é".repeat(body)
+    )
+}
+
 #[test]
-fn goal_text_is_cut_and_the_cut_points_at_the_transcript() {
+fn the_conclusion_comes_first_and_the_hypotheses_are_folded() {
     let mut rig = Rig::new();
     rig.one_oracle();
     rig.live.node_entered("N0", "determined", vec![], Some(0));
-    let long = "x".repeat(GOAL_TEXT_CAP + 500);
-    let many: Vec<&str> = vec![long.as_str(); GOALS_PER_STEP + 2];
+    let goal = program_goal(300, GOAL_CONCL_CAP + 3_000);
+    let many: Vec<&str> = vec![goal.as_str(); GOALS_PER_STEP + 2];
     rig.answer("sp 1 1.", "ok", None, &many, 1);
     rig.live.node_left();
     rig.live.finish();
     let page = rig.page();
-    assert_eq!(
-        page.matches(&"x".repeat(GOAL_TEXT_CAP)).count(),
-        GOALS_PER_STEP
-    );
-    assert!(!page.contains(&"x".repeat(GOAL_TEXT_CAP + 1)));
-    assert!(page.contains("500 more characters, see transcript record 0"));
+    let judgment = page.find("<pre>&amp;1 (left ) : {x : int}").unwrap();
+    let hyps = page.find("<details class=\"hyps\"><summary>hypotheses (").unwrap();
+    assert!(judgment < hyps);
+    assert!(page.contains("POST-CONDITION"));
+    assert!(page.contains(" characters cut here: the full goal is in ec-transcript.jsonl, transcript record 0, with --ec-transcript full …"));
+    assert!(page.contains("lines, cut)</summary>"));
+    assert!(!page.contains("h299: int"));
     assert!(page.contains("+2 goals not kept, see transcript record 0"));
     assert!(page.len() < 100_000, "page is {} bytes", page.len());
 }
@@ -331,7 +345,7 @@ fn the_page_is_the_same_from_a_capped_and_a_full_transcript() {
         let mut rig = Rig::with_mode(mode);
         rig.one_oracle();
         rig.live.node_entered("N0", "determined", vec![], Some(0));
-        let long = "é".repeat(GOAL_TEXT_CAP + 500);
+        let long = program_goal(400, GOAL_CONCL_CAP + 500);
         let many: Vec<&str> = vec![long.as_str(), "short", long.as_str(), "a", "b"];
         rig.answer("smt().", "error", Some("no"), &["g", "h"], 1);
         rig.answer("sp 1 1.", "ok", None, &many, 1);
@@ -343,9 +357,31 @@ fn the_page_is_the_same_from_a_capped_and_a_full_transcript() {
     let (capped, capped_bytes) = run(EcTranscriptMode::Capped);
     let (full, full_bytes) = run(EcTranscriptMode::Full);
     assert!(capped_bytes < full_bytes);
-    assert!(capped.contains("500 more characters, see transcript record 1"));
+    assert!(capped.contains("characters cut here"));
     assert!(capped.contains("+4 goals not kept, see transcript record 1"));
     assert_eq!(capped, full);
+}
+
+#[test]
+fn a_capped_record_written_before_story_51_still_renders() {
+    let mut rig = Rig::new();
+    rig.one_oracle();
+    rig.live.node_entered("N0", "determined", vec![], Some(0));
+    // no page before the record is replaced, so no goal text is read early
+    rig.live.0.borrow_mut().flush_gap = Duration::from_secs(3600);
+    let placeholder = "p".repeat(300);
+    rig.answer("sp 1 1.", "ok", None, &[placeholder.as_str()], 1);
+    rig.live.node_left();
+    let older = "{\"file\":\"Eq.ec\",\"ctx\":\"\",\"sentence\":\"sp 1 1.\",\"ms\":1,\"response\":{\"version\":\"domino-json/1\",\"state\":1,\"status\":\"ok\",\"messages\":[],\"proof\":{\"goals_dropped\":0,\"goals\":[{\"id\":1,\"text\":\"x: int\\n---\\nOLD-GOAL\",\"text_dropped\":1234}]}}}\n";
+    let path = rig.dir.path().join("ec-transcript.jsonl");
+    let written = std::fs::read_to_string(&path).unwrap();
+    // the same record length, so the offset the model holds stays valid
+    std::fs::write(&path, format!("{older:<width$}", width = written.len() - 1) + "\n").unwrap();
+    rig.live.finish();
+    let page = rig.page();
+    assert!(page.contains("older record: context shown first"));
+    assert!(page.contains("OLD-GOAL"));
+    assert!(page.contains("... 1 234 more characters, see transcript record 0"));
 }
 
 #[test]

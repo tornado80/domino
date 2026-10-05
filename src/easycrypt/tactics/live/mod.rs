@@ -20,8 +20,10 @@
 //! where each record is (byte offset and length). When the page is written, the goal text of the
 //! *shown* steps only is read back from there, once per step: the step EasyCrypt is working on
 //! (the goals it was applied to), the steps of the goal being worked on, and the last step of
-//! each goal. Each goal's text is cut at [`GOAL_TEXT_CAP`] characters and at most
-//! [`GOALS_PER_STEP`] goals are embedded per step; the cut says where the rest is. The capped
+//! each goal. Each goal is split into its conclusion and hypotheses ([`GoalParts`]), each cut to
+//! its cap, and at most [`GOALS_PER_STEP`] goals are embedded per step; the cut says where the
+//! rest is. A capped record written before story 51 holds the goal's `text` only, shown as it
+//! is. The capped
 //! transcript (story 31) holds exactly this much of each answer, and says what it cut, so the
 //! page is the same whichever `--ec-transcript` mode wrote the transcript. A step with no record
 //! (the capped transcript was dropped after a failed write) has no goal text. So the page
@@ -47,7 +49,7 @@ use serde_derive::Deserialize;
 
 use crate::easycrypt::json::Status;
 use crate::easycrypt::session::SessionEvent;
-use crate::easycrypt::transcript::{GOALS_PER_STEP, GOAL_TEXT_CAP};
+use crate::easycrypt::transcript::{GoalParts, GOALS_PER_STEP, GOAL_CONCL_CAP, GOAL_HYPS_CAP};
 use crate::debug::progress::DebugObserver;
 use crate::writers::easycrypt::progress::{ExportEvent, ExportObserver, ExportPhase};
 
@@ -192,14 +194,21 @@ pub(super) enum RunState {
     EndedEarly(String),
 }
 
+/// One embedded goal.
+#[derive(Debug, Clone)]
+pub(super) enum GoalView {
+    Parts(GoalParts),
+    /// From a capped record written before story 51: the goal's start, and the characters cut
+    /// off its end.
+    Older { text: String, cut: usize },
+}
+
 /// The goal text embedded for one step.
 #[derive(Debug, Clone, Default)]
 pub(super) struct GoalTexts {
-    pub goals: Vec<String>,
+    pub goals: Vec<GoalView>,
     /// How many goals the answer held (more than `goals` when cut).
     pub total: usize,
-    /// Characters cut off the end of a goal, by goal.
-    pub cut: Vec<usize>,
     pub unreadable: bool,
 }
 
@@ -862,19 +871,34 @@ struct ResponseT {
     #[serde(default)]
     proof: Option<ProofT>,
 }
-/// A full answer's proof, or a capped one's (`goals_dropped`, `text_dropped`: story 31).
+/// A full answer's proof, or a capped one's (`goals_dropped`: story 31).
 #[derive(Deserialize)]
 struct ProofT {
     goals: Vec<GoalT>,
     #[serde(default)]
     goals_dropped: usize,
 }
+/// A goal of a full record (`text`), a capped one (the [`GoalParts`] fields), or a capped one
+/// written before story 51 (`text` and `text_dropped`).
 #[derive(Deserialize)]
-struct GoalT {
-    #[serde(default)]
-    text: String,
-    #[serde(default)]
-    text_dropped: usize,
+#[serde(untagged)]
+enum GoalT {
+    Parts(GoalParts),
+    Older { text: String, text_dropped: usize },
+    Full { text: String },
+}
+
+impl GoalT {
+    fn view(self) -> GoalView {
+        match self {
+            GoalT::Parts(parts) => GoalView::Parts(parts),
+            GoalT::Older { text, text_dropped } => GoalView::Older {
+                text,
+                cut: text_dropped,
+            },
+            GoalT::Full { text } => GoalView::Parts(GoalParts::of_text(&text)),
+        }
+    }
 }
 
 /// The `pp` of the goals in the transcript record at `offset`, cut to the embedding limits. A
@@ -904,20 +928,15 @@ fn read_goal_texts(path: &Path, offset: u64, len: usize) -> GoalTexts {
         .response
         .proof
         .map_or((Vec::new(), 0), |p| (p.goals, p.goals_dropped));
-    let mut texts = GoalTexts {
+    GoalTexts {
         total: goals.len() + goals_dropped,
-        ..GoalTexts::default()
-    };
-    for goal in goals.into_iter().take(GOALS_PER_STEP) {
-        let chars = goal.text.chars().count();
-        texts
-            .cut
-            .push(chars.saturating_sub(GOAL_TEXT_CAP) + goal.text_dropped);
-        texts
-            .goals
-            .push(goal.text.chars().take(GOAL_TEXT_CAP).collect());
+        goals: goals
+            .into_iter()
+            .take(GOALS_PER_STEP)
+            .map(GoalT::view)
+            .collect(),
+        unreadable: false,
     }
-    texts
 }
 
 /// The page without its timings element: what two runs of an unchanged project have in common.

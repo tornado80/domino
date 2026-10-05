@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use super::{GoalTexts, Live, NodeRec, RunState, StepStatus};
+use super::{GoalTexts, GoalView, Live, NodeRec, RunState, StepStatus};
 
 const CSS: &str = r##"
 :root { --bg:#fff; --fg:#1b1f24; --dim:#68707a; --line:#d5d9de; --card:#f5f6f8; --ok:#1a7f37; --bad:#c62828;
@@ -123,6 +123,63 @@ const JS: &str = r##"
   window.addEventListener("scroll", function () { clearTimeout(timer); timer = setTimeout(write, 150); });
 })();
 "##;
+
+/// One embedded goal: its conclusion, with a marker where its middle was cut, then its
+/// hypotheses folded. An older record's text is shown as it is.
+fn goal_html(out: &mut String, goal: &GoalView, record: &str) {
+    let parts = match goal {
+        GoalView::Parts(parts) => parts,
+        GoalView::Older { text, cut } => {
+            let _ = write!(
+                out,
+                "<div class=\"note\">older record: context shown first</div><pre>{}</pre>",
+                esc(text)
+            );
+            if *cut > 0 {
+                let _ = write!(
+                    out,
+                    "<div class=\"note\">... {} more characters, see {record}</div>",
+                    grouped(*cut)
+                );
+            }
+            return;
+        }
+    };
+    let (head, tail) = parts.concl_head_tail();
+    let _ = write!(out, "<pre>{}", esc(head));
+    if parts.concl_cut > 0 {
+        let _ = write!(
+            out,
+            "\n<span class=\"note\">… {} characters cut here: the full goal is in ec-transcript.jsonl, {record}, with --ec-transcript full …</span>\n{}",
+            grouped(parts.concl_cut),
+            esc(tail)
+        );
+    }
+    out.push_str("</pre>");
+    if parts.hyps.is_empty() {
+        return;
+    }
+    let _ = write!(
+        out,
+        "<details class=\"hyps\"><summary>hypotheses ({} lines{})</summary><pre>{}</pre></details>",
+        parts.hyps.lines().count(),
+        if parts.hyps_cut > 0 { ", cut" } else { "" },
+        esc(&parts.hyps)
+    );
+}
+
+/// `n` with its thousands grouped by a space: `3 412`.
+fn grouped(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, d) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(' ');
+        }
+        out.push(d);
+    }
+    out
+}
 
 fn esc(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -252,12 +309,13 @@ impl Live {
                 out.push_str("</details>\n");
             }
         }
-        out.push_str("</main>\n<footer><p>Only the goal text of the steps shown here is embedded (the step EasyCrypt is working on, the steps of the goal being worked on, and the last step of each goal), each cut at ");
+        out.push_str("</main>\n<footer><p>Only the goal text of the steps shown here is embedded (the step EasyCrypt is working on, the steps of the goal being worked on, and the last step of each goal), at most ");
         let _ = writeln!(
             out,
-            "{} characters and {} goals. Every sentence with EasyCrypt's answer is in <code>ec-transcript.jsonl</code> next to this page (record numbers below are its line numbers); its goals are cut the same way unless the run had <code>--ec-transcript full</code>.</p></footer>",
-            super::GOAL_TEXT_CAP,
-            super::GOALS_PER_STEP
+            "{} goal(s) per step, each goal's conclusion cut to {} characters (its head and its tail) and its hypotheses to {}. Every sentence with EasyCrypt's answer is in <code>ec-transcript.jsonl</code> next to this page (record numbers below are its line numbers); its goals are cut the same way unless the run had <code>--ec-transcript full</code>.</p></footer>",
+            super::GOALS_PER_STEP,
+            super::GOAL_CONCL_CAP,
+            super::GOAL_HYPS_CAP
         );
         self.timings_element(&mut out, running, &timing_steps);
         let _ = write!(out, "<script>{JS}</script>\n</body></html>\n");
@@ -523,18 +581,11 @@ impl Live {
                 for (i, goal) in texts.goals.iter().enumerate() {
                     let _ = write!(
                         out,
-                        "<div class=\"note\">goal {} of {}</div><pre>{}</pre>",
+                        "<div class=\"note\">goal {} of {}</div>",
                         i + 1,
-                        texts.total,
-                        esc(goal)
+                        texts.total
                     );
-                    if texts.cut[i] > 0 {
-                        let _ = write!(
-                            out,
-                            "<div class=\"note\">... {} more characters, see {record}</div>",
-                            texts.cut[i]
-                        );
-                    }
+                    goal_html(out, goal, &record);
                 }
                 if texts.total > texts.goals.len() {
                     let _ = write!(

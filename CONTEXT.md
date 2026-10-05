@@ -275,6 +275,6 @@ translation output it may be overwritten without asking.
 
 **EasyCrypt transcript** — the record of one tactics run's exchange with EasyCrypt: every sentence
 sent, in order, with EasyCrypt's answer and how long it took. Undone attempts and the `undo`
-sentences themselves are part of it. By default each answer is **capped** to its first goal, cut at a fixed length (`--ec-transcript full` keeps every goal verbatim); records are only ever appended, never
+sentences themselves are part of it. By default each answer is **capped** to its first goal, whose conclusion and hypotheses are each cut at a fixed length (`--ec-transcript full` keeps every goal verbatim); records are only ever appended, never
 compacted, because the page reads them back by byte offset. _Distinguish_: the **solver transcript** is the raw incremental
 exchange with cvc5, a debugging aid for the debugger itself.
