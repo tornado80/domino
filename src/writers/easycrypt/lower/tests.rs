@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::debug::exec::{execute, Side, Terminal};
-use crate::debug::ir::{count_terminals, inline_oracle, Place, Plumbing};
+use crate::debug::ir::{count_terminals, inline_oracle, FrameSpan, LineRole, Place, Plumbing};
 use crate::debug::render::render_side_by_side_easycrypt;
 use crate::project::{DirectoryFiles, DirectoryProject, Project};
 use crate::theorem::Theorem;
@@ -601,4 +601,185 @@ fn no_path_reads_an_unbound_local_and_the_domino_game_instance_pairs_with_it() {
             );
         }
     }
+}
+
+// --- line roles and frames (story 49) ---------------------------------------------
+
+const RENAME: &str = "example-projects/hello-world-oracle-rename-new";
+
+fn roles(inl: &InlinedOracle) -> Vec<(Label, LineRole, Option<Label>, Option<Label>)> {
+    let mut out: Vec<_> = inl
+        .listing
+        .lines
+        .iter()
+        .map(|l| (l.line, l.role, l.frame, l.end))
+        .collect();
+    out.sort_by_key(|r| r.0);
+    out
+}
+
+fn frame(open: Label, close: Label, temp: &str, local: &str) -> FrameSpan {
+    FrameSpan {
+        open,
+        close,
+        pkg_inst: "rand".into(),
+        oracle: "UsefulOracle".into(),
+        result_temp: Some(temp.into()),
+        result_local: local.into(),
+    }
+}
+
+#[test]
+fn two_inlined_calls_have_their_roles_and_frames() {
+    use LineRole::*;
+    let inl = lowered(
+        RENAME,
+        "Proof",
+        "medium_composition",
+        "ChangeNameUsefulOracle",
+    );
+    assert_eq!(
+        roles(&inl),
+        vec![
+            (14, RouterGuard, None, None),
+            (15, RouterGuard, None, None),
+            (16, EntryInit, None, None),
+            (19, FrameInit, Some(17), None),
+            (24, GuardHead, None, Some(37)),
+            (28, FrameInit, Some(26), None),
+            (33, GuardHead, None, Some(36)),
+            (38, RouterTail, None, Some(40)),
+            (39, RouterAbort, None, None),
+            (42, Return, None, None),
+        ],
+        "{}",
+        inl.listing.text
+    );
+    assert_eq!(
+        inl.listing.frames,
+        vec![
+            frame(17, 23, "ec_r1", "ec_result_1"),
+            frame(26, 32, "ec_r2", "ec_result_2"),
+        ]
+    );
+}
+
+#[test]
+fn an_oracle_without_calls_has_router_roles_only() {
+    use LineRole::*;
+    let inl = lowered(
+        RENAME,
+        "Proof",
+        "small_composition",
+        "ChangeNameUsefulOracle",
+    );
+    let got: Vec<(Label, LineRole)> = roles(&inl).iter().map(|r| (r.0, r.1)).collect();
+    assert_eq!(
+        got,
+        vec![
+            (5, RouterGuard),
+            (6, RouterGuard),
+            (7, EntryInit),
+            (11, RouterTail),
+            (12, RouterAbort),
+            (15, Return),
+        ]
+    );
+    assert!(inl.listing.frames.is_empty());
+}
+
+/// kem-dem `PKENC`: nested calls, a mid-body abort in the else of a call-result
+/// guard, a fall-through abort at every frame close and at the router.
+#[test]
+fn nested_calls_and_aborts_have_their_roles_and_frames() {
+    let inl = lowered(KEM_DEM, "kem_dem_cca_ssp", "Game_MON_CCA_PKE", "PKENC");
+    let opens: Vec<(Label, Label)> = inl
+        .listing
+        .frames
+        .iter()
+        .map(|f| (f.open, f.close))
+        .collect();
+    assert_eq!(
+        opens,
+        vec![(52, 77), (56, 62), (66, 71), (85, 110), (89, 95), (99, 104)]
+    );
+    for f in &inl.listing.frames {
+        assert_eq!(
+            inl.listing.sites[&f.close].kind,
+            SiteKind::Abort,
+            "fall-through at {}",
+            f.close
+        );
+        let temp = f.result_temp.as_deref().unwrap();
+        assert_eq!(
+            line(&inl, f.close).trim(),
+            format!("{temp} <- {};", f.result_local)
+        );
+    }
+    let at = |l: Label| {
+        inl.listing
+            .lines
+            .iter()
+            .find(|i| i.line == l)
+            .map(|i| (i.role, i.frame, i.end))
+    };
+    assert_eq!(at(78), Some((LineRole::GuardHead, None, Some(81))));
+    assert_eq!(at(81), Some((LineRole::ElseOpen, None, Some(83))));
+    assert_eq!(at(82), Some((LineRole::DoneSet, None, None)));
+    assert_eq!(inl.listing.sites[&82].kind, SiteKind::Abort);
+    assert_eq!(at(118), Some((LineRole::GuardHead, None, Some(121))));
+    assert_eq!(at(58), Some((LineRole::FrameInit, Some(56), None)));
+    assert_eq!(at(48), Some((LineRole::EntryInit, None, None)));
+    assert_eq!(at(125), Some((LineRole::RouterAbort, None, None)));
+    assert_eq!(at(128), Some((LineRole::Return, None, None)));
+    assert_eq!(at(50), None, "a plain branch has no role");
+}
+
+#[test]
+fn every_role_names_the_line_it_is_on() {
+    for &(dir, th, gi, o) in CASES {
+        let inl = lowered(dir, th, gi, o);
+        for info in &inl.listing.lines {
+            let text = line(&inl, info.line).trim();
+            let ok = match info.role {
+                LineRole::EntryInit | LineRole::FrameInit => {
+                    text.ends_with("<- None;") || text.ends_with("<- false;")
+                }
+                LineRole::RouterGuard => text.starts_with("if (!") || text.starts_with("(*"),
+                LineRole::GuardHead => text.starts_with("if (!"),
+                LineRole::ElseOpen => text == "} else {",
+                LineRole::DoneSet => text == "ec_done <- true;",
+                LineRole::RouterTail => text.starts_with("if (ec_result = None)"),
+                LineRole::RouterAbort => text.ends_with(".abort_flag <- true;"),
+                LineRole::Return => text == "return ec_result;",
+            };
+            assert!(ok, "{gi} L{}: {:?} on `{text}`", info.line, info.role);
+        }
+    }
+}
+
+#[test]
+fn roles_and_frames_serialise_for_the_viewer() {
+    let inl = lowered(
+        RENAME,
+        "Proof",
+        "medium_composition",
+        "ChangeNameUsefulOracle",
+    );
+    let lines = serde_json::to_value(&inl.listing.lines).unwrap();
+    assert!(lines
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!({"line": 42, "role": "return"})));
+    assert!(lines
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!({"line": 19, "role": "frame-init", "frame": 17})));
+    assert_eq!(
+        serde_json::to_value(&inl.listing.frames[0]).unwrap(),
+        serde_json::json!({
+            "open": 17, "close": 23, "pkg_inst": "rand", "oracle": "UsefulOracle",
+            "result_temp": "ec_r1", "result_local": "ec_result_1"
+        })
+    );
 }

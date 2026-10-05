@@ -134,6 +134,64 @@ const KW = { branch: "if", unwrap: "unwrap", sample: "sample", "return": "return
 const SIDES = [["left", "L"], ["right", "R"]];
 const sitesOf = side => (side === "left" ? T.left_sites : T.right_sites) || {};
 const srcLine = (side, label) => { const s = sitesOf(side)[label]; return s ? s.line : ""; };
+const textLines = { left: (T.left_listing || "").split("\n"), right: (T.right_listing || "").split("\n") };
+const lineText = (side, n) => (textLines[side][n - 1] || "").trim();
+
+// ---- what EasyCrypt runs outside the IR (story 49) ---------------------------
+const linesOf = side => (side === "left" ? T.left_lines : T.right_lines) || [];
+const framesOf = side => (side === "left" ? T.left_frames : T.right_frames) || [];
+const roleIndex = { left: new Map(linesOf("left").map(l => [l.line, l])), right: new Map(linesOf("right").map(l => [l.line, l])) };
+const returnLineOf = side => { const r = linesOf(side).find(l => l.role === "return"); return r ? r.line : null; };
+// The line a finished side stands at: EasyCrypt's `return ec_result;`, or the Domino return/abort.
+const endLine = (side, label) => returnLineOf(side) || label;
+const isEnd = head => head.kind === "return" || head.kind === "abort";
+// A side whose head is its oracle's end, at a node that is not a terminal pair.
+const waiting = (node, side) => node.kind !== "terminal-pair" && isEnd(node[side].head);
+// Where a side finished at the selection: the joint path's terminal, or a waiting side's head.
+function finish(node, side, pair) {
+  if (pair) return { label: pair[side].terminal.label, abort: pair[side].terminal.is_abort };
+  if (waiting(node, side)) return { label: node[side].head.label, abort: node[side].head.kind === "abort" };
+  return null;
+}
+const ALWAYS_RUN = new Set(["entry-init", "router-guard"]);
+const TAIL_RUN = new Set(["guard-head", "done-set", "router-tail", "router-abort", "return"]);
+// A guard is false after the terminal, an else is left from its then body, and the
+// router tail runs its body only on an abort.
+const skipsBody = (r, abort) => r.role === "guard-head" || r.role === "else-open" || (r.role === "router-tail" && !abort);
+// What EasyCrypt still runs from the terminal to the end of the procedure.
+function tailLines(side, end) {
+  const roles = roleIndex[side];
+  const closes = new Set(framesOf(side).map(f => f.close));
+  const out = [];
+  for (let n = end.label + 1; n <= textLines[side].length; n++) {
+    const r = roles.get(n);
+    if (closes.has(n)) out.push(n);
+    if (!r) continue;
+    if (TAIL_RUN.has(r.role)) out.push(n);
+    if (skipsBody(r, end.abort)) n = r.end;
+  }
+  return out;
+}
+function plumbingRun(side, set, end) {
+  linesOf(side).forEach(l => {
+    if (ALWAYS_RUN.has(l.role) || (l.role === "frame-init" && set.has(l.frame))) set.add(l.line);
+  });
+  if (end) { set.add(end.label); tailLines(side, end).forEach(n => set.add(n)); }
+}
+function calleeOutcome(f, exec, end) {
+  if (!exec.has(f.open)) return null;
+  if (end && end.abort && f.open < end.label && end.label <= f.close) return "callee aborts";
+  return exec.has(f.close) ? "callee returns" : null;
+}
+function lineTags(side, exec, end, wait) {
+  const tags = new Map();
+  const add = (n, t) => tags.set(n, tags.has(n) ? `${tags.get(n)} · ${t}` : t);
+  const ret = end ? endLine(side, end.label) : null;
+  if (end && ret !== end.label) add(end.label, end.abort ? "aborts here" : "result set");
+  framesOf(side).forEach(f => { const o = calleeOutcome(f, exec, end); if (o) add(f.close, o); });
+  if (wait) add(ret, "waits here");
+  return tags;
+}
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const verdictKind = v => (v && v.kind) || "missing";
 const badgeClass = k => ({ "verified": "verified", "unreachable": "unreachable",
@@ -210,8 +268,16 @@ function edgeText(parent, edge) {
   return SIDES.filter(([s]) => edge[s]).map(([s, p]) =>
     `${p}${edge[s].label} ${KW[parent[s].head.kind] || parent[s].head.kind} → ${edge[s].decision}`).join(" | ");
 }
-// "L43 if | R58 if": where each side stands at the node.
-const headsText = n => SIDES.map(([s, p]) => `${p}${n[s].head.label} ${KW[n[s].head.kind] || n[s].head.kind}`).join(" | ");
+// "L43 if | R waiting at return": where each side stands at the node.
+function headsEl(n) {
+  const box = el("span", "heads");
+  SIDES.forEach(([s, p], i) => {
+    if (i) box.appendChild(document.createTextNode(" | "));
+    if (waiting(n, s)) box.appendChild(el("span", "kind", `${p} waiting at return`));
+    else box.appendChild(document.createTextNode(`${p}${n[s].head.label} ${KW[n[s].head.kind] || n[s].head.kind}`));
+  });
+  return box;
+}
 
 function rollupText(r) {
   const claim = c => {
@@ -265,7 +331,7 @@ function nodeEl(n) {
     row.appendChild(el("span", "edge", edgeText(nodes[via.from], via.edge)));
     row.appendChild(el("span", "arrow", "▸"));
   }
-  row.appendChild(el("span", "heads", headsText(n)));
+  row.appendChild(headsEl(n));
   row.appendChild(el("span", "kind" + kindClass(n.kind), n.kind));
   if (n.left.plumbing || n.right.plumbing) {
     const chip = el("span", "kind", "plumbing");
@@ -466,7 +532,7 @@ function pathTo(nodeIdx) {
 // decision labels of the edges between them. For a joint path the finished
 // path's own line ranges are added, which also cover the closing lines the
 // consumed ranges leave out.
-function executed(path, side, pair) {
+function executed(path, side, pair, end) {
   const set = new Set();
   const add = ([a, b]) => { for (let n = a; n <= b; n++) set.add(n); };
   path.forEach(({ node, edge }) => {
@@ -474,15 +540,16 @@ function executed(path, side, pair) {
     if (edge && edge[side]) set.add(edge[side].label);
   });
   if (pair) pair[side].lines.forEach(add);
+  plumbingRun(side, set, end);
   return set;
 }
 
 function legend() {
   const wrap = el("div", "legend");
-  [["exec", "executed"], ["head", "decision point here"], ["ret", "return"], ["abort", "abort"],
-   ["cut", "cut (pruned)"], ["", "not executed"]].forEach(([cls, label]) => {
+  [["exec", "executed"], ["head", "decision point here"], ["wait", "waits here"], ["ret", "return"], ["abort", "abort"],
+   ["tagonly", "result set / aborts here (tag)"], ["cut", "cut (pruned)"], ["", "not executed"]].forEach(([cls, label]) => {
     const item = el("span", "legend-item" + (cls ? " " + cls : ""));
-    item.appendChild(el("span", "legend-swatch"));
+    if (cls !== "tagonly") item.appendChild(el("span", "legend-swatch"));
     item.appendChild(document.createTextNode(label));
     wrap.appendChild(item);
   });
@@ -495,11 +562,16 @@ function listingSpec(path, side, pair, cutStep) {
   const cur = path[path.length - 1].node;
   const cuts = new Set();
   if (cutStep && cutStep[side]) { cuts.add(cutStep[side].label); decisions.set(cutStep[side].label, cutStep[side].decision + " ✂"); }
+  const end = cutStep ? null : finish(cur, side, pair);
+  const wait = !!end && !pair;
+  const exec = executed(path, side, pair, end);
   return {
-    exec: executed(path, side, pair),
+    exec,
     decisions,
-    heads: cutStep ? new Set() : new Set([cur[side].head.label]),
-    terminal: pair ? { label: pair[side].terminal.label, abort: pair[side].terminal.is_abort } : null,
+    heads: cutStep || end ? new Set() : new Set([cur[side].head.label]),
+    terminal: pair ? { label: endLine(side, end.label), abort: end.abort } : null,
+    waits: wait ? new Set([endLine(side, end.label)]) : new Set(),
+    tags: lineTags(side, exec, end, wait),
     cuts,
   };
 }
@@ -517,6 +589,13 @@ function pathTable(path, cut) {
     SIDES.forEach(([s, p]) => {
       const td = el("td");
       const line = el("div");
+      if (waiting(node, s)) {
+        line.appendChild(document.createTextNode("waiting"));
+        td.appendChild(line);
+        td.appendChild(el("span", "src", lineText(s, endLine(s, node[s].head.label))));
+        tr.appendChild(td);
+        return;
+      }
       line.appendChild(document.createTextNode(`${p}${node[s].head.label} ${KW[node[s].head.kind] || node[s].head.kind}`));
       if (next && next[s]) {
         line.appendChild(document.createTextNode(" → "));
@@ -655,13 +734,14 @@ const listings = {
   left: makeListing(document.getElementById("cell-left"), `left · ${T.left_game} · ${T.oracle}`, T.left_listing || "", legend()),
   right: makeListing(document.getElementById("cell-right"), `right · ${T.right_game} · ${T.oracle}`, T.right_listing || "", legend()),
 };
+SIDES.forEach(([side]) => annotateFrames(listings[side], framesOf(side), linesOf(side)));
 
-// Where each side stands at the selection: the cut label, the terminal of a
-// joint path, or the head of the node.
+// Where each side stands at the selection: the cut label, the end line of a
+// finished or waiting side, or the head of the node.
 function targetLine(node, side, pair, cut) {
   if (cut) return cut[side] ? cut[side].label : node[side].head.label;
-  if (pair) return pair[side].terminal.label;
-  return node[side].head.label;
+  const end = finish(node, side, pair);
+  return end ? endLine(side, end.label) : node[side].head.label;
 }
 
 function showListings(nodeIdx, childIdx) {

@@ -209,6 +209,62 @@ pub struct Listing {
     /// The rendered code, one label per line. Story 03 re-uses this verbatim.
     pub text: String,
     pub sites: BTreeMap<Label, SiteInfo>,
+    /// What the viewer needs to know about lines the IR does not decide
+    /// (story 49). Only the EasyCrypt listing has any.
+    pub lines: Vec<LineInfo>,
+    /// One entry per inlined call of the EasyCrypt listing, in open-line order.
+    pub frames: Vec<FrameSpan>,
+}
+
+/// The part an EasyCrypt line plays in the single-exit shape (story 49 §3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde_derive::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LineRole {
+    /// The entry frame's `ec_result <- None`, `ec_done <- false`.
+    EntryInit,
+    /// The router's `if (!abort_flag) {` and the entry call comment.
+    RouterGuard,
+    /// An inlined frame's `ec_result_N <- None`, `ec_done_N <- false`.
+    FrameInit,
+    /// The `if` line of an exit guard.
+    GuardHead,
+    /// A `} else {` line. Never painted; the viewer skips the else body when
+    /// it reaches this line from the then body.
+    ElseOpen,
+    /// Every `ec_done <- true`.
+    DoneSet,
+    /// The router's `if (ec_result = None) {`.
+    RouterTail,
+    /// The router's `abort_flag <- true;`.
+    RouterAbort,
+    /// `return ec_result;`.
+    Return,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde_derive::Serialize)]
+pub struct LineInfo {
+    pub line: Label,
+    pub role: LineRole,
+    /// The open line of the frame a `frame-init` line belongs to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame: Option<Label>,
+    /// The last line of the block a `guard-head`, `else-open` or
+    /// `router-tail` line opens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<Label>,
+}
+
+/// An inlined call of the EasyCrypt listing (story 49 §3.1).
+#[derive(Debug, Clone, PartialEq, Eq, serde_derive::Serialize)]
+pub struct FrameSpan {
+    pub open: Label,
+    pub close: Label,
+    pub pkg_inst: String,
+    pub oracle: String,
+    /// The caller's `ec_r<N>`; none for a discarded result.
+    pub result_temp: Option<String>,
+    /// The callee's renamed `ec_result`.
+    pub result_local: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,6 +382,8 @@ pub fn inline_oracle(
         listing: Listing {
             text: inliner.text,
             sites: inliner.sites,
+            lines: Vec::new(),
+            frames: Vec::new(),
         },
     })
 }

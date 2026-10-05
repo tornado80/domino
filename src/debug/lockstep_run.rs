@@ -48,7 +48,7 @@ use crate::debug::driver::{
 };
 use crate::debug::layout::{Layout, ALL_CLAIMS_DIR, DOMINO_DEBUG_DIR};
 use crate::debug::exec::TerminalPath;
-use crate::debug::ir::{count_terminals, inline_oracle, Label};
+use crate::debug::ir::{count_terminals, inline_oracle, FrameSpan, Label, LineInfo};
 use crate::debug::lockstep::{
     run_lockstep, ChildOutcome, LockstepObserver, LockstepOptions, LockstepOutcome, LockstepSide,
     LockstepTerms, PairRecord, Pairing, RelationGoal, StuckPoint, EQUAL_OUTPUT,
@@ -71,7 +71,7 @@ use crate::writers::smt::exprs::{SmtAnd, SmtAssert, SmtExpr, SmtNot};
 
 /// Schema version of a lockstep `trace.json`. Sequential traces keep
 /// [`crate::debug::driver::TRACE_SCHEMA`].
-pub const LOCKSTEP_TRACE_SCHEMA: u32 = 10;
+pub const LOCKSTEP_TRACE_SCHEMA: u32 = 11;
 
 /// The least time between two flushes of the partial artifacts while a run is
 /// in progress: at most two a second (story 24). The page refreshes every two
@@ -216,6 +216,13 @@ pub struct LockstepMeta {
     pub right_listing: String,
     pub left_sites: BTreeMap<Label, SiteView>,
     pub right_sites: BTreeMap<Label, SiteView>,
+    /// The roles of the EasyCrypt lines the IR does not decide (story 49); empty on the
+    /// Domino listing.
+    pub left_lines: Vec<LineInfo>,
+    pub right_lines: Vec<LineInfo>,
+    /// The inlined calls of the EasyCrypt listing; empty on the Domino listing.
+    pub left_frames: Vec<FrameSpan>,
+    pub right_frames: Vec<FrameSpan>,
     /// Syntactic terminal counts of the two lowered oracles: what a sequential
     /// run would pair up (left times right).
     pub left_syntactic: u64,
@@ -921,6 +928,10 @@ where
         right_listing: right_inl.listing.text.clone(),
         left_sites: sites_view(&left_inl.listing),
         right_sites: sites_view(&right_inl.listing),
+        left_lines: left_inl.listing.lines.clone(),
+        right_lines: right_inl.listing.lines.clone(),
+        left_frames: left_inl.listing.frames.clone(),
+        right_frames: right_inl.listing.frames.clone(),
         left_syntactic: count_terminals(&left_inl),
         right_syntactic: count_terminals(&right_inl),
     };
@@ -1635,7 +1646,10 @@ mod tests {
             let trace: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(out.join("trace.json")).unwrap())
                     .unwrap();
-            assert_eq!(trace["schema"], 10);
+            assert_eq!(trace["schema"], 11);
+            for key in ["left_lines", "right_lines", "left_frames", "right_frames"] {
+                assert!(trace[key].is_array(), "{oracle}: {key}");
+            }
             assert_eq!(trace["mode"], "lockstep");
             assert_eq!(trace["listing"], "easycrypt");
         }

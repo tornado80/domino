@@ -102,8 +102,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use miette::SourceSpan;
 
 use crate::debug::ir::{
-    place_from_pattern, rewrite_expr, FrameInfo, FrameScope, InlBlock, InlStmt, InlineError,
-    InlinedOracle, Label, Listing, Plumbing, SiteInfo, SiteKind, MAX_INLINE_DEPTH,
+    place_from_pattern, rewrite_expr, FrameInfo, FrameScope, FrameSpan, InlBlock, InlStmt,
+    InlineError, InlinedOracle, Label, LineInfo, LineRole, Listing, Plumbing, SiteInfo, SiteKind,
+    MAX_INLINE_DEPTH,
 };
 use crate::expressions::{Expression, ExpressionKind};
 use crate::identifier::{pkg_ident::PackageIdentifier, Identifier};
@@ -195,6 +196,8 @@ fn lower_oracle(
         text: String::new(),
         line: 0,
         sites: BTreeMap::new(),
+        lines: Vec::new(),
+        frames: Vec::new(),
         locals: LocalNames::default(),
         temps: SampleTemps::default(),
     };
@@ -245,6 +248,7 @@ fn lower_oracle(
         },
         1,
     ));
+    lw.mark(lw.line, LineRole::RouterGuard, None);
     let entry_call = EcStmt::Call {
         lhs: Some(EcLvalue::Var(ec_result_name.clone())),
         module: lw.inst_modules[entry_idx].clone(),
@@ -258,6 +262,7 @@ fn lower_oracle(
         &EcStmt::Comment(render_stmt(&entry_call, 0)),
         2,
     ));
+    lw.mark(lw.line, LineRole::RouterGuard, None);
 
     let mut body = lw.lower_frame_body(&entry, 0, 2)?;
 
@@ -273,6 +278,7 @@ fn lower_oracle(
         },
         2,
     ));
+    let tail = lw.line;
     let abort_line = render_stmt(
         &EcStmt::Assign {
             lhs: EcLvalue::Var(render_expr(&abort_flag_path)),
@@ -282,10 +288,14 @@ fn lower_oracle(
     );
     let label = lw.emit_site(&abort_line, SiteKind::Abort, span, &entry, 0);
     body.0.push(InlStmt::Abort { label });
-    lw.emit_plain_line(&render_block_close(2));
+    lw.mark(label, LineRole::RouterAbort, None);
+    let tail_end = lw.alloc_line(&render_block_close(2));
+    lw.mark(tail, LineRole::RouterTail, Some(tail_end));
     lw.emit_plain_line(&render_block_close(1));
     lw.emit_plain_line(&render_return(&ec_result_var, 1));
+    lw.mark(lw.line, LineRole::Return, None);
     lw.emit_plain_line(&render_block_close(0));
+    lw.frames.sort_by_key(|f| f.open);
 
     let mut all_decls = lw.locals.decls;
     all_decls.extend(lw.temps.decls.into_iter().map(|(n, ty)| (n, ty, None)));
@@ -301,6 +311,8 @@ fn lower_oracle(
             listing: Listing {
                 text: lw.text,
                 sites: lw.sites,
+                lines: lw.lines,
+                frames: lw.frames,
             },
         },
         all_decls,
@@ -314,6 +326,8 @@ struct EcFrame<'c> {
     pkg_inst_name: String,
     oracle: &'c OracleDef,
     is_entry: bool,
+    /// The call line of an inlined frame; `None` for the entry frame.
+    open: Option<Label>,
 }
 
 impl EcFrame<'_> {
@@ -536,6 +550,8 @@ struct Lowerer<'c> {
     text: String,
     line: Label,
     sites: BTreeMap<Label, SiteInfo>,
+    lines: Vec<LineInfo>,
+    frames: Vec<FrameSpan>,
     locals: LocalNames,
     temps: SampleTemps,
 }
@@ -557,6 +573,7 @@ impl<'c> Lowerer<'c> {
             pkg_inst_name: self.comp.pkgs[pkg_idx].name.clone(),
             oracle,
             is_entry,
+            open: None,
         };
         self.next_frame_id += 1;
 
@@ -607,6 +624,37 @@ impl<'c> Lowerer<'c> {
         self.text.push('\n');
         self.line += 1;
         self.line
+    }
+
+    /// Records the role of a line (story 49). `end` is the last line of the
+    /// block the line opens.
+    fn mark(&mut self, line: Label, role: LineRole, end: Option<Label>) {
+        self.mark_in(line, role, None, end);
+    }
+
+    fn mark_in(&mut self, line: Label, role: LineRole, frame: Option<Label>, end: Option<Label>) {
+        self.lines.push(LineInfo {
+            line,
+            role,
+            frame,
+            end,
+        });
+    }
+
+    /// Emits `stmt` unlabelled, with `role` on each of its lines.
+    fn emit_plain_role(
+        &mut self,
+        stmt: &Statement,
+        frame: &EcFrame<'_>,
+        level: usize,
+        role: LineRole,
+    ) -> Result<(), EcExportError> {
+        let first = self.line + 1;
+        self.emit_plain(stmt, frame, level)?;
+        for line in first..=self.line {
+            self.mark_in(line, role, frame.open, None);
+        }
+        Ok(())
     }
 
     /// Emits already-rendered text (possibly several lines) with no label.
@@ -716,13 +764,26 @@ impl<'c> Lowerer<'c> {
         let mut ended = false;
         for stmt in stmts {
             if ended {
-                self.emit_plain(stmt, frame, level)?;
+                match shape(stmt) {
+                    Shape::SetDone => {
+                        self.emit_plain_role(stmt, frame, level, LineRole::DoneSet)?
+                    }
+                    _ => self.emit_plain(stmt, frame, level)?,
+                }
                 continue;
             }
             match shape(stmt) {
-                Shape::Plumbing => self.emit_plain(stmt, frame, level)?,
+                Shape::Plumbing => {
+                    let role = if frame.is_entry {
+                        LineRole::EntryInit
+                    } else {
+                        LineRole::FrameInit
+                    };
+                    self.emit_plain_role(stmt, frame, level, role)?
+                }
                 Shape::SetDone => {
                     let label = self.emit_labelled(stmt, SiteKind::Abort, frame, depth, level)?;
+                    self.mark(label, LineRole::DoneSet, None);
                     out.push(InlStmt::Abort { label });
                     ended = true;
                 }
@@ -871,8 +932,12 @@ impl<'c> Lowerer<'c> {
             let close = self.alloc_line(&render_else_open(level));
             let els = self.lower_block(&ite.else_block.0, frame, depth, level + 1)?;
             let els_close = self.alloc_line(&render_block_close(level));
+            self.mark(close, LineRole::ElseOpen, Some(els_close));
             (close, els, Some((close + 1, els_close)))
         };
+        if plumbing.is_some() {
+            self.mark(label, LineRole::GuardHead, Some(then_close));
+        }
         Ok(InlStmt::Branch {
             label,
             cond: cond_ir,
@@ -939,7 +1004,7 @@ impl<'c> Lowerer<'c> {
             .map(|a| self.translate_expr(caller, a, span))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let callee = self.new_frame(target_idx, target_odef, false)?;
+        let mut callee = self.new_frame(target_idx, target_odef, false)?;
 
         let call = EcStmt::Call {
             lhs: lhs.clone(),
@@ -954,6 +1019,7 @@ impl<'c> Lowerer<'c> {
             caller,
             depth,
         );
+        callee.open = Some(label);
 
         let mut arg_bindings = Vec::with_capacity(target_sig.args.len());
         let mut arg_lines: Option<(Label, Label)> = None;
@@ -984,10 +1050,14 @@ impl<'c> Lowerer<'c> {
         // caller's `ec_r<N>`. Reached only when the callee never assigned
         // `ec_result`, i.e. it aborted.
         let callee_result = self.local_name(&callee, EC_RESULT, true, &target_sig.ty)?;
+        let result_temp = match &lhs {
+            Some(EcLvalue::Var(name)) => Some(name.clone()),
+            _ => None,
+        };
         let close = match lhs {
             Some(lhs) => EcStmt::Assign {
                 lhs,
-                rhs: EcExpr::Var(callee_result),
+                rhs: EcExpr::Var(callee_result.clone()),
             },
             None => EcStmt::Comment(format!("{callee_result} is discarded")),
         };
@@ -999,6 +1069,14 @@ impl<'c> Lowerer<'c> {
             depth + 1,
         );
         body.0.push(InlStmt::Abort { label: close_label });
+        self.frames.push(FrameSpan {
+            open: label,
+            close: close_label,
+            pkg_inst: callee.pkg_inst_name.clone(),
+            oracle: target_sig.name.clone(),
+            result_temp,
+            result_local: callee_result,
+        });
 
         Ok(InlStmt::Call {
             label,

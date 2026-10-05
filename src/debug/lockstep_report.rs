@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The artifacts of a lockstep run (story 23): the trace (schema 10), the summary (the joint
+//! The artifacts of a lockstep run (story 23): the trace (schema 11), the summary (the joint
 //! tree as text, in the story-17 style), the concise stdout report, the viewer
 //! ([`crate::debug::lockstep_viewer`]), and the `smt/` files of the joint paths. On the
 //! EasyCrypt listing they are `trace.json`, `summary.txt`, `index.html` and `smt/`; on the Domino

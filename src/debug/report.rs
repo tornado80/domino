@@ -1430,6 +1430,16 @@ main.grid {
 .ltitle-name { font: 600 12px var(--mono); }
 .ltitle-meta { font: 11px var(--mono); color: var(--fg-muted); }
 .lcell > .legend { padding: 0 12px; flex: none; }
+.listing .row.wait { background: var(--bg-alt); border-left: 3px dashed var(--fg-muted); }
+.legend-item.wait .legend-swatch { background: var(--bg-alt); border: 1px dashed var(--fg-muted); }
+.legend-item.tagonly { font-style: italic; }
+.listing .row .atag { margin-left: auto; padding-left: 12px; color: var(--accent); font-size: 11px; white-space: nowrap; user-select: none; }
+.listing .row .atag ~ .atag, .listing .row .atag ~ .dtag { margin-left: 0; }
+.listing .row .nm { text-decoration: underline dotted; cursor: help; }
+.listing .row .gut { position: relative; flex: none; width: 24px; align-self: stretch; }
+.listing .row .gut .br { position: absolute; top: 0; bottom: 0; width: 4px; border-left: 2px solid var(--accent); }
+.listing .row .gut .br.top { top: 50%; border-top: 2px solid var(--accent); }
+.listing .row .gut .br.bot { bottom: 50%; border-bottom: 2px solid var(--accent); }
 .lcell > pre.lscroll { flex: 1; min-height: 0; overflow: auto; margin: 0 8px 8px; position: relative; }
 .listing .row.pulse { animation: target-pulse 1.2s ease-out; }
 @keyframes target-pulse { from { outline: 2px solid var(--accent); } to { outline: 2px solid transparent; } }
@@ -1444,8 +1454,9 @@ main.grid {
 /// The persistent listings and the grid splitters (story 48), shared by both
 /// viewers. Spliced in at `__LISTING_JS__`; needs an `el(tag, cls, text)` helper.
 /// A listing is built once; a selection repaints it from a spec
-/// `{ exec: Set, decisions: Map, heads: Set, terminal: {label, abort} | null, cuts: Set }`
-/// and brings it to a target line.
+/// `{ exec: Set, decisions: Map, heads: Set, terminal: {label, abort} | null, cuts: Set,
+/// waits: Set, tags: Map }` and brings it to a target line. `annotateFrames` adds the
+/// story-49 callee hovers, tags and gutter brackets once, at build time.
 pub(crate) const LISTING_JS: &str = r##"function makeListing(cell, title, text, legendEl) {
   const head = el("div", "ltitle");
   head.appendChild(el("span", "ltitle-name", title));
@@ -1465,10 +1476,11 @@ pub(crate) const LISTING_JS: &str = r##"function makeListing(cell, title, text, 
   cell.append(head, legendEl, pre);
   return { rows, meta, pre };
 }
-const PAINT_CLASSES = ["exec", "head", "ret", "abort", "cut"];
+const PAINT_CLASSES = ["exec", "head", "ret", "abort", "cut", "wait"];
 function paintClass(spec, n) {
   if (spec.cuts.has(n)) return "cut";
   if (spec.terminal && n === spec.terminal.label) return spec.terminal.abort ? "abort" : "ret";
+  if (spec.waits.has(n)) return "wait";
   if (spec.heads.has(n)) return "head";
   return spec.exec.has(n) ? "exec" : null;
 }
@@ -1480,10 +1492,70 @@ function paintListing(L, spec) {
     if (cls) row.classList.add(cls);
     const old = row.querySelector(".dtag");
     if (old) old.remove();
-    const d = spec.decisions.get(n);
+    const d = [spec.decisions.get(n), spec.tags.get(n)].filter(Boolean).join(" · ");
     if (d) row.appendChild(el("span", "dtag", d));
   });
   L.meta.textContent = `${L.rows.length} lines · ${spec.exec.size} executed`;
+}
+// Each inlined call: a hover on every occurrence of its result names, end-of-line
+// tags on their `var` lines, its close line and its call-result guard, and a
+// gutter bracket from its open line to its close line.
+function annotateFrames(L, frames, lines) {
+  if (!frames.length) return;
+  const titles = new Map();
+  frames.forEach(f => {
+    const callee = `${f.pkg_inst}.${f.oracle}`;
+    if (f.result_temp) titles.set(f.result_temp, `${f.result_temp}: result of ${callee} (call at L${f.open})`);
+    titles.set(f.result_local, `${f.result_local}: the result inside ${callee}`);
+  });
+  L.rows.forEach(row => hoverNames(row.querySelector(".c"), titles));
+  const guards = lines.filter(l => l.role === "guard-head").map(l => l.line);
+  frames.forEach(f => frameTags(L, f, guards));
+  frameBrackets(L, frames);
+}
+const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function hoverNames(cell, titles) {
+  const re = new RegExp(`(?<![\\w])(${[...titles.keys()].map(escapeRe).join("|")})(?![\\w])`, "g");
+  const text = cell.textContent;
+  if (!re.test(text)) return;
+  cell.textContent = "";
+  text.split(re).forEach((part, i) => {
+    if (i % 2 === 0) { if (part) cell.appendChild(document.createTextNode(part)); return; }
+    const span = el("span", "nm", part);
+    span.title = titles.get(part);
+    cell.appendChild(span);
+  });
+}
+function atag(row, text) {
+  if (row) row.appendChild(el("span", "atag", text));
+}
+function frameTags(L, f, guards) {
+  const callee = `${f.pkg_inst}.${f.oracle}`;
+  const lineOf = n => L.rows[n - 1].querySelector(".c").textContent;
+  [f.result_temp, f.result_local].filter(Boolean).forEach(name => {
+    const decl = L.rows.find(r => r.querySelector(".c").textContent.trim().startsWith(`var ${name} :`));
+    atag(decl, `← result of ${callee}`);
+  });
+  atag(L.rows[f.close - 1], `← result of ${callee}`);
+  atag(L.rows[f.open - 1], `┌ ${callee}`);
+  if (!f.result_temp) return;
+  guards.filter(g => lineOf(g).includes(`(${f.result_temp} = None)`))
+    .forEach(g => atag(L.rows[g - 1], `did ${callee} return?`));
+}
+function frameBrackets(L, frames) {
+  L.rows.forEach((row, i) => {
+    const n = i + 1;
+    const gut = el("span", "gut");
+    frames.forEach(f => {
+      if (n < f.open || n > f.close) return;
+      const depth = frames.filter(g => g.open < f.open && f.close <= g.close).length;
+      const br = el("span", "br" + (n === f.open ? " top" : "") + (n === f.close ? " bot" : ""));
+      br.style.left = `${depth * 6}px`;
+      br.title = `${f.pkg_inst}.${f.oracle}`;
+      gut.appendChild(br);
+    });
+    row.insertBefore(gut, row.firstChild);
+  });
 }
 function bringListingTo(L, line) {
   const row = L.rows[line - 1];
