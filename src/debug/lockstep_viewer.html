@@ -27,8 +27,8 @@ __GRID_CSS__
 .kids { padding-left: 16px; border-left: 1px dotted var(--border); margin-left: 14px; }
 .kids.seq { padding-left: 0; border-left: none; margin-left: 0; }
 .node:not(.open) > .kids { display: none; }
-.row.plumb, .row.plumb .edge, .row.plumb .heads { opacity: .55; }
-.hide-plumb .row.plumb { display: none; }
+.row.exit-guard, .row.exit-guard .edge, .row.exit-guard .heads { opacity: .55; }
+.hide-exit-guards .row.exit-guard { display: none; }
 .row.pruned .edge { text-decoration: line-through; color: var(--fg-muted); }
 .row.notexp { color: var(--fg-muted); }
 .kind { font: 11px/1 var(--mono); padding: 3px 6px; border-radius: 4px; background: var(--bg-inset); color: var(--fg-muted); flex: none; }
@@ -79,7 +79,7 @@ table.path-tbl .src { color: var(--fg-muted); display: block; white-space: pre-w
     </details>
     <div id="filter">
       <div class="toggles">
-        <label><input type="checkbox" id="hide-plumb"> hide plumbing nodes</label>
+        <label><input type="checkbox" id="hide-exit-guards"> hide exit guards</label>
       </div>
       <div class="treetoolbar">
         <button type="button" id="tree-collapse">Collapse all</button>
@@ -172,7 +172,7 @@ function tailLines(side, end) {
   }
   return out;
 }
-function plumbingRun(side, set, end) {
+function exporterLinesRun(side, set, end) {
   linesOf(side).forEach(l => {
     if (ALWAYS_RUN.has(l.role) || (l.role === "frame-init" && set.has(l.frame))) set.add(l.line);
   });
@@ -199,7 +199,9 @@ const badgeClass = k => ({ "verified": "verified", "unreachable": "unreachable",
 const badgeText = k => ({ "verified": "verified", "unreachable": "unreachable",
   "goal-fails": "GOAL FAILS", "inconclusive": "inconclusive" }[k] || k);
 const failing = v => verdictKind(v) === "goal-fails" || verdictKind(v) === "inconclusive";
-const isPlumb = n => !!(n.left.plumbing || n.right.plumbing);
+const exitGuardOf = n => n.left.exit_guard || n.right.exit_guard;
+const isExitGuard = n => !!exitGuardOf(n);
+const exitGuardName = n => exitGuardOf(n).replace("-", " ");
 const kindClass = k => (k === "synchronized" || k === "sampling-synchronized") ? " sync"
   : k === "split" ? " split" : k === "stuck" ? " stuck" : "";
 
@@ -322,7 +324,7 @@ function relationList(pair) {
 
 function nodeEl(n) {
   const wrap = el("div", "node");
-  const row = el("div", "row" + (isPlumb(n) ? " plumb" : ""));
+  const row = el("div", "row" + (isExitGuard(n) ? " exit-guard" : ""));
   const via = parentOf.get(n.index);
   const twist = el("span", "twist", n.children.length ? "▸" : "");
   row.appendChild(twist);
@@ -333,9 +335,9 @@ function nodeEl(n) {
   }
   row.appendChild(headsEl(n));
   row.appendChild(el("span", "kind" + kindClass(n.kind), n.kind));
-  if (n.left.plumbing || n.right.plumbing) {
-    const chip = el("span", "kind", "plumbing");
-    chip.title = "plumbing: " + (n.left.plumbing || n.right.plumbing) + " — exists only because EasyCrypt has one exit point";
+  if (isExitGuard(n)) {
+    const chip = el("span", "kind", `exit guard (${exitGuardName(n)})`);
+    chip.title = `${exitGuardName(n)}: an exit guard: exists only because EasyCrypt has one exit point; it skips code after an earlier return or abort`;
     row.appendChild(chip);
   }
   if (n.stuck) row.appendChild(el("span", "badge stuck", n.stuck));
@@ -358,7 +360,7 @@ function nodeEl(n) {
 }
 
 function childRow(n, c, i, cls, label) {
-  const row = el("div", "row " + cls + (isPlumb(n) ? " plumb" : ""));
+  const row = el("div", "row " + cls + (isExitGuard(n) ? " exit-guard" : ""));
   row.appendChild(el("span", "twist", ""));
   row.appendChild(el("span", "edge", edgeText(n, c)));
   row.appendChild(el("span", "arrow", label));
@@ -451,7 +453,7 @@ document.getElementById("tree-expand").onclick = () => setAll(true);
 
 // ---- selection + location.hash ---------------------------------------------
 // The hash is the only place a selection lives: a refresh reloads the page, and
-// the hash survives it. `n=<node>[&c=<child>]`, `plumb=hide`, `ts` / `ds` the
+// the hash survives it. `n=<node>[&c=<child>]`, `guards=hide`, `ts` / `ds` the
 // scroll offsets of the tree and the detail pane, `ls` / `rs` those of the
 // listings, `gc` / `gr` the splitter positions as fractions.
 const detail = document.getElementById("cell-detail");
@@ -540,7 +542,7 @@ function executed(path, side, pair, end) {
     if (edge && edge[side]) set.add(edge[side].label);
   });
   if (pair) pair[side].lines.forEach(add);
-  plumbingRun(side, set, end);
+  exporterLinesRun(side, set, end);
   return set;
 }
 
@@ -585,7 +587,7 @@ function pathTable(path, cut) {
     const next = k + 1 < path.length ? path[k + 1].edge : (cut || null);
     const tr = el("tr", k === path.length - 1 ? "cur" : "");
     tr.appendChild(el("td", "i", "#" + node.index));
-    tr.appendChild(el("td", "i", node.kind + (isPlumb(node) ? " (plumbing)" : "")));
+    tr.appendChild(el("td", "i", node.kind + (isExitGuard(node) ? ` (exit guard: ${exitGuardName(node)})` : "")));
     SIDES.forEach(([s, p]) => {
       const td = el("td");
       const line = el("div");
@@ -801,27 +803,27 @@ tree.addEventListener("keydown", e => {
     pos => writeHash({ gc: pos.gc, gr: pos.gr }));
 }
 
-// ---- plumbing toggle ------------------------------------------------------------
-const plumbBox = document.getElementById("hide-plumb");
-function applyPlumb() {
-  document.body.classList.toggle("hide-plumb", plumbBox.checked);
-  if (!plumbBox.checked) return;
-  // A hidden plumbing row cannot be reopened, so open every plumbing node:
+// ---- exit-guard toggle ----------------------------------------------------------
+const exitGuardBox = document.getElementById("hide-exit-guards");
+function applyExitGuardToggle() {
+  document.body.classList.toggle("hide-exit-guards", exitGuardBox.checked);
+  if (!exitGuardBox.checked) return;
+  // A hidden exit-guard row cannot be reopened, so open every exit-guard node:
   // its subtree stays visible.
   for (let again = true; again;) {
     again = false;
     nodeDom.forEach(w => {
-      if (w._n.children.length && !w.classList.contains("open") && isPlumb(w._n)) { setOpen(w, true); again = true; }
+      if (w._n.children.length && !w.classList.contains("open") && isExitGuard(w._n)) { setOpen(w, true); again = true; }
     });
   }
 }
-plumbBox.onchange = () => { applyPlumb(); writeHash({ plumb: plumbBox.checked ? "hide" : null }); };
+exitGuardBox.onchange = () => { applyExitGuardToggle(); writeHash({ guards: exitGuardBox.checked ? "hide" : null }); };
 
 // ---- restore from the hash ---------------------------------------------------
 function restore() {
   const h = parseHash();
-  plumbBox.checked = h.plumb === "hide";
-  applyPlumb();
+  exitGuardBox.checked = h.guards === "hide";
+  applyExitGuardToggle();
   const n = Number(h.n);
   if (h.n != null && Number.isInteger(n) && nodes[n]) {
     const c = h.c != null && Number.isInteger(Number(h.c)) && nodes[n].children[Number(h.c)] && nodes[n].children[Number(h.c)].outcome.kind !== "explored" ? Number(h.c) : null;

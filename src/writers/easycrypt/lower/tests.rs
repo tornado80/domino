@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::debug::exec::{execute, Side, Terminal};
-use crate::debug::ir::{count_terminals, inline_oracle, FrameSpan, LineRole, Place, Plumbing};
+use crate::debug::ir::{count_terminals, inline_oracle, FrameSpan, LineRole, Place, ExitGuard};
 use crate::debug::render::render_side_by_side_easycrypt;
 use crate::project::{DirectoryFiles, DirectoryProject, Project};
 use crate::theorem::Theorem;
@@ -314,7 +314,7 @@ fn kem_dem_pkenc_state_places_and_return_values_are_domino() {
 }
 
 #[test]
-fn plumbing_variables_never_reach_the_ir() {
+fn control_flow_variables_never_reach_the_ir() {
     for &(dir, th, gi, o) in CASES {
         let inl = lowered(dir, th, gi, o);
         let mut keys = Vec::new();
@@ -324,7 +324,7 @@ fn plumbing_variables_never_reach_the_ir() {
         for key in &keys {
             assert!(
                 !key.ends_with("::ec_result") && !key.ends_with("::ec_done"),
-                "{gi}: `{key}` is exporter plumbing, not a place"
+                "{gi}: `{key}` is an exporter control-flow variable, not a place"
             );
         }
         for (label, site) in &inl.listing.sites {
@@ -377,13 +377,13 @@ fn every_ec_done_true_that_is_not_after_a_return_is_an_abort() {
     }
 }
 
-// --- plumbing branches (story 22) ----------------------------------------------
+// --- exit guards (story 22) -----------------------------------------------------
 
 /// Every guard row of the listing is a labelled `Branch` marked with the kind
-/// of plumbing it is, and nothing else is marked. A done guard's condition is
+/// of exit guard it is, and nothing else is marked. A done guard's condition is
 /// the literal `true` and it has no else side.
 #[test]
-fn plumbing_branches_are_labelled_decision_points() {
+fn exit_guards_are_labelled_decision_points() {
     let (mut done_guards, mut call_results) = (0, 0);
     for &(dir, th, gi, o) in CASES {
         let inl = lowered(dir, th, gi, o);
@@ -392,7 +392,7 @@ fn plumbing_branches_are_labelled_decision_points() {
                 label,
                 cond,
                 els,
-                plumbing,
+                exit_guard,
                 ..
             } = stmt
             else {
@@ -401,14 +401,14 @@ fn plumbing_branches_are_labelled_decision_points() {
             let text = line(&inl, *label).trim();
             if text == "if (!ec_done) {" {
                 done_guards += 1;
-                assert_eq!(*plumbing, Some(Plumbing::DoneGuard), "{gi}: line {label}");
+                assert_eq!(*exit_guard, Some(ExitGuard::DoneFlag), "{gi}: line {label}");
                 assert_eq!(*cond, Expression::boolean(true), "{gi}: line {label}");
                 assert!(els.0.is_empty(), "{gi}: line {label}");
             } else if text.starts_with("if (!(ec_r") && !text.starts_with("if (!(ec_result") {
                 call_results += 1;
-                assert_eq!(*plumbing, Some(Plumbing::CallResult), "{gi}: line {label}");
+                assert_eq!(*exit_guard, Some(ExitGuard::CallResult), "{gi}: line {label}");
             } else {
-                assert_eq!(*plumbing, None, "{gi}: line {label}: {text}");
+                assert_eq!(*exit_guard, None, "{gi}: line {label}: {text}");
             }
         }
         // no `if (!ec_done)` row is left without a Branch

@@ -6,7 +6,7 @@
 //! of a lockstep execution can be tied to an instruction of the program EasyCrypt shows.
 //!
 //! - equal kinds match, and branches recurse into then and else;
-//! - an IR end matches whatever EasyCrypt has left at that nesting level (the plumbing the
+//! - an IR end matches whatever EasyCrypt has left at that nesting level (the exit guards the
 //!   closing step consumes);
 //! - anything else is a [`Mismatch`], after which the walk resynchronises on the next pair of
 //!   sub-skeletons that agree completely, so one surprise does not hide the rest.
@@ -14,7 +14,7 @@
 //! [`align_router`] first peels off the router: after `proc; inline.` the whole program of an
 //! exported oracle is the router's `if (!abort_flag) { … }`, and only its body is compared.
 
-use crate::debug::ir::{Label, Plumbing};
+use crate::debug::ir::{Label, ExitGuard};
 
 use super::skeleton::{Arm, EcPos, Node, NodeKind};
 
@@ -87,7 +87,7 @@ pub enum DecisionKind {
 pub struct DecisionMatch {
     pub ir_label: Label,
     pub kind: DecisionKind,
-    pub plumbing: Option<Plumbing>,
+    pub exit_guard: Option<ExitGuard>,
     pub ec: EcInstr,
 }
 
@@ -169,16 +169,16 @@ fn describe_ir(node: &Node) -> String {
         NodeKind::End => "end",
         NodeKind::Unknown => "unknown",
     };
-    let plumbing = match node.plumbing {
-        Some(Plumbing::DoneGuard) => " (done guard)",
-        Some(Plumbing::CallResult) => " (call result)",
+    let exit_guard = match node.exit_guard {
+        Some(ExitGuard::DoneFlag) => " (done-flag guard)",
+        Some(ExitGuard::CallResult) => " (call-result guard)",
         None => "",
     };
     let label = node.label.map_or(String::new(), |l| format!(" @L{l}"));
     if node.text.is_empty() {
-        format!("{what}{label}{plumbing}")
+        format!("{what}{label}{exit_guard}")
     } else {
-        format!("{what}{label}{plumbing}: {}", node.text)
+        format!("{what}{label}{exit_guard}: {}", node.text)
     }
 }
 
@@ -250,7 +250,7 @@ impl Aligner {
         self.out.matches.push(DecisionMatch {
             ir_label: ir.label.expect("an IR node carries its label"),
             kind,
-            plumbing: ir.plumbing,
+            exit_guard: ir.exit_guard,
             ec: EcInstr {
                 pos: ec.pos.clone(),
                 pp: ec.text.clone(),
@@ -270,7 +270,7 @@ impl Aligner {
                 self.out.matches.push(DecisionMatch {
                     ir_label: end.label.expect("an IR node carries its label"),
                     kind: DecisionKind::End,
-                    plumbing: None,
+                    exit_guard: None,
                     ec: EcInstr {
                         pos: ec.get(i).and_then(|n| n.pos.clone()),
                         pp: ec.get(i).map_or(String::new(), |n| n.text.clone()),

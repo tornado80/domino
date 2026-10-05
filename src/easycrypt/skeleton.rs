@@ -7,7 +7,7 @@
 //! as `easycrypt cli -json` shows it; [`ir_skeleton`] walks an [`InlinedOracle`], the lowering
 //! the lockstep execution runs on. [`super::align`] ties the two together.
 
-use crate::debug::ir::{InlBlock, InlStmt, InlinedOracle, Label, Plumbing};
+use crate::debug::ir::{InlBlock, InlStmt, InlinedOracle, Label, ExitGuard};
 
 use super::json::Instr;
 
@@ -53,7 +53,7 @@ pub struct Node {
     /// IR side: the listing label of the decision.
     pub label: Option<Label>,
     /// IR side: why a branch exists when it decides nothing Domino would call a decision.
-    pub plumbing: Option<Plumbing>,
+    pub exit_guard: Option<ExitGuard>,
     /// EasyCrypt side: where the instruction is.
     pub pos: Option<EcPos>,
 }
@@ -65,7 +65,7 @@ impl Node {
             text,
             lvalue: None,
             label: None,
-            plumbing: None,
+            exit_guard: None,
             pos: None,
         }
     }
@@ -76,10 +76,10 @@ impl Node {
     }
 
     /// A hand-built IR-side node.
-    pub fn ir(kind: NodeKind, label: Label, plumbing: Option<Plumbing>) -> Node {
+    pub fn ir(kind: NodeKind, label: Label, exit_guard: Option<ExitGuard>) -> Node {
         Node {
             label: Some(label),
-            plumbing,
+            exit_guard,
             ..Node::new(kind, String::new())
         }
     }
@@ -175,7 +175,7 @@ fn ir_block(block: &InlBlock, in_callee: bool, oracle: &InlinedOracle, out: &mut
                 label,
                 then,
                 els,
-                plumbing,
+                exit_guard,
                 ..
             } => {
                 let mut t = Vec::new();
@@ -184,7 +184,7 @@ fn ir_block(block: &InlBlock, in_callee: bool, oracle: &InlinedOracle, out: &mut
                 ir_block(els, in_callee, oracle, &mut e);
                 out.push(Node {
                     label: Some(*label),
-                    plumbing: *plumbing,
+                    exit_guard: *exit_guard,
                     ..Node::new(NodeKind::Branch { then: t, els: e }, line(*label))
                 });
             }

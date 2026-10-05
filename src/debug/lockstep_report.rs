@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The artifacts of a lockstep run (story 23): the trace (schema 11), the summary (the joint
+//! The artifacts of a lockstep run (story 23): the trace (schema 12), the summary (the joint
 //! tree as text, in the story-17 style), the concise stdout report, the viewer
 //! ([`crate::debug::lockstep_viewer`]), and the `smt/` files of the joint paths. On the
 //! EasyCrypt listing they are `trace.json`, `summary.txt`, `index.html` and `smt/`; on the Domino
@@ -265,16 +265,16 @@ fn describe_side(
         .map(|site| site.line.as_str())
         .unwrap_or("");
     let _ = write!(s, "at L{} {line}", side.head.label);
-    if let Some(p) = side.plumbing {
-        let _ = write!(s, "   [plumbing: {}]", plumbing_str(p));
+    if let Some(p) = side.exit_guard {
+        let _ = write!(s, "   [exit guard: {}]", exit_guard_str(p));
     }
     s
 }
 
-fn plumbing_str(p: crate::debug::lockstep::PlumbingKind) -> &'static str {
+fn exit_guard_str(p: crate::debug::lockstep::ExitGuardKind) -> &'static str {
     match p {
-        crate::debug::lockstep::PlumbingKind::DoneGuard => "done-guard",
-        crate::debug::lockstep::PlumbingKind::CallResult => "call-result",
+        crate::debug::lockstep::ExitGuardKind::DoneFlag => "done flag",
+        crate::debug::lockstep::ExitGuardKind::CallResult => "call result",
     }
 }
 

@@ -965,10 +965,27 @@ mod tests {
         assert_eq!(value(&read), value(&tree));
         assert_eq!(
             serde_json::to_value(&read.outcome).unwrap(),
-            serde_json::from_str::<serde_json::Value>(OUTCOME).unwrap()
+            serde_json::from_str::<serde_json::Value>(&outcome_in_story_50_names()).unwrap()
         );
         assert_eq!(read.outcome.stuck[0].side, "right");
         assert_eq!(read.summary.verdict_combos[0].verdicts[2], "not-checked");
+    }
+
+    /// [`OUTCOME`] is spelled as before story 50; this is how it is written now.
+    fn outcome_in_story_50_names() -> String {
+        OUTCOME
+            .replace("\"plumbing\"", "\"exit_guard\"")
+            .replace("\"done-guard\"", "\"done-flag\"")
+    }
+
+    #[test]
+    fn a_tree_saved_before_the_exit_guard_rename_reads_and_writes_the_new_names() {
+        let tree = saved_tree();
+        let left = &tree.outcome.tree.nodes[0].left;
+        assert_eq!(left.exit_guard, Some(crate::debug::lockstep::ExitGuardKind::DoneFlag));
+        let written = tree.to_json();
+        assert!(written.contains("\"exit_guard\":\"done-flag\""), "{written}");
+        assert!(!written.contains("plumbing") && !written.contains("done-guard"), "{written}");
     }
 
     #[test]

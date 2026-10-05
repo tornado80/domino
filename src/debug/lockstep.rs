@@ -18,7 +18,7 @@
 //! 1. **Determined branch** ([`NodeKind::Determined`]): a side's condition `c`
 //!    has `A ∧ pc ∧ ¬c` or `A ∧ pc ∧ c` unsatisfiable. That side takes the
 //!    determined child alone, left before right. If both are unsatisfiable the
-//!    node is unreachable ([`NodeKind::Unreachable`]). A plumbing `DoneGuard`
+//!    node is unreachable ([`NodeKind::Unreachable`]). A done-flag guard (`DoneFlag`)
 //!    (condition `true`) always resolves here.
 //! 2. **Synchronized branch**: both sides at undetermined branches and
 //!    `A ∧ pc ∧ (c_L ≠ c_R)` unsatisfiable: (then, then) and (else, else).
@@ -75,7 +75,7 @@ use crate::debug::exec::{
     BranchForm, BranchHead, Decision, Head, SampleHead, Side, SideExec, SidePos, Terminal,
     TerminalPath,
 };
-use crate::debug::ir::{InlinedOracle, Plumbing};
+use crate::debug::ir::{InlinedOracle, ExitGuard};
 use crate::theorem::GameInstance;
 use crate::transforms::samplify::SampleInfo;
 use crate::util::smtsolver::{SmtSolver, SmtSolverResponse};
@@ -258,8 +258,10 @@ pub struct SideView {
     /// decision it took, as inclusive ranges. For the viewer only: story 27 does
     /// not use them as EasyCrypt positions (ADR 0002).
     pub consumed: Vec<[usize; 2]>,
-    /// Set when the branch the side stands at is plumbing (`CONTEXT.md`).
-    pub plumbing: Option<PlumbingKind>,
+    /// Set when the branch the side stands at is an exit guard (`CONTEXT.md`).
+    /// Joint trees saved before story 50 spell the key `plumbing`.
+    #[serde(alias = "plumbing")]
+    pub exit_guard: Option<ExitGuardKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,16 +283,18 @@ pub enum HeadKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum PlumbingKind {
-    DoneGuard,
+pub enum ExitGuardKind {
+    /// Joint trees saved before story 50 spell it `done-guard`.
+    #[serde(alias = "done-guard")]
+    DoneFlag,
     CallResult,
 }
 
-impl From<Plumbing> for PlumbingKind {
-    fn from(p: Plumbing) -> Self {
+impl From<ExitGuard> for ExitGuardKind {
+    fn from(p: ExitGuard) -> Self {
         match p {
-            Plumbing::DoneGuard => PlumbingKind::DoneGuard,
-            Plumbing::CallResult => PlumbingKind::CallResult,
+            ExitGuard::DoneFlag => ExitGuardKind::DoneFlag,
+            ExitGuard::CallResult => ExitGuardKind::CallResult,
         }
     }
 }
@@ -1319,13 +1323,13 @@ fn head_label(head: &Head<'_>) -> usize {
 
 /// Describe where a side stands, and report its consumption so far.
 fn side_view(state: &mut SideState<'_>) -> SideView {
-    let (kind, plumbing) = match &state.head {
+    let (kind, exit_guard) = match &state.head {
         Head::Branch(b) => (
             match b.form {
                 BranchForm::If { .. } => HeadKind::Branch,
                 BranchForm::Unwrap { .. } => HeadKind::Unwrap,
             },
-            b.plumbing().map(PlumbingKind::from),
+            b.exit_guard().map(ExitGuardKind::from),
         ),
         Head::Sample(_) => (HeadKind::Sample, None),
         Head::Terminal(Terminal::Return { .. }) => (HeadKind::Return, None),
@@ -1337,7 +1341,7 @@ fn side_view(state: &mut SideState<'_>) -> SideView {
             label: head_label(&state.head),
         },
         consumed: lines_view(&state.pos.consumed()),
-        plumbing,
+        exit_guard,
     };
     state.pos.commit_consumed();
     view

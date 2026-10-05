@@ -169,7 +169,7 @@ mod tests {
                 label: 1,
             },
             consumed: Vec::new(),
-            plumbing: None,
+            exit_guard: None,
         }
     }
 

@@ -56,7 +56,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::ops::ControlFlow;
 
 use crate::debug::effect::{self, EffectInput, PathEffect, PkgInput, RandEffect};
-use crate::debug::ir::{InlBlock, InlStmt, InlinedOracle, Label, Place, Plumbing, VarKey};
+use crate::debug::ir::{InlBlock, InlStmt, InlinedOracle, Label, Place, ExitGuard, VarKey};
 use crate::expressions::{Expression, ExpressionKind};
 use crate::identifier::pkg_ident::PackageIdentifier;
 use crate::identifier::Identifier;
@@ -512,7 +512,7 @@ pub(crate) enum BranchForm<'a> {
         then: &'a InlBlock,
         els: &'a InlBlock,
         is_assert: bool,
-        plumbing: Option<Plumbing>,
+        exit_guard: Option<ExitGuard>,
         then_lines: Option<(Label, Label)>,
         else_lines: Option<(Label, Label)>,
     },
@@ -533,9 +533,9 @@ impl BranchHead<'_> {
         }
     }
 
-    pub(crate) fn plumbing(&self) -> Option<Plumbing> {
+    pub(crate) fn exit_guard(&self) -> Option<ExitGuard> {
         match &self.form {
-            BranchForm::If { plumbing, .. } => *plumbing,
+            BranchForm::If { exit_guard, .. } => *exit_guard,
             BranchForm::Unwrap { .. } => None,
         }
     }
@@ -977,7 +977,7 @@ impl<'a> Executor<'a> {
                     is_assert,
                     then_lines,
                     else_lines,
-                    plumbing,
+                    exit_guard,
                 } => {
                     return Head::Branch(BranchHead {
                         label: *label,
@@ -986,7 +986,7 @@ impl<'a> Executor<'a> {
                             then,
                             els,
                             is_assert: *is_assert,
-                            plumbing: *plumbing,
+                            exit_guard: *exit_guard,
                             then_lines: *then_lines,
                             else_lines: *else_lines,
                         },

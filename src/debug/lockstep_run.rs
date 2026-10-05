@@ -71,7 +71,7 @@ use crate::writers::smt::exprs::{SmtAnd, SmtAssert, SmtExpr, SmtNot};
 
 /// Schema version of a lockstep `trace.json`. Sequential traces keep
 /// [`crate::debug::driver::TRACE_SCHEMA`].
-pub const LOCKSTEP_TRACE_SCHEMA: u32 = 11;
+pub const LOCKSTEP_TRACE_SCHEMA: u32 = 12;
 
 /// The least time between two flushes of the partial artifacts while a run is
 /// in progress: at most two a second (story 24). The page refreshes every two
@@ -1071,7 +1071,7 @@ mod tests {
     /// One oracle of `testdata/lockstep/rules`, whose two sides are built so that
     /// each rule of the story's §3.3 fires on its own oracle. The engine runs on
     /// the Domino listing: it is listing-agnostic, and that listing has no
-    /// plumbing branches to get in the way of exact node sequences.
+    /// exit guards to get in the way of exact node sequences.
     fn run_rules(oracle: &str) -> LockstepRun {
         run_rules_with(oracle, LockstepDebugOptions::default(), None)
     }
@@ -1646,7 +1646,7 @@ mod tests {
             let trace: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(out.join("trace.json")).unwrap())
                     .unwrap();
-            assert_eq!(trace["schema"], 11);
+            assert_eq!(trace["schema"], 12);
             for key in ["left_lines", "right_lines", "left_frames", "right_frames"] {
                 assert!(trace[key].is_array(), "{oracle}: {key}");
             }
@@ -1656,25 +1656,25 @@ mod tests {
     }
 
     #[test]
-    fn every_plumbing_branch_is_a_determined_node() {
-        let mut plumbing_seen = 0;
+    fn every_exit_guard_is_a_determined_node() {
+        let mut exit_guards_seen = 0;
         for (dir, theorem, oracle) in CASES {
             let run = lockstep_easycrypt(dir, theorem, oracle);
             for node in &run.outcome.tree.nodes {
                 for side in [&node.left, &node.right] {
-                    if side.plumbing.is_some() {
-                        plumbing_seen += 1;
+                    if side.exit_guard.is_some() {
+                        exit_guards_seen += 1;
                         assert_eq!(
                             node.kind,
                             NodeKind::Determined,
-                            "{oracle}: node {} stands at a plumbing branch",
+                            "{oracle}: node {} stands at a exit guard",
                             node.index
                         );
                     }
                 }
             }
         }
-        assert!(plumbing_seen > 0, "the cases have plumbing branches");
+        assert!(exit_guards_seen > 0, "the cases have exit guards");
     }
 
     #[test]
@@ -1688,7 +1688,7 @@ mod tests {
             .filter(|n| {
                 [&n.left, &n.right]
                     .iter()
-                    .any(|s| s.plumbing == Some(crate::debug::lockstep::PlumbingKind::DoneGuard))
+                    .any(|s| s.exit_guard == Some(crate::debug::lockstep::ExitGuardKind::DoneFlag))
             })
             .collect();
         assert!(!guards.is_empty());

@@ -88,16 +88,16 @@ pub struct InlinedOracle {
 pub struct InlBlock(pub Vec<InlStmt>);
 
 /// Why an [`InlStmt::Branch`] exists when it decides nothing Domino would call
-/// a decision: a *plumbing branch* (`CONTEXT.md`) of the EasyCrypt export.
+/// a decision: an *exit guard* (`CONTEXT.md`) of the EasyCrypt export.
 /// Only the EasyCrypt lowering produces them; every branch of a Domino IR has
-/// `plumbing: None`.
+/// `exit_guard: None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Plumbing {
+pub enum ExitGuard {
     /// `if (!ec_done) { … }` — guards a continuation after a point that could
     /// have exited. Its condition is the literal `true`: every point that sets
     /// the done flag is already a terminal on the IR path, so on every path
     /// that reaches the guard it holds.
-    DoneGuard,
+    DoneFlag,
     /// `if (!(ec_rN = None)) { … } else { … }` — guards the use of an inlined
     /// call's result.
     CallResult,
@@ -140,7 +140,7 @@ pub enum InlStmt {
         else_lines: Option<(Label, Label)>,
         /// `Some` for a branch that exists only because EasyCrypt allows one
         /// exit point; always `None` in a Domino IR.
-        plumbing: Option<Plumbing>,
+        exit_guard: Option<ExitGuard>,
     },
     /// An inlined `invoke`. The callee body is NESTED, not flattened. A
     /// [`InlStmt::Return`] inside `body` binds its value into `bind` and
@@ -691,7 +691,7 @@ impl<'c> Inliner<'c> {
                         is_assert: true,
                         then_lines: None,
                         else_lines: None,
-                        plumbing: None,
+                        exit_guard: None,
                     })
                 } else {
                     let content = format!("if ({}) {{", render_expr(&ite.cond));
@@ -724,7 +724,7 @@ impl<'c> Inliner<'c> {
                         is_assert: false,
                         then_lines: Some((then_first, then_close)),
                         else_lines,
-                        plumbing: None,
+                        exit_guard: None,
                     })
                 }
             }

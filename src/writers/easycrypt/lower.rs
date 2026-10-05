@@ -26,7 +26,7 @@
 //! expression is the Domino expression — the mangled names exist only in
 //! the text.
 //!
-//! # What is plumbing, and what it becomes
+//! # What is an exit guard, and what it becomes
 //!
 //! `easycryptify`'s single-exit shape encodes control flow in three
 //! variables that have no Domino counterpart. They never become places:
@@ -43,16 +43,16 @@
 //!   `ec_result <- Some e` it is unreachable in the IR (the `Return` already
 //!   ended the frame) and is left unlabelled, as is `ec_done <- false` and
 //!   `ec_result <- None`.
-//! - an `if (!ec_done) { … }` guard is a *plumbing branch* (story 22):
+//! - an `if (!ec_done) { … }` guard is an *exit guard* (story 22), a *done-flag guard*:
 //!   EasyCrypt shows a real `if` there and a proof has to step over it, so it
 //!   is lowered to a labelled [`InlStmt::Branch`] marked
-//!   [`Plumbing::DoneGuard`], with the literal `true` as its condition and no
+//!   [`ExitGuard::DoneFlag`], with the literal `true` as its condition and no
 //!   else side. Every path that set `ec_done` has already ended in a `Return`
 //!   or `Abort`, so the guard holds on every path that reaches it; the
 //!   literal says exactly that without inventing a place for the flag, and
 //!   lockstep execution (story 23) is to take the branch on its side alone (`rcondt`). The
 //!   `if (!(ec_rN = None))` call-result guards are marked
-//!   [`Plumbing::CallResult`].
+//!   [`ExitGuard::CallResult`].
 //! - a frame that falls off its end without returning has aborted
 //!   (`ec_result` is still `None`). For an inlined callee that last line is
 //!   `ec_r<N> <- ec_result;`; for the entry frame it is the router's
@@ -103,7 +103,7 @@ use miette::SourceSpan;
 
 use crate::debug::ir::{
     place_from_pattern, rewrite_expr, FrameInfo, FrameScope, FrameSpan, InlBlock, InlStmt,
-    InlineError, InlinedOracle, Label, LineInfo, LineRole, Listing, Plumbing, SiteInfo, SiteKind,
+    InlineError, InlinedOracle, Label, LineInfo, LineRole, Listing, ExitGuard, SiteInfo, SiteKind,
     MAX_INLINE_DEPTH,
 };
 use crate::expressions::{Expression, ExpressionKind};
@@ -466,16 +466,16 @@ impl OracleNaming for FrameNaming<'_> {
     }
 }
 
-/// The `easycryptify` plumbing statements (module doc) a statement may be.
+/// The `easycryptify` control-flow statements (module doc) a statement may be.
 enum Shape<'s> {
     /// `ec_result <- None`, `ec_done <- false`: unlabelled.
-    Plumbing,
+    FlagInit,
     /// `ec_result <- v`, `v = Some e`.
     SetResult(&'s Expression),
     /// `ec_done <- true`.
     SetDone,
-    /// `if (!ec_done) { … }`: a labelled [`Plumbing::DoneGuard`] branch.
-    DoneGuard(&'s IfThenElse),
+    /// `if (!ec_done) { … }`: a labelled [`ExitGuard::DoneFlag`] branch.
+    DoneFlag(&'s IfThenElse),
     Other,
 }
 
@@ -492,7 +492,7 @@ fn shape(stmt: &Statement) -> Shape<'_> {
             },
             _,
         ) if is_generated(id, EC_RESULT) => match value.kind() {
-            ExpressionKind::None(_) => Shape::Plumbing,
+            ExpressionKind::None(_) => Shape::FlagInit,
             _ => Shape::SetResult(value),
         },
         Statement::Assignment(
@@ -503,14 +503,14 @@ fn shape(stmt: &Statement) -> Shape<'_> {
             _,
         ) if is_generated(id, EC_DONE) => match value.kind() {
             ExpressionKind::BooleanLiteral(b) if b == "true" => Shape::SetDone,
-            _ => Shape::Plumbing,
+            _ => Shape::FlagInit,
         },
         Statement::IfThenElse(ite)
             if ite.else_block.0.is_empty()
                 && matches!(ite.cond.kind(), ExpressionKind::Not(inner)
                     if matches!(inner.kind(), ExpressionKind::Identifier(id) if is_generated(id, EC_DONE))) =>
         {
-            Shape::DoneGuard(ite)
+            Shape::DoneFlag(ite)
         }
         _ => Shape::Other,
     }
@@ -773,7 +773,7 @@ impl<'c> Lowerer<'c> {
                 continue;
             }
             match shape(stmt) {
-                Shape::Plumbing => {
+                Shape::FlagInit => {
                     let role = if frame.is_entry {
                         LineRole::EntryInit
                     } else {
@@ -805,11 +805,11 @@ impl<'c> Lowerer<'c> {
                     out.push(InlStmt::Return { label, value });
                     ended = true;
                 }
-                Shape::DoneGuard(ite) => {
+                Shape::DoneFlag(ite) => {
                     out.push(self.lower_if(
                         ite,
                         Expression::boolean(true),
-                        Some(Plumbing::DoneGuard),
+                        Some(ExitGuard::DoneFlag),
                         frame,
                         depth,
                         level,
@@ -891,9 +891,9 @@ impl<'c> Lowerer<'c> {
             ),
 
             Statement::IfThenElse(ite) => {
-                let plumbing = call_result_guard(&ite.cond).then_some(Plumbing::CallResult);
+                let exit_guard = call_result_guard(&ite.cond).then_some(ExitGuard::CallResult);
                 let cond_ir = rewrite_expr(&ite.cond, frame.scope());
-                self.lower_if(ite, cond_ir, plumbing, frame, depth, level)
+                self.lower_if(ite, cond_ir, exit_guard, frame, depth, level)
             }
 
             Statement::Abort(_) => unreachable!("easycryptify leaves no `abort` in an oracle body"),
@@ -905,12 +905,12 @@ impl<'c> Lowerer<'c> {
     }
 
     /// A labelled `if`. `cond_ir` is the condition the IR decides on: the
-    /// statement's own, except for a done guard (see [`Plumbing::DoneGuard`]).
+    /// statement's own, except for a done guard (see [`ExitGuard::DoneFlag`]).
     fn lower_if(
         &mut self,
         ite: &'c IfThenElse,
         cond_ir: Expression,
-        plumbing: Option<Plumbing>,
+        exit_guard: Option<ExitGuard>,
         frame: &EcFrame<'c>,
         depth: usize,
         level: usize,
@@ -935,7 +935,7 @@ impl<'c> Lowerer<'c> {
             self.mark(close, LineRole::ElseOpen, Some(els_close));
             (close, els, Some((close + 1, els_close)))
         };
-        if plumbing.is_some() {
+        if exit_guard.is_some() {
             self.mark(label, LineRole::GuardHead, Some(then_close));
         }
         Ok(InlStmt::Branch {
@@ -946,7 +946,7 @@ impl<'c> Lowerer<'c> {
             is_assert: false,
             then_lines: Some((then_first, then_close)),
             else_lines,
-            plumbing,
+            exit_guard,
         })
     }
 
