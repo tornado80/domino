@@ -198,7 +198,8 @@ package), then one field per package parameter that becomes a module variable, t
 router or package ever uses it.
 
 **`Domino_` operator** — an EasyCrypt operator translated from a hand-written SMT-LIB state relation
-or helper function, named after its SMT original.
+or helper function, named after its SMT original. Package and game invariants become `PkgInv_`
+and `GameInv_` operators, not `Domino_` operators.
 
 **Translation** — producing the export tree from a Domino theorem: the package variants, games,
 types, invariants and one proof skeleton per equivalence. Translation proves nothing and talks to
