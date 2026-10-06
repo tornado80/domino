@@ -65,6 +65,17 @@ says which left sampling draws the same value as which right sampling. It may de
 and the oracle's arguments, so whether two particular samplings are paired is a question for the
 solver, not something read off the mapping's text.
 
+**Package invariant** — a predicate over the state of one package, hand-written in SMT-LIB and
+declared by the package template. It applies to every instance of the package, in every game
+instance that contains one. Domino assumes it before every oracle call and proves that every oracle
+call that does not abort keeps it.
+
+**Game invariant** — a predicate over the state of one game instance, hand-written in SMT-LIB and
+declared by its composition. It applies to every game instance of that composition. Domino assumes
+and proves it the same way as a package invariant.
+_Distinguish_: **state relation** and **invariant**. Those relate the two sides of an equivalence. A
+package invariant or a game invariant is about **one side** only.
+
 ## Debugging
 
 **Strategy** — how the debugger walks two oracles: *sequential exploration* or *lockstep
@@ -86,6 +97,13 @@ _Avoid_: synchronized execution (the word *synchronized* is reserved for the out
 obligation set — its proof tree plus the generated package and game invariant claims — on one
 shared exploration.
 _Avoid_: claim-free run, full-obligation run.
+
+**Check** — one question the debugger asks the solver at one terminal pair, with its own verdict:
+the negated goal of one claim, or of one state relation other than the invariant. Every claim of
+the obligation set is a check; so is every state relation except `invariant`, because the
+`invariant` claim already is that check. On the Domino listing a state relation's check is called
+`state-relation <name>`; the `Domino_` names belong to the EasyCrypt listing only.
+_Avoid_: query (a check may take several solver queries), `Domino_<name>` on the Domino listing.
 
 **Unreachable** — a verdict meaning a claim was not refuted because the situation it was checked in
 cannot arise *under the assumptions in force*. Either the path pair itself is infeasible, or the
