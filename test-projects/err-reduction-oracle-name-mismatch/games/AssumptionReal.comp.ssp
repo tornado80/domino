@@ -1,0 +1,26 @@
+composition AssumptionReal {
+    const n: Integer;
+    const m: Integer;
+    const div: Integer;
+    const enc: fn Bits(n), Bits(n), Bits(n) -> Bits(m);
+
+    instance key_1 = Key { params { n: n } }
+    instance key_2 = Key { params { n: n } }
+    instance Router = Router { params { n: n, div: div } }
+    instance Enc = Enc { params { n: n, m: m, enc: enc } }
+
+    compose {
+        adversary: {
+            Set_1: Set of key_1,
+            Set_2: Set of key_2,
+            Enc: Enc,
+        },
+        Enc: {
+            cGET: Router,
+        },
+        Router: {
+            Key_1_cGET: Get of key_1,
+            Key_2_cGET: Get of key_2,
+        },
+    }
+}

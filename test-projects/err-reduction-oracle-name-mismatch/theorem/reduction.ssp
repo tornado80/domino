@@ -1,0 +1,47 @@
+theorem Router {
+    const n: Integer;
+    const m: Integer;
+    const div: Integer;
+    const enc: fn Bits(n), Bits(n), Bits(n) -> Bits(m);
+    const kdf: fn Bits(n) -> Bits(n);
+
+    instance constructionreal = ConstructionReal {
+        params { n: n, m: m, div: div, enc: enc, kdf: kdf }
+    }
+
+    instance constructionideal = ConstructionIdeal {
+        params { n: n, m: m, div: div, enc: enc, kdf: kdf }
+    }
+
+    instance assumptionreal = AssumptionReal {
+        params { n: n, m: m, div: div, enc: enc }
+    }
+
+    instance assumptionideal = AssumptionIdeal {
+        params { n: n, m: m, div: div, enc: enc }
+    }
+
+    assumptions {
+        Assumption: assumptionreal ~ assumptionideal
+    }
+
+    gamehops {
+        reduction constructionreal constructionideal {
+            assumption Assumption
+
+            map assumptionreal constructionreal {
+                key_1  : key_1
+                key_2  : key_2
+                Router : Router
+                Enc    : Enc
+            }
+
+            map assumptionideal constructionideal {
+                key_1  : key_1
+                key_2  : key_2
+                Router : Router
+                Enc    : Enc
+            }
+        }
+    }
+}

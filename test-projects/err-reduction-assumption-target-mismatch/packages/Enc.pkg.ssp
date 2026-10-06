@@ -1,0 +1,20 @@
+package Enc {
+    params {
+        n: Integer,
+        m: Integer,
+        enc: fn Bits(n), Bits(n), Bits(n) -> Bits(m),
+    }
+
+    state {
+    }
+
+    import oracles {
+        cGET(h: Integer) -> Bits(n),
+    }
+
+    oracle Enc(h: Integer, msg: Bits(n)) -> Bits(m) {
+        k <- invoke cGET(h);
+        r <-$ Bits(n);
+        return enc(k, msg, r);
+    }
+}

@@ -1,0 +1,40 @@
+composition ConstructionIdeal {
+    const n: Integer;
+    const m: Integer;
+    const div: Integer;
+    const enc: fn Bits(n), Bits(n), Bits(n) -> Bits(m);
+    const kdf: fn Bits(n) -> Bits(n);
+
+    /* reduction part */
+    instance key_ps = Key { params { n: n } }
+    instance Exp = Exp { params { n: n, kdf: kdf } }
+
+    /* assumption part */
+    instance key_1 = Key { params { n: n } }
+    instance key_2 = Key { params { n: n } }
+    instance Router = Router { params { n: n, div: div } }
+    instance Enc = Enc { params { n: n, m: m, enc: enc } }
+
+    compose {
+        adversary: {
+            Set_ps: Set of key_ps,
+            Eval: Exp,
+            Set_1: Set of key_1,
+            Enc: Enc,
+        },
+        Exp: {
+            in_GET: Get of key_ps,
+            /* ConstructionReal calls Set of key_2 here. Both games export Set
+             * of both keys, but the reduction calls into a different package of
+             * the assumption, so the reduction must be rejected. */
+            out_SET: Set of key_1,
+        },
+        Enc: {
+            cGET: Router,
+        },
+        Router: {
+            Key_1_cGET: CGet of key_1,
+            Key_2_cGET: CGet of key_2,
+        },
+    }
+}

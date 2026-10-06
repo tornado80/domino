@@ -1,0 +1,23 @@
+package Router {
+    params {
+        n: Integer,
+        div: Integer,
+    }
+
+    state {
+    }
+
+    import oracles {
+        Key_1_cGET(h: Integer) -> Bits(n),
+        Key_2_cGET(h: Integer) -> Bits(n),
+    }
+
+    oracle cGET(h: Integer) -> Bits(n) {
+        if (h < div) {
+            k <- invoke Key_1_cGET(h);
+            return k;
+        }
+        k <- invoke Key_2_cGET(h);
+        return k;
+    }
+}

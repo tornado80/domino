@@ -1,0 +1,30 @@
+package Key {
+    params {
+        n: Integer,
+    }
+
+    state {
+        K: Table(Integer, Bits(n)),
+        R: Table(Integer, Bits(n)),
+    }
+
+    oracle Set(h: Integer, k: Bits(n)) {
+        if (K[h] == None as Bits(n)) {
+            K[h] <- Some(k);
+        }
+    }
+
+    /* Get and CGet deliberately have the same signature, so wires to them can
+     * only be told apart by the oracle name. */
+    oracle Get(h: Integer) -> Bits(n) {
+        return Unwrap(K[h]);
+    }
+
+    oracle CGet(h: Integer) -> Bits(n) {
+        if (R[h] == None as Bits(n)) {
+            r <-$ Bits(n);
+            R[h] <- Some(r);
+        }
+        return Unwrap(R[h]);
+    }
+}

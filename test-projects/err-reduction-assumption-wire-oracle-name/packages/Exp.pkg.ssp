@@ -1,0 +1,19 @@
+package Exp {
+    params {
+        n: Integer,
+        kdf: fn Bits(n) -> Bits(n),
+    }
+
+    state {
+    }
+
+    import oracles {
+        in_GET(h: Integer) -> Bits(n),
+        out_SET(h: Integer, k: Bits(n)),
+    }
+
+    oracle Eval(h: Integer) {
+        k <- invoke in_GET(h);
+        invoke out_SET(h, kdf(k));
+    }
+}
