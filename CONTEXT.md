@@ -306,5 +306,8 @@ translation output it may be overwritten without asking.
 **EasyCrypt transcript** — the record of one tactics run's exchange with EasyCrypt: every sentence
 sent, in order, with EasyCrypt's answer and how long it took. Undone attempts and the `undo`
 sentences themselves are part of it. By default each answer is **capped**: its front goal's conclusion and hypotheses are each cut at a fixed length (`--ec-transcript full` keeps the answer verbatim); records are only ever appended, never
-compacted, because the page reads them back by byte offset. _Distinguish_: the **solver transcript** is the raw incremental
+compacted, because the page reads them back by byte offset. Each record says why its sentence was
+sent (its oracle, joint node and **Sentence role**). Event records (an interrupt, a respawn, Domino's
+own time between two sentences) hold the time outside sentences, so the records of one oracle add
+up to its EasyCrypt time. _Distinguish_: the **solver transcript** is the raw incremental
 exchange with cvc5, a debugging aid for the debugger itself.

@@ -881,12 +881,27 @@ mod live {
         let transcript = std::fs::read_to_string(&result.equivalences[0].transcript).unwrap();
         assert!(transcript.lines().count() >= oracle.stats.closed);
         assert!(transcript.contains("\"sentence\":\"proc; inline.\""));
-        // every sentence of the walk says which oracle and node it belongs to
-        assert!(transcript.contains("\"ctx\":\"UsefulOracle N0 sampling-synchronized\""));
+        // every sentence of the walk says which oracle and node it belongs to, and why
+        assert!(transcript.contains(
+            "\"ctx\":{\"oracle\":\"UsefulOracle\",\"node\":0,\"kind\":\"sampling-synchronized\""
+        ));
         for line in transcript.lines() {
             let v: serde_json::Value = serde_json::from_str(line).unwrap();
-            assert!(v["response"]["version"] == "domino-json/2");
+            assert!(v["ctx"]["role"].is_string(), "{v}");
+            if v.get("event").is_none() {
+                assert!(v["response"]["version"] == "domino-json/2");
+                assert!(v["bytes"].as_u64().unwrap() > 0);
+            }
         }
+        // the records of the oracle account for its EasyCrypt time
+        let ms: u64 = transcript
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .filter(|v| v["ctx"]["oracle"] == "UsefulOracle")
+            .map(|v| v["ms"].as_u64().unwrap())
+            .sum();
+        let time = oracle.easycrypt_time.as_millis() as u64;
+        assert!(ms <= time && ms * 100 >= time * 99, "records {ms} ms, report {time} ms");
     }
 
     #[test]
@@ -1289,7 +1304,7 @@ mod live {
         let mut rejected = 0;
         for line in transcript.lines() {
             let v: serde_json::Value = serde_json::from_str(line).unwrap();
-            if v["ctx"].as_str().unwrap().is_empty() {
+            if v["ctx"]["oracle"].is_null() || v.get("event").is_some() {
                 continue;
             }
             if v["response"]["status"] == "ok" {
@@ -2083,8 +2098,12 @@ wait $ec
         let kept_in: Vec<String> = transcript
             .lines()
             .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
-            .filter(|r| r["ctx"].as_str().is_some_and(|c| c.ends_with("(trust)")))
-            .map(|r| format!("{} {}", r["ctx"].as_str().unwrap(), r["sentence"].as_str().unwrap()))
+            .filter(|r| r["ctx"]["role"] == "resume")
+            .map(|r| {
+                let c = &r["ctx"];
+                let sentence = r["sentence"].as_str().unwrap();
+                format!("{} N{} {sentence}", c["oracle"].as_str().unwrap(), c["node"])
+            })
             .collect();
         assert_eq!(kept_in.len(), entry.closed.len(), "{kept_in:?}");
         assert!(kept_in[0].starts_with("Branch N1 ") && kept_in[0].ends_with(" admit."), "{kept_in:?}");
@@ -2407,4 +2426,154 @@ fn unfold_ops_use_the_writers_op_names() {
         ops,
         ["inv", "params_inv", "Domino_relation_a_b", "Domino_state_eq"]
     );
+}
+
+/// Story 56: each sentence's record says why the driver sent it. A fake EasyCrypt refuses every
+/// closing tactic, so the walk goes through every role: N0 (unreachable) through its quick close
+/// to an admit, N1 (a leaf) through its leaf fallbacks, the reduction to a formula, the split
+/// and the part fallbacks of each conjunct to an admit of each part.
+#[test]
+fn each_record_says_why_the_driver_sent_its_sentence() {
+    use crate::debug::lockstep::JointTree;
+    use crate::easycrypt::session::tests::TestSink;
+    use crate::easycrypt::session::Session;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let prog = r#"{"id":1,"concl":{"kind":"equivS","pp":"p"},"text":"p"}"#;
+    let atom = r#"{"id":1,"concl":{"kind":"app","pp":"a","op":"Top.a"},"text":"a"}"#;
+    let conj = format!(
+        r#"{{"id":1,"concl":{{"kind":"app","pp":"a /\\ a","op":"Top.Logic./\\","args":[{a},{a}]}},"text":"a /\\ a"}}"#,
+        a = r#"{"kind":"app","pp":"a","op":"Top.a"}"#
+    );
+    let proofs = [
+        ("two", format!(r#"{{"front":{prog},"kinds":["program","program"]}}"#)),
+        ("prog", format!(r#"{{"front":{prog},"kinds":["program"]}}"#)),
+        ("conj", format!(r#"{{"front":{conj},"kinds":["formula"]}}"#)),
+        ("two_atoms", format!(r#"{{"front":{atom},"kinds":["formula","formula"]}}"#)),
+        ("one_atom", format!(r#"{{"front":{atom},"kinds":["formula"]}}"#)),
+        ("none", r#"{"front":null,"kinds":[]}"#.to_string()),
+    ];
+    for (name, proof) in &proofs {
+        std::fs::write(dir.path().join(format!("{name}.json")), proof).unwrap();
+    }
+    let script = dir.path().join("fake-easycrypt");
+    std::fs::write(
+        &script,
+        format!(
+            r#"#!/bin/sh
+d='{}'; n=0; g=none
+ans() {{ n=$((n+1)); printf '{{"version":"domino-json/2","state":%s,"status":"ok","messages":[],"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
+err() {{ printf '{{"version":"domino-json/2","state":%s,"status":"error","messages":[],"error":{{"msg":"no"}},"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
+while IFS= read -r line; do
+  case "$line" in
+    start.) g=two; ans;;
+    admit.) case $g in two) g=prog;; prog) g=none;; two_atoms) g=one_atom;; *) g=none;; esac; ans;;
+    auto.) ans;;
+    "move => &1 &2 hpre.") g=conj; ans;;
+    split.) g=two_atoms; ans;;
+    *) err;;
+  esac
+done
+"#,
+            dir.path().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let side = serde_json::json!({"head": {"kind": "return", "label": 1}, "consumed": []});
+    let nodes: Vec<_> = ["unreachable", "terminal-pair"]
+        .iter()
+        .enumerate()
+        .map(|(index, kind)| {
+            serde_json::json!({"index": index, "kind": kind, "left": side, "right": side,
+                               "answers": [], "children": []})
+        })
+        .collect();
+    let tree: JointTree = serde_json::from_value(serde_json::json!({ "nodes": nodes })).unwrap();
+    let outcome = crate::debug::lockstep::LockstepOutcome {
+        tree,
+        pairs: vec![],
+        stuck: vec![],
+        stop_reason: crate::debug::driver::StopReason::Completed,
+    };
+    let tree = super::driver::OracleTree::new(&outcome);
+    let mut session = Session::start_with(&script, dir.path()).unwrap();
+    let sink = TestSink::new(usize::MAX);
+    session.set_transcript_sink(
+        Box::new(sink.clone()),
+        &dir.path().join("ec-transcript.jsonl"),
+        EcTranscriptMode::Capped,
+        "Eq.ec",
+    );
+    assert_eq!(session.send("start.").unwrap().status, crate::easycrypt::json::Status::Ok);
+    let mut prover = super::driver::Prover {
+        session: &mut session,
+        script: Default::default(),
+        tree: &tree,
+        hints: &[],
+        unfold_ops: &["inv".to_string()],
+        timeouts: Timeouts {
+            general: Duration::from_secs(10),
+            quick_close: Duration::from_secs(10),
+        },
+        quick_close: true,
+        oracle: "O",
+        leaf_budget: None,
+        deadline: None,
+        stats: OracleStats::default(),
+        live: None,
+        checkpoint: None,
+        per_sentence: false,
+        node: None,
+        mismatches: vec![],
+        stopped: None,
+        resume: None,
+    };
+    prover.prove_node(0).unwrap();
+    prover.prove_node(1).unwrap();
+    assert_eq!(prover.stats.admits.len(), 3);
+
+    let said: Vec<String> = sink
+        .text()
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|r| r["ctx"]["oracle"] == "O" && r.get("sentence").is_some())
+        .map(|r| {
+            let c = &r["ctx"];
+            assert!(r["bytes"].as_u64().unwrap() > 0, "{r}");
+            let sentence = r["sentence"].as_str().unwrap();
+            let mut s = format!("N{} {} {sentence}", c["node"], c["role"].as_str().unwrap());
+            if let Some(n) = c.get("n") {
+                s += &format!(" #{n}");
+            }
+            if let Some(part) = c.get("part") {
+                s += &format!(" [{}]", part.as_str().unwrap());
+            }
+            s
+        })
+        .collect();
+    let hints = "smt(get_setE mem_set emptyE).";
+    let expected = [
+        "N0 quick-close auto => /#.".to_string(),
+        "N0 structure exfalso; smt().".to_string(),
+        "N0 admit admit.".to_string(),
+        "N1 leaf-fallback auto => /> &1 &2 *; smt(). #1".to_string(),
+        "N1 leaf-fallback sp. #2".to_string(),
+        format!("N1 leaf-fallback auto => /> &1 &2 *; {hints} #3"),
+        "N1 reduce sp.".to_string(),
+        "N1 reduce auto.".to_string(),
+        "N1 reduce move => &1 &2 hpre.".to_string(),
+        "N1 split split.".to_string(),
+        "N1 part-fallback smt(). #1 [equal-output]".to_string(),
+        "N1 part-fallback rewrite !get_set_neqE. #2 [equal-output]".to_string(),
+        format!("N1 part-fallback {hints} #3 [equal-output]"),
+        "N1 admit admit. [equal-output]".to_string(),
+        "N1 part-fallback smt(). #1 [equal-output+invariant]".to_string(),
+        "N1 part-fallback rewrite !get_set_neqE. #2 [equal-output+invariant]".to_string(),
+        format!("N1 part-fallback {hints} #3 [equal-output+invariant]"),
+        "N1 admit admit.".to_string(),
+    ];
+    assert_eq!(said, expected);
 }

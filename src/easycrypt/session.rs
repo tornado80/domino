@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 use super::json::{self, Goal, GoalKind, Proof, Response, Status, FORMAT_VERSION};
-use super::transcript::{self, EcTranscriptMode};
+use super::transcript::{self, EcTranscriptMode, Event, Role, SentenceCtx};
 
 /// The environment variable naming the `-json`-capable EasyCrypt binary.
 pub const ENV_VAR: &str = "DOMINO_EASYCRYPT";
@@ -44,6 +44,10 @@ const INTERRUPT_GRACE: Duration = Duration::from_secs(30);
 /// [`INTERRUPT_GRACE`]. A signal that lands after the sentence finished, or between sentences,
 /// is never answered (**Interrupt** in `CONTEXT.md`), so a second one never makes a second line.
 const INTERRUPT_RESEND: Duration = Duration::from_secs(5);
+
+/// The shortest Domino time between two sentences that gets its own `between` record; shorter
+/// gaps are added to the next one (story 56).
+const BETWEEN_MIN: Duration = Duration::from_millis(100);
 
 /// How long reading the goals again may take ([`Session::send`] on an answer that lost them).
 const REREAD_TIMEOUT: Duration = Duration::from_secs(120);
@@ -135,6 +139,9 @@ pub enum SessionEvent<'a> {
     /// Writing the transcript failed under [`EcTranscriptMode::Capped`]: no record is written
     /// from this sentence on (story 31 §3.3). Sent once, before that sentence's `Answered`.
     TranscriptDropped { path: &'a Path, cause: &'a str },
+    /// An event record of `record_bytes` was written ([`transcript::event`]): it is in the
+    /// file, between the sentence records, and is not a sentence.
+    EventRecorded { record_bytes: usize },
 }
 
 /// How often a running sentence is reported to the observer as [`SessionEvent::Waiting`].
@@ -158,6 +165,8 @@ pub struct Session {
     /// [`INTERRUPT_GRACE`] and [`INTERRUPT_RESEND`], shorter in tests.
     interrupt_grace: Duration,
     interrupt_resend: Duration,
+    /// Why the next sentence is sent ([`Session::set_context`]).
+    context: SentenceCtx,
 }
 
 /// How waiting for an answer ended.
@@ -183,8 +192,50 @@ struct TranscriptSink {
     path: PathBuf,
     mode: EcTranscriptMode,
     tag: String,
-    /// What the caller says it is working on; written with every record.
-    context: String,
+    clock: Clock,
+}
+
+/// How the `ms` of the records account for the time of one oracle (story 56): every record's
+/// `ms` is cut from one running total, so that the rounding to milliseconds does not add up
+/// over thousands of records, and the time between two sentences goes into `between` records.
+#[derive(Default)]
+struct Clock {
+    /// The time written into records so far.
+    written: Duration,
+    /// Up to when the time is accounted for: the last answer. `None` before the first sentence
+    /// of an oracle: the time before it is not the oracle's.
+    until: Option<Instant>,
+    /// Gaps shorter than [`BETWEEN_MIN`] not written yet.
+    pending: Duration,
+}
+
+impl Clock {
+    /// The `ms` of a record for `took`: its share of the running total, never less than
+    /// `took`'s own whole milliseconds.
+    fn ms(&mut self, took: Duration) -> u128 {
+        let before = self.written.as_millis();
+        self.written += took;
+        self.written.as_millis() - before
+    }
+
+    /// The Domino time before a sentence sent at `now`, once it is [`BETWEEN_MIN`] or more with
+    /// the gaps before it.
+    fn between(&mut self, now: Instant) -> Option<Duration> {
+        self.pending += now.saturating_duration_since(self.until?);
+        if self.pending < BETWEEN_MIN {
+            return None;
+        }
+        Some(std::mem::take(&mut self.pending))
+    }
+
+    /// The end of an oracle's time at `now`: its Domino time since the last answer, the short
+    /// gaps not written yet included, whatever its length. `None` before its first answer. The
+    /// time up to the next oracle's first sentence is no oracle's.
+    fn end(&mut self, now: Instant) -> Option<Duration> {
+        let until = self.until.take()?;
+        let tail = std::mem::take(&mut self.pending) + now.saturating_duration_since(until);
+        Some(tail).filter(|t| !t.is_zero())
+    }
 }
 
 /// The binary a session will run: `DOMINO_EASYCRYPT`, else `easycrypt`.
@@ -258,6 +309,7 @@ impl Session {
             stop: None,
             interrupt_grace: INTERRUPT_GRACE,
             interrupt_resend: INTERRUPT_RESEND,
+            context: SentenceCtx::default(),
         };
         session.check_capability()?;
         Ok(session)
@@ -326,7 +378,7 @@ impl Session {
             path: path.to_path_buf(),
             mode,
             tag: tag.to_string(),
-            context: String::new(),
+            clock: Clock::default(),
         });
     }
 
@@ -400,12 +452,23 @@ impl Session {
         }
     }
 
-    /// A free-form note (the oracle and joint node being worked on) that goes into every later
-    /// transcript record as `"ctx"`. Without a transcript sink it is ignored.
-    pub fn set_context(&mut self, context: &str) {
-        if let Some(sink) = &mut self.sink {
-            sink.context = context.to_string();
+    /// Why the later sentences are sent, until the next call: every later transcript record's
+    /// `"ctx"`. A context of another oracle ends the time of the one before: the Domino time
+    /// since its last answer is its last `between` record. The error is a failed write of that
+    /// record under [`EcTranscriptMode::Full`].
+    pub fn set_context(&mut self, context: SentenceCtx) -> Result<(), SessionError> {
+        if context.oracle != self.context.oracle {
+            let now = Instant::now();
+            if let Some(tail) = self.sink.as_mut().and_then(|s| s.clock.end(now)) {
+                self.write_event(Event::Between, tail)?;
+            }
         }
+        self.context = context;
+        Ok(())
+    }
+
+    pub fn context(&self) -> &SentenceCtx {
+        &self.context
     }
 
     /// The current per-sentence timeout.
@@ -440,16 +503,20 @@ impl Session {
     /// [`Session::send`]; `stoppable`: a stop request interrupts the sentence.
     fn exchange(&mut self, sentence: &str, stoppable: bool) -> Result<&Response, SessionError> {
         let began = Instant::now();
+        if let Some(gap) = self.sink.as_mut().and_then(|s| s.clock.between(began)) {
+            self.write_event(Event::Between, gap)?;
+        }
         // a stop known before the sentence was sent is the caller's to act on
         let stoppable = stoppable && !self.stop_requested();
         self.notify(&SessionEvent::Sending { sentence });
         self.write_line(sentence)?;
-        let (line, timed_out, interrupts) = match self.wait_line(sentence, began, stoppable) {
-            Wait::Line(line) => (line, false, 0),
+        let (line, timed_out, interrupts, ran) = match self.wait_line(sentence, began, stoppable) {
+            Wait::Line(line) => (line, false, 0, began.elapsed()),
             Wait::TimedOut | Wait::Stopped => {
                 let timed_out = !self.stop_requested();
+                let ran = began.elapsed();
                 let (line, interrupts) = self.interrupt_until_answered(sentence)?;
-                (line, timed_out, interrupts)
+                (line, timed_out, interrupts, ran)
             }
             Wait::Closed => {
                 return Err(SessionError::Closed {
@@ -458,7 +525,7 @@ impl Session {
             }
         };
         let line = line?;
-        let record_bytes = self.write_record(sentence, began.elapsed(), interrupts, &line.raw)?;
+        let record_bytes = self.write_record(sentence, ran, interrupts, &line.raw)?;
         let mut response = line.parsed.map_err(|source| SessionError::BadAnswer {
             sentence: sentence.to_string(),
             source,
@@ -501,7 +568,7 @@ impl Session {
     /// Interrupts the running sentence and waits for its answer, sending the interrupt again
     /// every [`INTERRUPT_RESEND`] until the answer comes or [`INTERRUPT_GRACE`] has passed since
     /// the first: the answer and how many signals it took, else
-    /// [`SessionError::Unresponsive`].
+    /// [`SessionError::Unresponsive`]. Either way the wait is an `interrupt` event record.
     fn interrupt_until_answered(
         &mut self,
         sentence: &str,
@@ -509,23 +576,27 @@ impl Session {
         let began = Instant::now();
         let deadline = began + self.interrupt_grace;
         let mut signals = 0;
-        loop {
+        let line = loop {
             self.interrupt()?;
             signals += 1;
             let now = Instant::now();
             let until = (now + self.interrupt_resend).min(deadline);
             match self.lines.recv_timeout(until.saturating_duration_since(now)) {
-                Ok(line) => return Ok((line, signals)),
+                Ok(line) => break Some(line),
                 Err(RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
                 // an EasyCrypt that died on the interrupt did not answer it either
-                Err(_) => {
-                    return Err(SessionError::Unresponsive {
-                        sentence: sentence.to_string(),
-                        signals,
-                        waited: began.elapsed(),
-                    })
-                }
+                Err(_) => break None,
             }
+        };
+        let waited = began.elapsed();
+        self.write_event(Event::Interrupt { resends: signals - 1 }, waited)?;
+        match line {
+            Some(line) => Ok((line, signals)),
+            None => Err(SessionError::Unresponsive {
+                sentence: sentence.to_string(),
+                signals,
+                waited,
+            }),
         }
     }
 
@@ -549,25 +620,58 @@ impl Session {
     }
 
     /// Appends the record of one exchange to the transcript sink, if any, and returns its size.
+    /// `ran`: from the send to the answer, or to the first interrupt (the rest is the
+    /// interrupt's event record).
     fn write_record(
         &mut self,
         sentence: &str,
-        elapsed: Duration,
+        ran: Duration,
         interrupts: usize,
         answer: &str,
     ) -> Result<Option<usize>, SessionError> {
         let Some(sink) = &mut self.sink else {
             return Ok(None);
         };
+        sink.clock.until = Some(Instant::now());
+        let ms = sink.clock.ms(ran);
         let record = transcript::record(
             sink.mode,
             &sink.tag,
-            &sink.context,
+            &self.context,
             sentence,
-            elapsed.as_millis(),
+            ms,
             interrupts,
             answer,
         );
+        self.append(&record)
+    }
+
+    /// Appends an event record of `took` to the transcript sink, if any, in the current
+    /// context, and tells the observer.
+    fn write_event(&mut self, event: Event, took: Duration) -> Result<(), SessionError> {
+        let Some(sink) = &mut self.sink else {
+            return Ok(());
+        };
+        let ms = sink.clock.ms(took);
+        let record = transcript::event(&sink.tag, &self.context, event, ms);
+        if let Some(record_bytes) = self.append(&record)? {
+            self.notify(&SessionEvent::EventRecorded { record_bytes });
+        }
+        Ok(())
+    }
+
+    /// Records that this session replaced one that left an interrupt unanswered, `took` after
+    /// the old one was given up: a `respawn` event record in the current context.
+    pub fn record_respawn(&mut self, took: Duration) -> Result<(), SessionError> {
+        self.write_event(Event::Respawn, took)
+    }
+
+    /// Writes `record` to the sink and returns its size; `None` when there is no sink, or when
+    /// a capped transcript's write failed and the sink was dropped.
+    fn append(&mut self, record: &str) -> Result<Option<usize>, SessionError> {
+        let Some(sink) = &mut self.sink else {
+            return Ok(None);
+        };
         let Err(source) = sink.writer.write_all(record.as_bytes()) else {
             return Ok(Some(record.len()));
         };
@@ -594,8 +698,14 @@ impl Session {
 
     /// Returns to the state whose answer said `state` (`undo <state>.`). A stop request does
     /// not interrupt it: rolling back is how a caller gets to a consistent state to stop in.
+    ///
+    /// Its record's role is `undo`, with the node of the context it takes back.
     pub fn undo_to(&mut self, state: u64) -> Result<&Response, SessionError> {
-        self.exchange(&format!("undo {state}."), false)
+        let context = self.context.with_role(Role::Undo);
+        let saved = std::mem::replace(&mut self.context, context);
+        let answered = self.exchange(&format!("undo {state}."), false).map(|_| ());
+        self.context = saved;
+        answered.map(|()| &self.transcript.last().expect("just answered").response)
     }
 
     /// Sends one `SIGINT` to the process: the running sentence is answered `interrupted` and the
@@ -804,6 +914,7 @@ pub(crate) mod tests {
                     format!("answered {sentence} {}", record_bytes.is_some())
                 }
                 SessionEvent::TranscriptDropped { .. } => "dropped".to_string(),
+                SessionEvent::EventRecorded { .. } => "event".to_string(),
             })
         }));
         session.send("quick.").unwrap();
@@ -1012,9 +1123,35 @@ done
         assert_eq!(session.send("quick.").unwrap().status, Status::Ok);
         assert_eq!(session.send("slow.").unwrap().status, Status::Interrupted);
         let records = records(&sink);
-        assert_eq!(records.len(), 2);
-        assert!(records[0].get("interrupts").is_none(), "{:?}", records[0]);
-        assert_eq!(records[1]["interrupts"], 3, "{:?}", records[1]);
+        let events: Vec<_> = records
+            .iter()
+            .filter(|r| r.get("event").is_some())
+            .collect();
+        let sentences: Vec<_> = records
+            .iter()
+            .filter(|r| r.get("sentence").is_some())
+            .collect();
+        assert_eq!(sentences.len(), 2);
+        assert!(
+            sentences[0].get("interrupts").is_none(),
+            "{:?}",
+            sentences[0]
+        );
+        assert_eq!(sentences[1]["interrupts"], 3, "{:?}", sentences[1]);
+        let [interrupt] = events.as_slice() else {
+            panic!("{records:?}")
+        };
+        assert_eq!(
+            (&interrupt["event"], &interrupt["resends"]),
+            (&"interrupt".into(), &2.into())
+        );
+        // the sentence ran 200 ms to its first interrupt; two more signals 200 ms apart
+        assert!(
+            sentences[1]["ms"].as_u64().unwrap() < 350,
+            "{:?}",
+            sentences[1]
+        );
+        assert!(interrupt["ms"].as_u64().unwrap() >= 400, "{interrupt:?}");
         // and the session goes on
         assert_eq!(session.send("quick.").unwrap().state, 4);
     }
@@ -1035,7 +1172,16 @@ done
         assert!(waited >= Duration::from_millis(1_300), "{waited:?}");
         assert!(waited < Duration::from_millis(2_500), "{waited:?}");
         assert!(err.to_string().contains("6 signals"), "{err}");
-        assert!(sink.text().is_empty(), "no answer, no record");
+        // no answer, no sentence record: only the wait for one
+        let records = records(&sink);
+        let [interrupt] = records.as_slice() else {
+            panic!("{records:?}")
+        };
+        assert_eq!(interrupt["event"], "interrupt");
+        assert_eq!(interrupt["resends"], 5);
+        assert!(interrupt.get("sentence").is_none() && interrupt.get("response").is_none());
+        let ms = interrupt["ms"].as_u64().unwrap();
+        assert!((1_000..2_000).contains(&ms), "the grace: {ms}");
     }
 
     #[test]
@@ -1055,7 +1201,90 @@ done
         assert_eq!((r.status, r.state), (Status::Ok, 3));
         let r = session.send("quick.").unwrap();
         assert_eq!((r.status, r.state), (Status::Ok, 4));
-        assert_eq!(records(&sink)[0]["interrupts"], 1);
+        let records = records(&sink);
+        let slow = records.iter().find(|r| r["sentence"] == "slow.").unwrap();
+        assert_eq!(slow["interrupts"], 1);
+    }
+
+    /// Domino's own time between sentences (story 56): a gap of 100 ms or more is a `between`
+    /// record in the context of the next sentence; shorter gaps are added to the next one; an
+    /// `undo` is sent for role `undo` at the same node.
+    #[test]
+    fn domino_time_between_sentences_is_recorded_and_undo_has_its_role() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = interrupt_fake(dir.path(), "      ans ok");
+        let (mut session, sink) = interrupt_session(&script, dir.path());
+        let at = |role| SentenceCtx {
+            oracle: Some("O".into()),
+            node: Some((3, "leaf".into())),
+            role,
+        };
+        session.set_context(at(Role::Structure)).unwrap();
+        session.send("a.").unwrap();
+        std::thread::sleep(Duration::from_millis(60));
+        session.send("b.").unwrap();
+        std::thread::sleep(Duration::from_millis(60));
+        session.set_context(at(Role::LeafFallback(2))).unwrap();
+        session.send("c.").unwrap();
+        session.undo_to(1).unwrap();
+        assert_eq!(
+            session.context(),
+            &at(Role::LeafFallback(2)),
+            "the role is back"
+        );
+        let records = records(&sink);
+        let kinds: Vec<String> = records
+            .iter()
+            .map(|r| match r.get("event") {
+                Some(e) => e.as_str().unwrap().to_string(),
+                None => r["sentence"].as_str().unwrap().to_string(),
+            })
+            .collect();
+        assert_eq!(kinds, ["a.", "b.", "between", "c.", "undo 1."]);
+        let between = &records[2];
+        assert_eq!(between["ctx"]["role"], "leaf-fallback");
+        assert_eq!(between["ctx"]["n"], 2);
+        assert!(between["ms"].as_u64().unwrap() >= 100, "{between}");
+        assert_eq!(records[4]["ctx"]["role"], "undo");
+        assert_eq!(records[4]["ctx"]["node"], 3);
+    }
+
+    /// The `ms` of all records of one oracle add up to its wall time: its sentences, the
+    /// interrupts, and Domino's time between and after them.
+    #[test]
+    fn the_records_account_for_all_the_time_of_an_oracle() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = interrupt_fake(
+            dir.path(),
+            "      while [ $k -lt 2 ]; do sleep 0.02; done; ans interrupted",
+        );
+        let (mut session, sink) = interrupt_session(&script, dir.path());
+        session
+            .set_context(SentenceCtx {
+                oracle: Some("O".into()),
+                ..SentenceCtx::default()
+            })
+            .unwrap();
+        let began = Instant::now();
+        for _ in 0..3 {
+            session.send("quick.").unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            session.send("slow.").unwrap();
+        }
+        // Domino's work after the last answer is the oracle's too, up to the next oracle
+        std::thread::sleep(Duration::from_millis(80));
+        session.set_context(SentenceCtx::default()).unwrap();
+        let wall = began.elapsed().as_millis() as u64;
+        let records = records(&sink);
+        assert_eq!(records.last().unwrap()["event"], "between", "{records:?}");
+        let sum: u64 = records
+            .iter()
+            .map(|r| r["ms"].as_u64().unwrap())
+            .sum();
+        assert!(
+            sum <= wall && sum * 100 >= wall * 98,
+            "sum {sum} ms, wall {wall} ms"
+        );
     }
 
     /// A stand-in EasyCrypt that answers every line with the contents of `answer`.
@@ -1130,14 +1359,24 @@ done
         let answer = crate::easycrypt::transcript::tests::answer_with_goals(10, 50_000);
         let sink = TestSink::new(usize::MAX);
         let mut session = fake_session(dir.path(), &answer, &sink, EcTranscriptMode::Capped);
-        session.set_context("O N0");
+        session
+            .set_context(SentenceCtx {
+                oracle: Some("O".into()),
+                node: Some((0, "leaf".into())),
+                role: Role::Reduce,
+            })
+            .unwrap();
         let response = session.send("auto.").unwrap();
         assert_eq!(response.proof.as_ref().unwrap().kinds.len(), 10, "the session sees them all");
         let text = sink.text();
         assert_eq!(text.lines().count(), 1);
         let record: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(record["file"], "Eq.ec");
-        assert_eq!(record["ctx"], "O N0");
+        assert_eq!(
+            record["ctx"],
+            serde_json::json!({"oracle": "O", "node": 0, "kind": "leaf", "role": "reduce"})
+        );
+        assert_eq!(record["bytes"], answer.trim_end().len());
         assert_eq!(record["sentence"], "auto.");
         let (capped, full) = (&record["response"], serde_json::from_str::<serde_json::Value>(&answer).unwrap());
         for key in ["version", "state", "status", "error", "messages"] {
@@ -1162,8 +1401,9 @@ done
         assert_eq!(
             text,
             format!(
-                "{{\"file\":\"Eq.ec\",\"ctx\":\"\",\"sentence\":\"split.\",\"ms\":{},\"response\":{}}}\n",
+                "{{\"file\":\"Eq.ec\",\"ctx\":{{\"oracle\":null,\"role\":\"structure\"}},\"sentence\":\"split.\",\"ms\":{},\"bytes\":{},\"response\":{}}}\n",
                 ms["ms"],
+                answer.trim_end().len(),
                 answer.trim_end()
             )
         );

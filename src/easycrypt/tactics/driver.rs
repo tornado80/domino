@@ -24,6 +24,7 @@ use crate::debug::lockstep::{
 };
 use crate::easycrypt::json::{Goal, GoalKind, Status};
 use crate::easycrypt::session::{Session, SessionError};
+use crate::easycrypt::transcript::{Role, SentenceCtx};
 
 use super::goals;
 use super::live::{Closing, LiveHandle};
@@ -687,6 +688,32 @@ impl Prover<'_> {
         result
     }
 
+    /// Runs `f` with its sentences sent for `role` (the transcript's `ctx`, story 56), at the
+    /// same oracle and node; the role before is back afterwards, also on an error.
+    fn as_role<T>(&mut self, role: Role, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        let context = self.session.context().with_role(role);
+        self.in_context(context, f)
+    }
+
+    /// Runs `f` in `context`; the context before is back afterwards.
+    fn in_context<T>(&mut self, context: SentenceCtx, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        let saved = self.session.context().clone();
+        self.session.set_context(context)?;
+        let result = f(self);
+        let restored = self.session.set_context(saved);
+        let value = result?;
+        restored.map(|()| value)
+    }
+
+    /// The context of joint node `idx`: its structure, until a closing attempt says otherwise.
+    fn node_context(&self, idx: usize) -> SentenceCtx {
+        SentenceCtx {
+            oracle: Some(self.oracle.to_string()),
+            node: Some((idx, self.tree.node(idx).kind.as_str().to_string())),
+            role: Role::Structure,
+        }
+    }
+
     /// Runs `f` as the block of the next subgoal: its first sentence gets the bullet.
     fn bullet<T>(&mut self, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
         self.script.enter_bullet(self.count());
@@ -701,6 +728,31 @@ impl Prover<'_> {
 
     /// Closes the front goal with a labelled `admit`.
     fn admit(&mut self, reason: AdmitReason, id: &str, claim: &str, domino: DominoView) -> R<()> {
+        self.admit_of_part(&Part::Whole, reason, id, claim, domino)
+    }
+
+    /// [`Self::admit`] of `part` of a leaf's claims (the whole claim is no part).
+    fn admit_of_part(
+        &mut self,
+        part: &Part,
+        reason: AdmitReason,
+        id: &str,
+        claim: &str,
+        domino: DominoView,
+    ) -> R<()> {
+        let role = Role::Admit {
+            part: (*part != Part::Whole).then(|| part.claim_label()),
+        };
+        self.as_role(role, |p| p.send_admit(reason, id, claim, domino))
+    }
+
+    fn send_admit(
+        &mut self,
+        reason: AdmitReason,
+        id: &str,
+        claim: &str,
+        domino: DominoView,
+    ) -> R<()> {
         let goal_pp = self
             .front()
             .map(|g| g.concl.pp.replace('\n', " "))
@@ -774,7 +826,7 @@ impl Prover<'_> {
             DominoView::Verified => AdmitReason::DominoVerifiedEcFailed,
         };
         let id = self.id_below(node, part, view);
-        self.admit(reason, &id, claim, view)
+        self.admit_of_part(part, reason, &id, claim, view)
     }
 
     // ------------------------------------------------------------------
@@ -863,18 +915,24 @@ impl Prover<'_> {
     /// The fallback sequence (§3.5): `smt()`, then the same with the premise introduced and the
     /// invariant unfolded in it (`/#` on a quantified goal), then the hint list likewise.
     fn fallbacks(&mut self) -> R<bool> {
-        self.reduce_to_ambient()?;
+        self.as_role(Role::Reduce, Self::reduce_to_ambient)?;
         let hints = self.hint_sentence();
         for (i, tail) in ["smt().", hints.as_str()].into_iter().enumerate() {
             let k = 2 * i + 1;
             let shown = tail.trim_end_matches('.');
             let plain = Closing::Fallback { k, of: FALLBACKS };
-            if self.closing_attempt(plain, shown, |p| p.try_close(&[tail]))? {
+            let closed = self.as_role(Role::SideGoalFallback(k), |p| {
+                p.closing_attempt(plain, shown, |p| p.try_close(&[tail]))
+            })?;
+            if closed {
                 return Ok(true);
             }
             let unfolded = Closing::Fallback { k: k + 1, of: FALLBACKS };
             let shown = format!("{shown} (premise unfolded)");
-            if self.closing_attempt(unfolded, &shown, |p| p.try_with_premise(tail))? {
+            let closed = self.as_role(Role::SideGoalFallback(k + 1), |p| {
+                p.closing_attempt(unfolded, &shown, |p| p.try_with_premise(tail))
+            })?;
+            if closed {
                 return Ok(true);
             }
         }
@@ -900,8 +958,10 @@ impl Prover<'_> {
 
     /// `auto => /#.` as a closing attempt.
     fn try_quick_close(&mut self) -> R<bool> {
-        self.closing_attempt(Closing::QuickClose, "auto => /#", |p| {
-            p.try_close(&["auto => /#."])
+        self.as_role(Role::QuickClose, |p| {
+            p.closing_attempt(Closing::QuickClose, "auto => /#", |p| {
+                p.try_close(&["auto => /#."])
+            })
         })
     }
 
@@ -965,11 +1025,12 @@ impl Prover<'_> {
         let parent = self.node.replace(idx);
         let start = self.script.node_start(idx);
         let admits_before = self.stats.admits.len();
-        let result = match self.keep_node(idx) {
+        let context = self.node_context(idx);
+        let result = self.in_context(context, |p| match p.keep_node(idx) {
             Ok(true) => Ok(()),
-            Ok(false) => self.prove_node_inner(idx),
+            Ok(false) => p.prove_node_inner(idx),
             Err(e) => Err(e),
-        };
+        });
         self.node = parent;
         if result.is_ok() {
             let admits = self.stats.admits[admits_before..]
@@ -1020,26 +1081,23 @@ impl Prover<'_> {
             reached(self);
             return Ok(false);
         };
-        let kind = self.tree.node(idx).kind.as_str();
-        self.session
-            .set_context(&format!("{} N{idx} {kind} ({})", self.oracle, mode.slug()));
         // a stop before the node is kept or proved again leaves it closed, for the seal
-        let kept = match mode {
-            ResumeMode::Replay => self.replay(idx, &closed)?,
+        let kept = self.as_role(Role::Resume, |p| match mode {
+            ResumeMode::Replay => p.replay(idx, &closed),
             ResumeMode::Trust => {
-                if !self.send_unscripted("admit.", "kept")? {
+                if !p.send_unscripted("admit.", "kept")? {
                     // interrupted by a stop request
-                    self.stop_point()?;
+                    p.stop_point()?;
                     // `admit.` closes any goal: a refusal means there is none, and the walk is lost
                     return Err(SessionError::Refused {
                         sentence: "admit.".into(),
                         msg: format!("no goal for kept node N{idx}"),
                     });
                 }
-                true
+                Ok(true)
             }
             ResumeMode::Restart => unreachable!("restart does not resume"),
-        };
+        })?;
         reached(self);
         if !kept {
             return Ok(false);
@@ -1110,8 +1168,6 @@ impl Prover<'_> {
     fn prove_node_inner(&mut self, idx: usize) -> R<()> {
         let tree = self.tree;
         let node = tree.node(idx);
-        self.session
-            .set_context(&format!("{} N{idx} {}", self.oracle, node.kind.as_str()));
 
         // §3.6: a claim that fails in Domino is not worth EasyCrypt's time
         if let Some(pair) = tree.pairs_below(idx).next() {
@@ -1434,8 +1490,8 @@ impl Prover<'_> {
             // `if`; then with the project's hints
             let attempts: [Vec<&str>; 3] =
                 [vec![fast], vec!["sp.", fast], vec![with_hints.as_str()]];
-            for steps in &attempts {
-                if self.try_close(steps)? {
+            for (n, steps) in (1..).zip(&attempts) {
+                if self.as_role(Role::LeafFallback(n), |p| p.try_close(steps))? {
                     return Ok(());
                 }
             }
@@ -1444,22 +1500,30 @@ impl Prover<'_> {
         // router's tail `if`, then `skip` leaves `forall &1 &2, pre => post` with `post`
         // (`equal-output /\ inv …`) as the program wrote it. A tail that `sp` cannot decide is
         // handled by `auto.` instead, whose wp turns it into an `if` inside the formula.
-        let before = self.count();
         let premise = "hpre";
+        if !self.as_role(Role::Reduce, |p| p.reduce_leaf(premise))? {
+            return self.admit_ec_failed(node, &Part::Whole, "equal-output+invariant");
+        }
+        self.deadline = leaf_deadline(self.leaf_budget, std::time::Instant::now());
+        let result = self.as_role(Role::Split, |p| p.solve_ambient(node, pair, Part::Whole));
+        self.deadline = None;
+        result
+    }
+
+    /// Turns the leaf's program goal into `forall &1 &2, pre => post`, the premise introduced as
+    /// `premise` and the invariant unfolded in it: whether it did.
+    fn reduce_leaf(&mut self, premise: &str) -> R<bool> {
+        let before = self.count();
         let reduced = self.attempt(&["sp.", &format!("skip => &1 &2 {premise}.")], |p| {
             p.count() == before && p.front().is_some_and(goals::is_ambient)
         })? || self
             .attempt(&["auto.", &format!("move => &1 &2 {premise}.")], |p| {
                 p.count() == before && p.front().is_some_and(goals::is_ambient)
             })?;
-        if !reduced {
-            return self.admit_ec_failed(node, &Part::Whole, "equal-output+invariant");
+        if reduced {
+            self.unfold_premise(premise)?;
         }
-        self.unfold_premise(premise)?;
-        self.deadline = leaf_deadline(self.leaf_budget, std::time::Instant::now());
-        let result = self.solve_ambient(node, pair, Part::Whole);
-        self.deadline = None;
-        result
+        Ok(reduced)
     }
 
     /// Takes the front ambient goal apart along the JSON of its formula: binders and premises
@@ -1515,7 +1579,8 @@ impl Prover<'_> {
             // §3.6: a part that fails in Domino is admitted without spending EasyCrypt time
             if let Some(p) = pair {
                 if !matches!(part, Part::Whole) && pair_view(p, &part) == DominoView::Fails {
-                    return self.admit(
+                    return self.admit_of_part(
+                        &part,
                         AdmitReason::DominoFails,
                         &p.id,
                         &part.claim_label(),
@@ -1568,12 +1633,16 @@ impl Prover<'_> {
     /// keeps the unfoldings and introductions already made.
     fn atom(&mut self, node: usize, pair: Option<&PairRecord>, part: &Part) -> R<()> {
         let hints = self.hint_sentence();
-        for steps in [
+        for (n, steps) in (1..).zip([
             vec!["smt()."],
             vec!["rewrite !get_set_neqE.", "smt()."],
             vec![hints.as_str()],
-        ] {
-            if self.try_close(&steps)? {
+        ]) {
+            let role = Role::PartFallback {
+                n,
+                part: part.claim_label(),
+            };
+            if self.as_role(role, |p| p.try_close(&steps))? {
                 return Ok(());
             }
         }
@@ -1598,7 +1667,7 @@ impl Prover<'_> {
                     DominoView::Verified => AdmitReason::DominoVerifiedEcFailed,
                     _ => AdmitReason::DominoInconclusive,
                 };
-                self.admit(reason, &p.id, &claim, view)
+                self.admit_of_part(part, reason, &p.id, &claim, view)
             }
             None => self.admit_ec_failed(node, part, &claim),
         }
@@ -1618,7 +1687,12 @@ impl Prover<'_> {
             live.node_entered("router prelude", "router", vec![], None);
             live.node_started("router", self.tree.outcome.tree.nodes.len());
         }
-        let result = self.oracle_inner(align);
+        let prelude = SentenceCtx {
+            oracle: Some(self.oracle.to_string()),
+            node: None,
+            role: Role::Structure,
+        };
+        let result = self.in_context(prelude, |p| p.oracle_inner(align));
         if let Some(live) = &self.live {
             live.node_left();
         }
@@ -1627,8 +1701,6 @@ impl Prover<'_> {
     }
 
     fn oracle_inner(&mut self, align: impl FnOnce(&Goal) -> Vec<String>) -> R<()> {
-        self.session
-            .set_context(&format!("{} router prelude", self.oracle));
         if !self.send("proc; inline.")? {
             self.admit(
                 AdmitReason::ProgramMismatch,

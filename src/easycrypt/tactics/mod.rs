@@ -79,6 +79,7 @@ use super::job::{
 };
 use super::json::Goal;
 use super::session::{split_sentences, Session, SessionError, SessionEvent, JSON_BRANCH};
+use super::transcript::{Role, SentenceCtx};
 
 pub use super::transcript::{EcTranscriptMode, GOAL_CONCL_CAP, GOAL_HYPS_CAP};
 pub use live::{strip_timings, LiveConfig, LiveHandle};
@@ -928,7 +929,7 @@ where
             if target.as_deref().is_some_and(in_file) {
                 // proved in an earlier session or before a respawn, and its script is in the
                 // file already
-                session.send("admit.")?;
+                admit_outside(&mut session, None)?;
                 continue;
             }
             match target.filter(|o| selected(o)) {
@@ -986,7 +987,7 @@ where
                 }
                 None => {
                     // the base case (admitted above), or an oracle that was not asked for
-                    session.send("admit.")?;
+                    admit_outside(&mut session, None)?;
                 }
             }
         }
@@ -1013,6 +1014,16 @@ where
     let tactics = proof.write(None)?;
     live.equivalence_finished(&tactics);
     Ok(tactics)
+}
+
+/// Closes the front goal with `admit.` outside the walk of an oracle: for `oracle`, or for none.
+fn admit_outside(session: &mut Session, oracle: Option<&str>) -> Result<(), SessionError> {
+    session.set_context(SentenceCtx {
+        oracle: oracle.map(str::to_string),
+        node: None,
+        role: Role::Admit { part: None },
+    })?;
+    session.send("admit.").map(|_| ())
 }
 
 /// What every EasyCrypt of a proof job is started with: the first one and each respawn.
@@ -1138,6 +1149,7 @@ fn respawn(
     base: Option<&str>,
     tactics: &mut EquivalenceTactics,
 ) -> Result<Session, Interrupted> {
+    let given_up = Instant::now();
     // `Drop` kills the child without waiting on it: it may be stuck in a prover
     drop(old);
     let respawns = tactics.unanswered.len() - 1;
@@ -1169,8 +1181,17 @@ fn respawn(
         job.live
             .activity("respawning EasyCrypt and opening the proof again");
         let opened = job.start(transcript, Some(respawns + 1)).and_then(|mut session| {
+            // the respawn and the sentences sent again are the time of the oracle that caused
+            // them (story 56)
+            session.set_context(SentenceCtx {
+                oracle: Some(last.oracle.clone()),
+                node: None,
+                role: Role::Resume,
+            })?;
+            session.record_respawn(given_up.elapsed())?;
             let admitted = tactics.base_case_admitted;
             let opened = open_proof(&mut session, call_prefix, base, admitted, job.file, job.options)?;
+            session.set_context(SentenceCtx::default())?;
             Ok((session, opened))
         });
         match opened {
@@ -1178,6 +1199,13 @@ fn respawn(
                 tactics.base_case_admitted |= base_case_admitted;
                 if let Some(u) = tactics.unanswered.last_mut() {
                     u.respawn = Some(began.elapsed());
+                }
+                if let Some(o) = tactics
+                    .oracles
+                    .iter_mut()
+                    .rfind(|o| o.oracle == last.oracle)
+                {
+                    o.easycrypt_time += given_up.elapsed();
                 }
                 Ok(session)
             }
@@ -1514,7 +1542,7 @@ where
     let run = match run {
         Ok(run) => run,
         Err(source) => {
-            session.send("admit.")?;
+            admit_outside(session, Some(oracle))?;
             let mut result =
                 OracleTactics::empty(oracle, &format!("lockstep execution failed: {source}"));
             result.lockstep_time = lockstep_time;

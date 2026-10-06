@@ -4,8 +4,11 @@
 //! bounded by story 31).
 //!
 //! One record per sentence sent, one JSON object per line:
-//! `{"file": <tag>, "ctx": <the caller's note>, "sentence": …, "ms": …, "response": …}`, with
-//! `"interrupts": <n>` before `response` when the sentence took `n` > 0 interrupts to stop.
+//! `{"file": <tag>, "ctx": <why it was sent>, "sentence": …, "ms": …, "bytes": …, "response": …}`,
+//! with `"interrupts": <n>` before `response` when the sentence took `n` > 0 interrupts to stop.
+//! `ctx` is a [`SentenceCtx`]; `bytes` the length of EasyCrypt's answer before any cap. Between
+//! them are event records ([`event`]: `{"file", "ctx", "event", "ms"}`) for the time outside
+//! sentences, so that the `ms` of all records of one oracle add up to its EasyCrypt time.
 //! [`EcTranscriptMode::Full`] writes EasyCrypt's answer verbatim as `response`: the front goal
 //! in full and the kind of each open goal (`domino-json/2`, ADR 0009). [`EcTranscriptMode::Capped`]
 //! (the default) writes the same answer with its front goal cut to what the live page embeds
@@ -113,11 +116,149 @@ pub enum EcTranscriptMode {
     Full,
 }
 
-/// One transcript record, with its line break. `answer` is the line EasyCrypt answered with.
+/// Why a sentence was sent: the transcript's `"ctx"` (story 56). The driver sets it where it
+/// chooses a tactic, never from the sentence's text: the same `smt().` is a quick close, a
+/// fallback or a part fallback depending on where the walk is.
+///
+/// ```json
+/// {"oracle": "Send3", "node": 41, "kind": "leaf", "role": "leaf-fallback", "n": 2}
+/// ```
+///
+/// `oracle` is always written: `null` for a sentence that belongs to no oracle (opening the
+/// proof, and the `admit.`s between oracles). `node` and `kind` only when there is a joint
+/// node; `n` and `part` as [`Role`] says.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SentenceCtx {
+    pub oracle: Option<String>,
+    /// The joint node's index and kind slug (`None` in the router prelude).
+    pub node: Option<(usize, String)>,
+    pub role: Role,
+}
+
+/// A **Sentence role** (`CONTEXT.md`). The fallback roles carry their 1-based number in their
+/// fallback sequence (`"n"`); a part fallback, and the admit of a part, the claim's label
+/// (`"part"`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Role {
+    QuickClose,
+    #[default]
+    Structure,
+    SideGoalFallback(usize),
+    LeafFallback(usize),
+    Reduce,
+    Split,
+    PartFallback {
+        n: usize,
+        part: String,
+    },
+    Admit {
+        part: Option<String>,
+    },
+    Undo,
+    Resume,
+}
+
+impl Role {
+    pub fn slug(&self) -> &'static str {
+        match self {
+            Role::QuickClose => "quick-close",
+            Role::Structure => "structure",
+            Role::SideGoalFallback(_) => "side-goal-fallback",
+            Role::LeafFallback(_) => "leaf-fallback",
+            Role::Reduce => "reduce",
+            Role::Split => "split",
+            Role::PartFallback { .. } => "part-fallback",
+            Role::Admit { .. } => "admit",
+            Role::Undo => "undo",
+            Role::Resume => "resume",
+        }
+    }
+
+    fn n(&self) -> Option<usize> {
+        match self {
+            Role::SideGoalFallback(n) | Role::LeafFallback(n) | Role::PartFallback { n, .. } => {
+                Some(*n)
+            }
+            _ => None,
+        }
+    }
+
+    fn part(&self) -> Option<&str> {
+        match self {
+            Role::PartFallback { part, .. } => Some(part),
+            Role::Admit { part } => part.as_deref(),
+            _ => None,
+        }
+    }
+}
+
+impl SentenceCtx {
+    /// The same oracle and node, sent for `role`.
+    pub fn with_role(&self, role: Role) -> SentenceCtx {
+        SentenceCtx {
+            role,
+            ..self.clone()
+        }
+    }
+
+    /// The `"ctx"` object, its fields in the order the story gives them.
+    fn to_json(&self) -> String {
+        let mut ctx = format!(
+            "{{\"oracle\":{}",
+            serde_json::Value::from(self.oracle.as_deref())
+        );
+        if let Some((node, kind)) = &self.node {
+            ctx += &format!(
+                ",\"node\":{node},\"kind\":{}",
+                serde_json::Value::from(kind.as_str())
+            );
+        }
+        ctx += &format!(",\"role\":\"{}\"", self.role.slug());
+        if let Some(n) = self.role.n() {
+            ctx += &format!(",\"n\":{n}");
+        }
+        if let Some(part) = self.role.part() {
+            ctx += &format!(",\"part\":{}", serde_json::Value::from(part));
+        }
+        ctx + "}"
+    }
+}
+
+/// Time a tactics run spent outside any sentence, as an event record (story 56).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event {
+    /// From the first interrupt of a sentence to its answer, or to the end of the grace;
+    /// `resends`: the signals sent after the first.
+    Interrupt { resends: usize },
+    /// Killing EasyCrypt and starting a new one. The sentences sent again after it have their
+    /// own records, role `resume`.
+    Respawn,
+    /// Domino's own work between an answer and the next sentence.
+    Between,
+}
+
+/// One event record, with its line break: `{"file", "ctx", "event", "ms"}` and, for an
+/// interrupt, `"resends"`. It has no `sentence` and no `response`, which is how a reader tells
+/// it from a sentence record.
+pub fn event(tag: &str, ctx: &SentenceCtx, event: Event, ms: u128) -> String {
+    let (name, resends) = match event {
+        Event::Interrupt { resends } => ("interrupt", format!(",\"resends\":{resends}")),
+        Event::Respawn => ("respawn", String::new()),
+        Event::Between => ("between", String::new()),
+    };
+    format!(
+        "{{\"file\":{},\"ctx\":{},\"event\":\"{name}\",\"ms\":{ms}{resends}}}\n",
+        serde_json::Value::from(tag),
+        ctx.to_json(),
+    )
+}
+
+/// One sentence record, with its line break. `answer` is the line EasyCrypt answered with;
+/// `"bytes"` is its length before any cap.
 pub fn record(
     mode: EcTranscriptMode,
     tag: &str,
-    context: &str,
+    ctx: &SentenceCtx,
     sentence: &str,
     ms: u128,
     interrupts: usize,
@@ -134,10 +275,11 @@ pub fn record(
         n => format!("\"interrupts\":{n},"),
     };
     format!(
-        "{{\"file\":{},\"ctx\":{},\"sentence\":{},\"ms\":{ms},{interrupts}\"response\":{}}}\n",
+        "{{\"file\":{},\"ctx\":{},\"sentence\":{},\"ms\":{ms},\"bytes\":{},{interrupts}\"response\":{}}}\n",
         serde_json::Value::from(tag),
-        serde_json::Value::from(context),
+        ctx.to_json(),
         serde_json::Value::from(sentence),
+        answer.len(),
         capped.as_deref().unwrap_or(answer)
     )
 }
@@ -299,10 +441,15 @@ pub(crate) mod tests {
     fn a_full_record_is_the_story_27_record_byte_for_byte() {
         let answer =
             std::fs::read_to_string("testdata/easycrypt/story31/answer-two-goals.json").unwrap();
+        let ctx = SentenceCtx {
+            oracle: Some("O".into()),
+            node: Some((0, "leaf".into())),
+            role: Role::Split,
+        };
         let record = record(
             EcTranscriptMode::Full,
             "Eq.ec",
-            "O N0",
+            &ctx,
             "split.",
             12,
             0,
@@ -311,7 +458,8 @@ pub(crate) mod tests {
         assert_eq!(
             record,
             format!(
-                "{{\"file\":\"Eq.ec\",\"ctx\":\"O N0\",\"sentence\":\"split.\",\"ms\":12,\"response\":{}}}\n",
+                "{{\"file\":\"Eq.ec\",\"ctx\":{{\"oracle\":\"O\",\"node\":0,\"kind\":\"leaf\",\"role\":\"split\"}},\"sentence\":\"split.\",\"ms\":12,\"bytes\":{},\"response\":{}}}\n",
+                answer.trim_end().len(),
                 answer.trim_end()
             )
         );
@@ -321,7 +469,7 @@ pub(crate) mod tests {
     fn a_capped_record_of_a_real_answer_holds_its_front_goal_text_and_kinds() {
         let answer =
             std::fs::read_to_string("testdata/easycrypt/story31/answer-two-goals.json").unwrap();
-        let record = record(EcTranscriptMode::Capped, "Eq.ec", "", "split.", 12, 0, &answer);
+        let record = record(EcTranscriptMode::Capped, "Eq.ec", &SentenceCtx::default(), "split.", 12, 0, &answer);
         assert!(record.ends_with("}\n") && record.lines().count() == 1);
         let v: serde_json::Value = serde_json::from_str(&record).unwrap();
         let full: serde_json::Value = serde_json::from_str(&answer).unwrap();
@@ -346,10 +494,99 @@ pub(crate) mod tests {
         );
         let expected: serde_json::Value = serde_json::from_str(timing).unwrap();
         for mode in [EcTranscriptMode::Capped, EcTranscriptMode::Full] {
-            let record = record(mode, "Eq.ec", "", "smt().", 900, 0, &answer);
+            let record = record(
+                mode,
+                "Eq.ec",
+                &SentenceCtx::default(),
+                "smt().",
+                900,
+                0,
+                &answer,
+            );
             let v: serde_json::Value = serde_json::from_str(&record).unwrap();
             assert_eq!(v["response"]["timing"], expected);
         }
+    }
+
+    #[test]
+    fn a_capped_record_says_how_long_the_answer_was_before_the_cap() {
+        let answer = answer_with_goals(3, 50_000);
+        let record = record(
+            EcTranscriptMode::Capped,
+            "Eq.ec",
+            &SentenceCtx::default(),
+            "auto.",
+            5,
+            0,
+            &answer,
+        );
+        let v: serde_json::Value = serde_json::from_str(&record).unwrap();
+        assert_eq!(v["bytes"], answer.trim_end().len());
+        assert!(record.len() < answer.len());
+    }
+
+    #[test]
+    fn ctx_writes_n_only_for_fallbacks_and_part_only_for_parts() {
+        let ctx = |role: Role| {
+            let ctx = SentenceCtx {
+                oracle: Some("Send3".into()),
+                node: Some((41, "leaf".into())),
+                role,
+            };
+            let v: serde_json::Value =
+                serde_json::from_str(&event("Eq.ec", &ctx, Event::Between, 1)).unwrap();
+            v["ctx"].clone()
+        };
+        let part = "invariant/Domino_rel".to_string();
+        assert_eq!(
+            ctx(Role::PartFallback {
+                n: 2,
+                part: part.clone()
+            }),
+            serde_json::json!({"oracle": "Send3", "node": 41, "kind": "leaf",
+                               "role": "part-fallback", "n": 2, "part": part})
+        );
+        assert_eq!(ctx(Role::LeafFallback(3))["n"], 3);
+        assert_eq!(ctx(Role::SideGoalFallback(1))["n"], 1);
+        assert_eq!(
+            ctx(Role::Admit {
+                part: Some(part.clone())
+            })["part"],
+            part.as_str()
+        );
+        for role in [
+            Role::QuickClose,
+            Role::Structure,
+            Role::Admit { part: None },
+            Role::Undo,
+        ] {
+            let c = ctx(role);
+            assert!(c.get("n").is_none() && c.get("part").is_none(), "{c}");
+        }
+        let outside: serde_json::Value =
+            serde_json::from_str(&event("Eq.ec", &SentenceCtx::default(), Event::Respawn, 7))
+                .unwrap();
+        assert_eq!(
+            outside,
+            serde_json::json!({"file": "Eq.ec", "ctx": {"oracle": null, "role": "structure"},
+                               "event": "respawn", "ms": 7})
+        );
+    }
+
+    #[test]
+    fn an_interrupt_event_says_how_many_signals_were_sent_again() {
+        let v: serde_json::Value = serde_json::from_str(&event(
+            "Eq.ec",
+            &SentenceCtx::default(),
+            Event::Interrupt { resends: 2 },
+            3_100,
+        ))
+        .unwrap();
+        assert_eq!(
+            (&v["event"], &v["ms"], &v["resends"]),
+            (&"interrupt".into(), &3_100.into(), &2.into())
+        );
+        assert!(v.get("sentence").is_none() && v.get("response").is_none());
     }
 
     const RULE: &str = "--------------------------------------------------------------------------";

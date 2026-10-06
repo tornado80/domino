@@ -769,6 +769,11 @@ impl Live {
             }
             // the session warned on stderr; the steps from here on have no record
             SessionEvent::TranscriptDropped { .. } => {}
+            // in the file between the sentence records, and no step of the page
+            SessionEvent::EventRecorded { record_bytes } => {
+                self.lines += 1;
+                self.offset += *record_bytes as u64;
+            }
         }
     }
 

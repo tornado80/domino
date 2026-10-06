@@ -100,7 +100,15 @@ impl Rig {
             )),
         );
         let record_bytes = self.mode.map(|mode| {
-            let record = record(mode, "f", "", sentence, ms.into(), 0, &response);
+            let record = record(
+                mode,
+                "f",
+                &Default::default(),
+                sentence,
+                ms.into(),
+                0,
+                &response,
+            );
             self.transcript.write_all(record.as_bytes()).unwrap();
             record.len()
         });
@@ -423,6 +431,61 @@ fn a_session_whose_capped_transcript_fails_goes_on_and_the_page_renders() {
         assert!(page.contains(sentence), "{sentence}");
     }
     assert!(page.contains("goal text not embedded; the transcript was not written for this step"));
+}
+
+/// Story 56: event records between the sentence records are no steps, and every step still
+/// finds its own record (the page reads the goal text back at the record's offset).
+#[test]
+fn event_records_are_no_steps_and_every_step_finds_its_record() {
+    use crate::easycrypt::session::tests::fake_easycrypt;
+    use crate::easycrypt::session::Session;
+    use crate::easycrypt::transcript::SentenceCtx;
+    let rig = Rig::new();
+    let answer = crate::easycrypt::transcript::tests::answer_with_goals(1, 10)
+        .replace("\"status\":\"error\"", "\"status\":\"ok\"");
+    let script = fake_easycrypt(rig.dir.path(), &answer);
+    let mut session = Session::start_with(&script, rig.dir.path()).unwrap();
+    let path = rig.dir.path().join("ec-transcript.jsonl");
+    session.set_transcript_sink(
+        Box::new(rig.transcript.try_clone().unwrap()),
+        &path,
+        EcTranscriptMode::Capped,
+        "Eq_A_B.ec",
+    );
+    session.set_observer(rig.live.session_observer());
+    let oracle = SentenceCtx {
+        oracle: Some("O".into()),
+        ..SentenceCtx::default()
+    };
+    session.set_context(oracle).unwrap();
+    rig.one_oracle();
+    rig.live.node_entered("N0", "determined", vec![], Some(0));
+    let sentences = ["sp 1 1.", "if.", "auto.", "smt()."];
+    for sentence in sentences {
+        assert_eq!(session.send(sentence).unwrap().status, Status::Ok);
+        // Domino's own work: a `between` record before the next sentence
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    session.set_context(SentenceCtx::default()).unwrap();
+    rig.live.node_left();
+    rig.live.finish();
+    let lines: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.iter().filter(|r| r.get("event").is_some()).count(), 4);
+    let page = rig.page();
+    assert!(!page.contains("could not be read"), "{page}");
+    for (step, sentence) in sentences.iter().enumerate() {
+        // the records alternate: sentence, between, sentence, …
+        let line = 2 * step;
+        assert_eq!(lines[line]["sentence"], *sentence);
+        assert!(page.contains(&format!("transcript record {line} (")), "{sentence}");
+    }
+    for line in (1..lines.len()).step_by(2) {
+        assert!(!page.contains(&format!("transcript record {line} (")), "{line}");
+    }
 }
 
 #[test]
