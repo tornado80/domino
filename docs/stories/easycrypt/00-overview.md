@@ -182,11 +182,23 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 50 | "Plumbing" becomes "exit guard" | `50-exit-guards.md` | 22, 24 |
 | 51 | The progress page shows the goal, not just its context | `51-progress-page-shows-the-goal.md` | 28, 31, 41 |
 | 52 | "Rung" becomes quick close and fallbacks, and the page says what closed a node | `52-quick-close-and-fallbacks.md` | 27, 28, 40 |
+| 53 | Splitting a leaf by meaning uses the names EasyCrypt knows | `53-split-by-meaning-uses-easycrypt-names.md` | 27, 47 |
+| 54 | EasyCrypt's answers carry only the front goal (`domino-json/2`) | `54-answers-carry-only-the-front-goal.md` | 25, 27, 41, 51 |
+| 55 | Each answer says where EasyCrypt spent its time | `55-answers-say-where-easycrypt-spent-its-time.md` | 54 |
+| 56 | Each transcript record says why its sentence was sent, and the transcript accounts for all the time | `56-transcript-says-why-and-where-time-went.md` | 27, 52 |
+| 57 | The tactics report shows time by role | `57-report-shows-time-by-role.md` | 55, 56 |
 
 Stories 48–52 come from the owner's review of the debug and progress pages. They are UI-only:
 translation does not change, and the export tree is byte-identical before and after each one. 48
 comes before 49 and before symbolic-execution story 20 (the sequential report in the same grid);
 50, 51 and 52 are independent of each other and of 48.
+
+Stories 53–57 come from the eighth design session, about **where proving time goes** (the
+Full4WHS analysis of 2026-10-05). Most of the time goes to the answer EasyCrypt writes after each
+sentence, not to smt (ADR 0009), and two bugs make every split of a leaf by meaning fail. 53 (the
+two bugs, Rust only) and 54 (`domino-json/2`, OCaml and Rust) are independent; do them first. 55
+needs 54. 56 is independent of 53–55. 57 is last: it needs 55 and 56. 54, 55 and 57 each end with
+a measured Full4WHS run in their implementation report; their CI tests stay deterministic.
 
 Stories 01–05 are a walking skeleton: after 05 the 4WHS packages and games compile under
 `easycrypt compile`. 06 may be done in parallel with 05. 08 may be done in parallel with 06/07.

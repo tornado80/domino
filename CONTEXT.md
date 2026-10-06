@@ -268,6 +268,18 @@ Ctrl-C: its respawns ran out, or a respawn failed. It leaves its file and record
 (the oracle in flight sealed, the rest `pending`), but the cause is shown as its own, and the run
 goes on with the next proof job. _Avoid_: interrupted (that is a Ctrl-C).
 
+**Front goal** — the first open goal: the one the next tactic works on. EasyCrypt's answer to a
+sentence gives the front goal in full; of every other open goal it gives only the **goal kind**:
+*program* (a judgement over two programs) or *formula* (anything else). The number of open goals
+is the length of that list. _Avoid_: first goal, focused goal.
+
+**Sentence role** — why a tactics run sent a sentence: a *quick close*; *structure* (moving through
+the program: straight-line code, branches, samplings); a *side-goal fallback*; a *leaf fallback*;
+*reduce* (turning a leaf's program goal into a formula); *split* (taking a leaf apart into its
+claims); a *part fallback* (closing one claim of a leaf); an *admit*; an *undo*; a *resume*
+(sending again what an earlier run proved, to bring a closed node back). Time is reported by role.
+_Avoid_: step (the report uses "proofstep" for a hop of the theorem), rung.
+
 **Run artifact** — a file a tactics run writes *about itself* rather than as translation output:
 the live page, the EasyCrypt transcript, the per-equivalence report, the alignment report, the
 debug output of lockstep execution. Regenerated every run and never hand-edited, so unlike
@@ -275,6 +287,6 @@ translation output it may be overwritten without asking.
 
 **EasyCrypt transcript** — the record of one tactics run's exchange with EasyCrypt: every sentence
 sent, in order, with EasyCrypt's answer and how long it took. Undone attempts and the `undo`
-sentences themselves are part of it. By default each answer is **capped** to its first goal, whose conclusion and hypotheses are each cut at a fixed length (`--ec-transcript full` keeps every goal verbatim); records are only ever appended, never
+sentences themselves are part of it. By default each answer is **capped**: its front goal's conclusion and hypotheses are each cut at a fixed length (`--ec-transcript full` keeps the answer verbatim); records are only ever appended, never
 compacted, because the page reads them back by byte offset. _Distinguish_: the **solver transcript** is the raw incremental
 exchange with cvc5, a debugging aid for the debugger itself.
