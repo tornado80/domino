@@ -178,6 +178,7 @@ fn oracle_with(admits: Vec<Admit>) -> OracleTactics {
             admits,
             fallbacks: 0,
             attempts_undone: 2,
+            ..OracleStats::default()
         },
         alignment_mismatches: vec![],
         joint_paths: 2,
@@ -252,6 +253,43 @@ fn the_report_counts_admits_by_reason_and_lists_the_verified_ones_with_their_goa
         report.contains("1 oracles, 4 goals closed, 3 admits"),
         "{report}"
     );
+}
+
+/// Story 57: the time by role table is under the oracle's `goals closed` line, and the
+/// `EasyCrypt:` line follows it.
+#[test]
+fn the_report_shows_each_oracles_time_by_role_under_its_goals_closed_line() {
+    use crate::easycrypt::time_by_role::Sentence;
+    use crate::easycrypt::transcript::{Event, Role};
+    let mut o = oracle_with(vec![]);
+    let row = |role, ms, failed| Sentence {
+        role,
+        ms,
+        bytes: 1_300_000,
+        failed,
+        timing: None,
+    };
+    o.stats.time.add_sentence(&row(&Role::QuickClose, 1_200, true));
+    o.stats.time.add_sentence(&row(&Role::Structure, 1_500, false));
+    o.stats.time.add_event(Event::Between, 300);
+    let report = equivalence_with(vec![o]).render();
+    let expected = "
+    goals closed: 4, no admit, fallbacks: 0, EasyCrypt time 3.0s (2 attempts undone)
+    time by role           count      time   failed   largest answer
+      quick close             1      1.2s        1           1.3 MB
+      structure               1      1.5s        0           1.3 MB
+      interrupts              0        0s
+      respawns                0        0s
+      Domino between          —      0.3s
+    EasyCrypt: no timing in the answers
+1 oracles";
+    assert!(report.contains(expected), "{report}");
+}
+
+#[test]
+fn an_oracle_without_records_has_no_time_by_role_table() {
+    let report = equivalence_with(vec![oracle_with(vec![])]).render();
+    assert!(!report.contains("time by role"), "{report}");
 }
 
 #[test]
@@ -901,7 +939,13 @@ mod live {
             .map(|v| v["ms"].as_u64().unwrap())
             .sum();
         let time = oracle.easycrypt_time.as_millis() as u64;
-        assert!(ms <= time && ms * 100 >= time * 99, "records {ms} ms, report {time} ms");
+        // each record's `ms` is cut from a total over all oracles: one oracle's sum can be 1 ms
+        // over its own time
+        assert!(ms <= time + 1 && ms * 100 >= time * 99, "records {ms} ms, report {time} ms");
+        // the time by role sums the same records (story 57)
+        assert_eq!(oracle.stats.time.total().as_millis() as u64, ms);
+        assert!(report.contains("    time by role "), "{report}");
+        assert!(!report.contains("warning: the rows sum"), "{report}");
     }
 
     #[test]
@@ -1037,7 +1081,22 @@ mod live {
         let page = |t: &TheoremTactics| std::fs::read_to_string(page_path(t)).unwrap();
         let (page_a, page_b) = (page(&a), page(&b));
         assert!(page_a.contains("id=\"timings\""));
-        assert_eq!(strip_timings(&page_a), strip_timings(&page_b));
+        assert_eq!(stable_page(&page_a), stable_page(&page_b));
+    }
+
+    /// The page without its timings and without its transcript record numbers: a Domino gap of
+    /// 100 ms or more is a `between` record (story 56), so the numbers move with the load.
+    fn stable_page(html: &str) -> String {
+        let html = strip_timings(html);
+        let mut out = String::with_capacity(html.len());
+        let mut rest = html.as_str();
+        while let Some(at) = rest.find("record ") {
+            let (head, tail) = rest.split_at(at + "record ".len());
+            out += head;
+            rest = tail.trim_start_matches(|c: char| c.is_ascii_digit());
+            out.push('#');
+        }
+        out + rest
     }
 
     /// Story 31: the capped transcript is smaller and the page cannot tell the difference.
@@ -1062,7 +1121,7 @@ mod live {
         )
         .unwrap();
         let page =
-            |t: &TheoremTactics| strip_timings(&std::fs::read_to_string(page_path(t)).unwrap());
+            |t: &TheoremTactics| stable_page(&std::fs::read_to_string(page_path(t)).unwrap());
         assert_eq!(page(&capped), page(&full));
         let size = |t: &TheoremTactics| {
             std::fs::metadata(&t.equivalences[0].transcript)
@@ -1180,13 +1239,14 @@ mod live {
         (total, interrupted)
     }
 
+    /// The sentences of the transcript; event records have none (story 56).
     fn sentences(transcript: &Path) -> Vec<String> {
         std::fs::read_to_string(transcript)
             .unwrap()
             .lines()
-            .map(|line| {
+            .filter_map(|line| {
                 let v: serde_json::Value = serde_json::from_str(line).unwrap();
-                v["sentence"].as_str().unwrap().to_string()
+                Some(v["sentence"].as_str()?.to_string())
             })
             .collect()
     }
@@ -1800,17 +1860,18 @@ wait $ec
         list.iter().map(|(n, s)| (n.to_string(), *s)).collect()
     }
 
-    /// The transcript's records as `(file tag, sentence)`.
+    /// The transcript's sentence records as `(file tag, sentence)`; event records have no
+    /// sentence (story 56).
     fn tagged_sentences(transcript: &Path) -> Vec<(String, String)> {
         std::fs::read_to_string(transcript)
             .unwrap()
             .lines()
-            .map(|line| {
+            .filter_map(|line| {
                 let v: serde_json::Value = serde_json::from_str(line).unwrap();
-                (
+                Some((
                     v["file"].as_str().unwrap().to_string(),
-                    v["sentence"].as_str().unwrap().to_string(),
-                )
+                    v["sentence"].as_str()?.to_string(),
+                ))
             })
             .collect()
     }
@@ -1848,6 +1909,10 @@ wait $ec
             "{report}"
         );
         assert!(!report.contains("interrupted:"), "not a Ctrl-C: {report}");
+        // the respawn and the sentences sent again are in the sealed oracle's time by role
+        let second = report.split("  Second:").nth(1).unwrap();
+        assert!(second.contains("      respawns                1 "), "{report}");
+        assert!(second.contains("      resume "), "{report}");
         let page = std::fs::read_to_string(page_path(&result)).unwrap();
         assert!(page.contains("EasyCrypt left an interrupt unanswered at N0"), "{page}");
         assert!(page.contains("tactics (done)"));

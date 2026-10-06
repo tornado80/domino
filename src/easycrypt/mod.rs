@@ -19,4 +19,5 @@ pub mod json;
 pub mod session;
 pub mod skeleton;
 pub mod tactics;
+pub mod time_by_role;
 pub mod transcript;

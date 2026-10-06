@@ -1195,7 +1195,7 @@ fn respawn(
             Ok((session, opened))
         });
         match opened {
-            Ok((session, Opened::Open { base_case_admitted })) => {
+            Ok((mut session, Opened::Open { base_case_admitted })) => {
                 tactics.base_case_admitted |= base_case_admitted;
                 if let Some(u) = tactics.unanswered.last_mut() {
                     u.respawn = Some(began.elapsed());
@@ -1206,6 +1206,7 @@ fn respawn(
                     .rfind(|o| o.oracle == last.oracle)
                 {
                     o.easycrypt_time += given_up.elapsed();
+                    o.stats.time.merge(&session.take_time_by_role(&last.oracle));
                 }
                 Ok(session)
             }
@@ -1757,7 +1758,9 @@ where
     if let Some(e) = write_failed {
         return Err(e.into());
     }
-    let result = result_of(sealed);
+    let mut result = result_of(sealed);
+    // the walk left the oracle's context, which wrote its last `between` record
+    result.stats.time = session.take_time_by_role(oracle);
     let Some(node) = stopped_at else {
         return Ok(OracleEnd::Done(result));
     };
@@ -1866,6 +1869,9 @@ impl EquivalenceTactics {
                 secs(o.easycrypt_time),
                 o.stats.attempts_undone
             );
+            if !o.stats.time.is_empty() {
+                out += &o.stats.time.render(o.easycrypt_time);
+            }
             for m in &o.alignment_mismatches {
                 let _ = writeln!(out, "    alignment mismatch (fallback used): {m}");
             }

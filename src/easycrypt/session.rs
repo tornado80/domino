@@ -13,6 +13,7 @@
 //! [`FORMAT_VERSION`] is refused with a message naming both versions, the variable and the
 //! branch of the EasyCrypt clone that adds the format.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -24,6 +25,7 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 use super::json::{self, Goal, GoalKind, Proof, Response, Status, FORMAT_VERSION};
+use super::time_by_role::{self, TimeByRole};
 use super::transcript::{self, EcTranscriptMode, Event, Role, SentenceCtx};
 
 /// The environment variable naming the `-json`-capable EasyCrypt binary.
@@ -167,6 +169,10 @@ pub struct Session {
     interrupt_resend: Duration,
     /// Why the next sentence is sent ([`Session::set_context`]).
     context: SentenceCtx,
+    /// The `ms` of every record, with or without a sink.
+    clock: Clock,
+    /// The records of each oracle, summed as they are written ([`Session::take_time_by_role`]).
+    time_by_role: HashMap<String, TimeByRole>,
 }
 
 /// How waiting for an answer ended.
@@ -192,7 +198,6 @@ struct TranscriptSink {
     path: PathBuf,
     mode: EcTranscriptMode,
     tag: String,
-    clock: Clock,
 }
 
 /// How the `ms` of the records account for the time of one oracle (story 56): every record's
@@ -310,6 +315,8 @@ impl Session {
             interrupt_grace: INTERRUPT_GRACE,
             interrupt_resend: INTERRUPT_RESEND,
             context: SentenceCtx::default(),
+            clock: Clock::default(),
+            time_by_role: HashMap::new(),
         };
         session.check_capability()?;
         Ok(session)
@@ -378,7 +385,6 @@ impl Session {
             path: path.to_path_buf(),
             mode,
             tag: tag.to_string(),
-            clock: Clock::default(),
         });
     }
 
@@ -459,7 +465,7 @@ impl Session {
     pub fn set_context(&mut self, context: SentenceCtx) -> Result<(), SessionError> {
         if context.oracle != self.context.oracle {
             let now = Instant::now();
-            if let Some(tail) = self.sink.as_mut().and_then(|s| s.clock.end(now)) {
+            if let Some(tail) = self.clock.end(now) {
                 self.write_event(Event::Between, tail)?;
             }
         }
@@ -503,7 +509,7 @@ impl Session {
     /// [`Session::send`]; `stoppable`: a stop request interrupts the sentence.
     fn exchange(&mut self, sentence: &str, stoppable: bool) -> Result<&Response, SessionError> {
         let began = Instant::now();
-        if let Some(gap) = self.sink.as_mut().and_then(|s| s.clock.between(began)) {
+        if let Some(gap) = self.clock.between(began) {
             self.write_event(Event::Between, gap)?;
         }
         // a stop known before the sentence was sent is the caller's to act on
@@ -525,11 +531,21 @@ impl Session {
             }
         };
         let line = line?;
-        let record_bytes = self.write_record(sentence, ran, interrupts, &line.raw)?;
+        let (ms, record_bytes) = self.write_record(sentence, ran, interrupts, &line.raw)?;
         let mut response = line.parsed.map_err(|source| SessionError::BadAnswer {
             sentence: sentence.to_string(),
             source,
         })?;
+        if let Some(oracle) = &self.context.oracle {
+            let time = self.time_by_role.entry(oracle.clone()).or_default();
+            time.add_sentence(&time_by_role::Sentence {
+                role: &self.context.role,
+                ms,
+                bytes: line.raw.trim_end().len(),
+                failed: response.status != Status::Ok,
+                timing: response.timing.as_deref(),
+            });
+        }
         // an interrupt that landed while EasyCrypt printed the goals: read them again, unless
         // this is the sentence a stop interrupted (the caller stops, and knows the goals from
         // before it; reading them costs as much as printing them did)
@@ -619,8 +635,8 @@ impl Session {
         Ok(response.proof)
     }
 
-    /// Appends the record of one exchange to the transcript sink, if any, and returns its size.
-    /// `ran`: from the send to the answer, or to the first interrupt (the rest is the
+    /// The record of one exchange: its `ms`, and its size once appended to the transcript sink,
+    /// if any. `ran`: from the send to the answer, or to the first interrupt (the rest is the
     /// interrupt's event record).
     fn write_record(
         &mut self,
@@ -628,12 +644,12 @@ impl Session {
         ran: Duration,
         interrupts: usize,
         answer: &str,
-    ) -> Result<Option<usize>, SessionError> {
+    ) -> Result<(u128, Option<usize>), SessionError> {
+        self.clock.until = Some(Instant::now());
+        let ms = self.clock.ms(ran);
         let Some(sink) = &mut self.sink else {
-            return Ok(None);
+            return Ok((ms, None));
         };
-        sink.clock.until = Some(Instant::now());
-        let ms = sink.clock.ms(ran);
         let record = transcript::record(
             sink.mode,
             &sink.tag,
@@ -643,21 +659,33 @@ impl Session {
             interrupts,
             answer,
         );
-        self.append(&record)
+        Ok((ms, self.append(&record)?))
     }
 
-    /// Appends an event record of `took` to the transcript sink, if any, in the current
-    /// context, and tells the observer.
+    /// An event record of `took` in the current context: added to the oracle's time by role and
+    /// appended to the transcript sink, if any, telling the observer.
     fn write_event(&mut self, event: Event, took: Duration) -> Result<(), SessionError> {
+        let ms = self.clock.ms(took);
+        if let Some(oracle) = &self.context.oracle {
+            let time = self.time_by_role.entry(oracle.clone()).or_default();
+            time.add_event(event, ms);
+        }
         let Some(sink) = &mut self.sink else {
             return Ok(());
         };
-        let ms = sink.clock.ms(took);
         let record = transcript::event(&sink.tag, &self.context, event, ms);
         if let Some(record_bytes) = self.append(&record)? {
             self.notify(&SessionEvent::EventRecorded { record_bytes });
         }
         Ok(())
+    }
+
+    /// The sums of the records written so far for `oracle`, which this session then forgets.
+    /// Empty when it sent nothing for it. The `between` record that ends an oracle's time is
+    /// written when the context leaves the oracle ([`Session::set_context`]), so take the
+    /// table after that.
+    pub fn take_time_by_role(&mut self, oracle: &str) -> TimeByRole {
+        self.time_by_role.remove(oracle).unwrap_or_default()
     }
 
     /// Records that this session replaced one that left an interrupt unanswered, `took` after
@@ -1442,6 +1470,35 @@ done
             ]
         );
         assert!(session.transcript_dropped());
+    }
+
+    /// The time by role is summed where the records are written, not read back from the
+    /// file: it is whole after the capped transcript was dropped (story 57).
+    #[test]
+    fn the_time_by_role_is_whole_after_the_transcript_was_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let answer = crate::easycrypt::transcript::tests::answer_with_goals(1, 10);
+        let sink = TestSink::new(1);
+        let mut session = fake_session(dir.path(), &answer, &sink, EcTranscriptMode::Capped);
+        let in_oracle = |role| SentenceCtx {
+            oracle: Some("O".into()),
+            node: None,
+            role,
+        };
+        session.set_context(in_oracle(Role::QuickClose)).unwrap();
+        session.send("smt().").unwrap();
+        session.set_context(in_oracle(Role::Structure)).unwrap();
+        session.send("wp.").unwrap();
+        session.send("skip.").unwrap();
+        session.set_context(SentenceCtx::default()).unwrap();
+        session.send("admit.").unwrap();
+        assert!(session.transcript_dropped());
+
+        let time = session.take_time_by_role("O").render(Duration::ZERO);
+        assert!(time.contains("      quick close             1"), "{time}");
+        assert!(time.contains("      structure               2"), "{time}");
+        assert!(!time.contains("admit"), "a sentence of no oracle is in no table: {time}");
+        assert!(session.take_time_by_role("O").is_empty(), "taken");
     }
 
     #[test]

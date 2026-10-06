@@ -24,6 +24,7 @@ use crate::debug::lockstep::{
 };
 use crate::easycrypt::json::{Goal, GoalKind, Status};
 use crate::easycrypt::session::{Session, SessionError};
+use crate::easycrypt::time_by_role::TimeByRole;
 use crate::easycrypt::transcript::{Role, SentenceCtx};
 
 use super::goals;
@@ -194,6 +195,9 @@ pub struct OracleStats {
     pub fallbacks: usize,
     /// Sentences EasyCrypt refused or that were undone.
     pub attempts_undone: usize,
+    /// Where the EasyCrypt time went (story 57). Empty until the oracle is done: the session
+    /// holds the sums while the walk runs.
+    pub time: TimeByRole,
 }
 
 /// The joint tree of an oracle with what the walk needs to know about each node's subtree.

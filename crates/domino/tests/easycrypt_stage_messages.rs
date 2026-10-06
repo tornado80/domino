@@ -69,11 +69,19 @@ fn stderr_lines(output: &Output) -> Vec<String> {
 }
 
 /// stdout without the lines that carry timings, and with the output directory factored out.
+/// The time by role table (story 57): its rows are indented by six spaces or more.
+fn is_time_by_role(line: &str) -> bool {
+    ["    time by role", "    EasyCrypt:", "    warning: the rows sum", "      "]
+        .iter()
+        .any(|head| line.starts_with(head))
+}
+
 fn stable_stdout(output: &Output, out: &Path) -> String {
     String::from_utf8_lossy(&output.stdout)
         .replace(out.to_str().unwrap(), "<out>")
         .lines()
         .filter(|l| !l.starts_with("elapsed:") && !l.contains("goals closed") && !l.contains(": lockstep "))
+        .filter(|l| !is_time_by_role(l))
         .collect::<Vec<_>>()
         .join("\n")
 }
