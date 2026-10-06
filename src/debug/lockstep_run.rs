@@ -1084,7 +1084,7 @@ mod tests {
         let dir = "testdata/lockstep/rules";
         let files = DirectoryFiles::load(Path::new(dir)).unwrap();
         let project = DirectoryProject::load(PathBuf::from(dir), &files).unwrap();
-        let out = out.unwrap_or_else(|| tempfile::tempdir().unwrap().into_path());
+        let out = out.unwrap_or_else(|| tempfile::tempdir().unwrap().keep());
         run_lockstep_on(
             ListingKind::Domino,
             ClaimSet::NoDependencies,
@@ -1462,7 +1462,7 @@ mod tests {
             "Split",
             &LockstepDebugOptions::default(),
             &Cvc5LibBackend::new(true, None),
-            Some(tempfile::tempdir().unwrap().into_path()),
+            Some(tempfile::tempdir().unwrap().keep()),
             &mut NopObserver,
             Some(&stop),
         )
@@ -1619,7 +1619,7 @@ mod tests {
             oracle,
             &LockstepDebugOptions::default(),
             &Cvc5LibBackend::new(true, None),
-            Some(tempfile::tempdir().unwrap().into_path()),
+            Some(tempfile::tempdir().unwrap().keep()),
             &mut NopObserver,
             None,
         )
@@ -1884,7 +1884,7 @@ mod tests {
             Some(claim),
             &crate::debug::driver::DebugOptions::default(),
             &Cvc5LibBackend::new(true, None),
-            Some(tempfile::tempdir().unwrap().into_path()),
+            Some(tempfile::tempdir().unwrap().keep()),
             &mut NopObserver,
             None,
         )
@@ -1994,7 +1994,7 @@ mod tests {
             "StuckOrder",
             &LockstepDebugOptions::default(),
             &Cvc5LibBackend::new(true, None),
-            Some(tempfile::tempdir().unwrap().into_path()),
+            Some(tempfile::tempdir().unwrap().keep()),
             &mut events,
             None,
         )
@@ -2234,7 +2234,7 @@ mod tests {
                 None,
                 &crate::debug::driver::DebugOptions::default(),
                 &Cvc5LibBackend::new(true, None),
-                Some(tempfile::tempdir().unwrap().into_path()),
+                Some(tempfile::tempdir().unwrap().keep()),
                 &mut NopObserver,
                 None,
             )

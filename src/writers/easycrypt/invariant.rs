@@ -837,7 +837,7 @@ struct OpRegistry {
 
 impl OpRegistry {
     fn define(&mut self, file: &str, raw: &str, ret: EcType) -> Result<String, InvariantError> {
-        let mangled = format!("Domino_{}", mangle_smt_def_name(raw));
+        let mangled = relation_op_name(raw);
         match self.seen_mangled.get(&mangled) {
             Some(existing) if existing == raw => {}
             Some(existing) => {
@@ -859,6 +859,13 @@ impl OpRegistry {
     fn lookup(&self, raw: &str) -> Option<&(String, EcType)> {
         self.by_raw.get(raw)
     }
+}
+
+/// The EasyCrypt op that a `define-fun`/`define-state-relation` named `raw` becomes:
+/// `Domino_<mangled>`. This is the one rule for that name. The tactics run uses it to unfold
+/// the relations, so the writer and the tactics run cannot disagree.
+pub(crate) fn relation_op_name(raw: &str) -> String {
+    format!("Domino_{}", mangle_smt_def_name(raw))
 }
 
 /// Mangles an SMT-LIB definition name into a legal (partial) EasyCrypt

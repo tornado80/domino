@@ -85,15 +85,14 @@ pub(super) fn as_conjunction(form: &Form) -> Option<(&Form, &Form)> {
     }
 }
 
-/// `forall b1 … bk, body`: the names of the binders as a tactic can spell them, and the body.
+/// `forall b1 … bk, body`: the names of the binders as `move =>` spells them, and the body.
+///
+/// No binder is skipped. `move =>` must name every binder, and a goal of Domino's never binds a
+/// type. EasyCrypt writes a value binder with the kind `"type"`, so a filter on the kind would
+/// drop it. A memory binder's name already has its `&` (`&m`).
 pub(super) fn as_forall(form: &Form) -> Option<(Vec<&str>, &Form)> {
     if form.kind == "quant" && form.quantifier.as_deref() == Some("forall") {
-        let names = form
-            .binders
-            .iter()
-            .filter(|b| b.kind != "type")
-            .map(|b| b.name.as_str())
-            .collect();
+        let names = form.binders.iter().map(|b| b.name.as_str()).collect();
         return Some((names, form.body.as_deref()?));
     }
     None
@@ -184,5 +183,29 @@ mod tests {
         let (a, b) = as_conjunction(post).expect("equal-output /\\ inv");
         assert!(!mentions_op(a, "inv"));
         assert_eq!(app_op_leaf(b), Some("inv"));
+    }
+
+    fn quant(binder: &str) -> Form {
+        let json = format!(
+            r#"{{"kind":"quant","pp":"","quantifier":"forall","binders":[{binder}],
+                "body":{{"kind":"app","pp":"P","op":"P","args":[]}}}}"#
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn a_value_binder_is_kept_and_the_driver_can_introduce_it() {
+        // EasyCrypt writes a value binder (`GTty`) with the kind "type"
+        let form = quant(r#"{"name":"ctr","ident":{"name":"ctr","tag":1},"kind":"type","type":{"pp":"int"}}"#);
+        let (names, _) = as_forall(&form).unwrap();
+        assert_eq!(names, ["ctr"]);
+        assert_eq!(format!("move => {}.", names.join(" ")), "move => ctr.");
+    }
+
+    #[test]
+    fn a_memory_binder_keeps_its_ampersand() {
+        let form = quant(r#"{"name":"&m","ident":{"name":"&m","tag":2},"kind":"mem"}"#);
+        let (names, _) = as_forall(&form).unwrap();
+        assert_eq!(names, ["&m"]);
     }
 }

@@ -2399,3 +2399,12 @@ fn a_leaf_has_no_deadline_unless_a_budget_is_given() {
 fn the_leaf_budget_is_off_by_default() {
     assert_eq!(TacticsOptions::default().leaf_budget, None);
 }
+
+#[test]
+fn unfold_ops_use_the_writers_op_names() {
+    let ops = unfold_ops(&["relation-a-b".to_string(), "state=".to_string()]);
+    assert_eq!(
+        ops,
+        ["inv", "params_inv", "Domino_relation_a_b", "Domino_state_eq"]
+    );
+}

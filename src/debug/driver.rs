@@ -2090,7 +2090,7 @@ mod tests {
         with_project(dir, |proj| {
             // `into_path` keeps the dir around after the test so artifacts can be
             // inspected on failure (and so `run.out_dir` stays valid).
-            let out = tempfile::tempdir().unwrap().into_path();
+            let out = tempfile::tempdir().unwrap().keep();
             let backend = Cvc5LibBackend::new(true, opts.timeout_ms);
             run_debug_command(
                 proj, theorem, 0, oracle, Some(claim), &opts, &backend, Some(out), observer, stop,
@@ -3027,7 +3027,7 @@ mod story19_tests {
         opts: DebugOptions,
     ) -> DebugRun {
         with_project(dir, |proj| {
-            let out = tempfile::tempdir().unwrap().into_path();
+            let out = tempfile::tempdir().unwrap().keep();
             run_debug_command(
                 proj,
                 theorem,
@@ -3226,7 +3226,7 @@ mod story19_tests {
     fn both_strategies_write_into_one_directory_and_neither_wipes_the_other() {
         use crate::debug::lockstep_run::{run_lockstep_domino, LockstepDebugOptions};
         with_project(DEPS, |proj| {
-            let out = tempfile::tempdir().unwrap().into_path();
+            let out = tempfile::tempdir().unwrap().keep();
             let seq = run_debug_command(
                 proj, "T", 0, "Branch", None, &DebugOptions::default(),
                 &Cvc5LibBackend::new(true, None), Some(out.clone()), &mut NopObserver, None,
@@ -3338,7 +3338,7 @@ mod story19_tests {
                 };
                 let plan = sweep::plan(proj, Some(&theorem), None, None).unwrap();
                 for target in &plan.targets {
-                    let out = tempfile::tempdir().unwrap().into_path();
+                    let out = tempfile::tempdir().unwrap().keep();
                     let opts = DebugOptions::default();
                     let backend = Cvc5LibBackend::new(true, None);
                     let run = run_debug_command(
