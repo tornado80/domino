@@ -1227,6 +1227,25 @@ done
     }
 
     #[test]
+    fn an_smt_answer_says_where_its_time_went() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(mut ec) = session_in(dir.path()) else {
+            return;
+        };
+        ec.send("require import AllCore.").unwrap();
+        let r = ec.send("lemma t (x : int) : x + 0 = x.").unwrap();
+        let timing = r.timing.as_deref().expect("every answer has timing");
+        assert!(timing.smt.is_none(), "no prover was called");
+        ec.send("proof.").unwrap();
+        let r = ec.send("smt().").unwrap();
+        assert_eq!(r.status, Status::Ok);
+        let smt = r.timing.as_deref().unwrap().smt.expect("smt() calls a prover");
+        assert!(smt.calls >= 1);
+        assert_eq!(smt.valid + smt.timeout + smt.unknown, smt.calls);
+        assert!(smt.valid >= 1);
+    }
+
+    #[test]
     fn send_error_undo_and_interrupt() {
         let dir = tempfile::tempdir().unwrap();
         let Some(mut ec) = session_in(dir.path()) else {

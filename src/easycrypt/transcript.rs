@@ -335,6 +335,23 @@ pub(crate) mod tests {
         assert!(record.len() < answer.len());
     }
 
+    #[test]
+    fn both_records_keep_timing_verbatim() {
+        let timing = r#"{"tactic_ms":812,"serialize_ms":3,"smt":{"calls":1,"translate_ms":2,"prepare_ms":5,"prover_ms":134,"valid":1,"timeout":0,"unknown":0}}"#;
+        let answer =
+            std::fs::read_to_string("testdata/easycrypt/story31/answer-two-goals.json").unwrap();
+        let answer = format!(
+            "{},\"timing\":{timing}}}",
+            answer.trim_end().strip_suffix('}').unwrap()
+        );
+        let expected: serde_json::Value = serde_json::from_str(timing).unwrap();
+        for mode in [EcTranscriptMode::Capped, EcTranscriptMode::Full] {
+            let record = record(mode, "Eq.ec", "", "smt().", 900, 0, &answer);
+            let v: serde_json::Value = serde_json::from_str(&record).unwrap();
+            assert_eq!(v["response"]["timing"], expected);
+        }
+    }
+
     const RULE: &str = "--------------------------------------------------------------------------";
 
     #[test]

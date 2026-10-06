@@ -29,6 +29,10 @@ pub struct Response {
     /// `None` when there is no active proof.
     #[serde(default)]
     pub proof: Option<Proof>,
+    /// Where EasyCrypt spent the time of the sentence. `None` from a binary older than story 55. Boxed, as
+    /// `Proof::front`, to keep `session::Wait` small.
+    #[serde(default)]
+    pub timing: Option<Box<Timing>>,
 }
 
 impl Response {
@@ -58,6 +62,32 @@ impl Response {
         let line = text.lines().next().unwrap_or_default();
         Some(line.chars().take(HEAD_CHARS).collect())
     }
+}
+
+/// `timing` of an answer, in milliseconds of a monotonic clock (see EasyCrypt's
+/// `doc/json-output.md`). `tactic_ms + serialize_ms` is at most the wall time of the sentence.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct Timing {
+    /// The run of the sentence, `smt` included, serialization excluded.
+    pub tactic_ms: u64,
+    /// The build of `proof`; the write of the line is not in it.
+    pub serialize_ms: u64,
+    /// `None` when the sentence called no prover.
+    #[serde(default)]
+    pub smt: Option<SmtTiming>,
+}
+
+/// The prover calls of one sentence, summed. `valid + timeout + unknown == calls`.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct SmtTiming {
+    pub calls: u64,
+    pub translate_ms: u64,
+    /// Why3's preparation of each task; outside the prover's time limit.
+    pub prepare_ms: u64,
+    pub prover_ms: u64,
+    pub valid: u64,
+    pub timeout: u64,
+    pub unknown: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -280,4 +310,40 @@ where
         OneOrMany::Many(v) => v,
         OneOrMany::One(f) => vec![*f],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HEAD: &str = r#""version":"domino-json/2","state":1,"status":"ok","messages":[],"proof":null"#;
+
+    #[test]
+    fn an_answer_without_timing_parses() {
+        let r: Response = serde_json::from_str(&format!("{{{HEAD}}}")).unwrap();
+        assert!(r.timing.is_none());
+    }
+
+    #[test]
+    fn an_answer_with_timing_parses_with_and_without_smt() {
+        let smt = r#""smt":{"calls":2,"translate_ms":140,"prepare_ms":95,"prover_ms":6120,"valid":1,"timeout":1,"unknown":0}"#;
+        let r: Response = serde_json::from_str(&format!(
+            "{{{HEAD},\"timing\":{{\"tactic_ms\":812,\"serialize_ms\":3,{smt}}}}}"
+        ))
+        .unwrap();
+        let t = r.timing.unwrap();
+        assert_eq!((t.tactic_ms, t.serialize_ms), (812, 3));
+        let s = t.smt.unwrap();
+        assert_eq!(
+            (s.calls, s.translate_ms, s.prepare_ms, s.prover_ms),
+            (2, 140, 95, 6120)
+        );
+        assert_eq!((s.valid, s.timeout, s.unknown), (1, 1, 0));
+
+        let r: Response = serde_json::from_str(&format!(
+            "{{{HEAD},\"timing\":{{\"tactic_ms\":0,\"serialize_ms\":1}}}}"
+        ))
+        .unwrap();
+        assert!(r.timing.unwrap().smt.is_none());
+    }
 }
