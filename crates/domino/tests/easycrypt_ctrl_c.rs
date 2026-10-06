@@ -32,7 +32,7 @@ const ORACLE_GOAL: &str = r#"{"id":1,"concl":{"kind":"equivF","pp":"equiv[d_Usef
 fn stand_in(dir: &Path, ignore_sigint: bool) -> PathBuf {
     let answer = |status: &str| {
         format!(
-            r#"{{"version":"domino-json/1","state":1,"status":"{status}","messages":[],"proof":{{"goals":[{ORACLE_GOAL}]}}}}"#
+            r#"{{"version":"domino-json/2","state":1,"status":"{status}","messages":[],"proof":{{"front":{ORACLE_GOAL},"kinds":["formula"]}}}}"#
         )
     };
     std::fs::write(dir.join("ok.json"), answer("ok") + "\n").unwrap();

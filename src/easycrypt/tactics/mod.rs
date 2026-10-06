@@ -80,9 +80,7 @@ use super::job::{
 use super::json::Goal;
 use super::session::{split_sentences, Session, SessionError, SessionEvent, JSON_BRANCH};
 
-pub use super::transcript::{
-    EcTranscriptMode, GOALS_PER_STEP, GOAL_CONCL_CAP, GOAL_HYPS_CAP,
-};
+pub use super::transcript::{EcTranscriptMode, GOAL_CONCL_CAP, GOAL_HYPS_CAP};
 pub use live::{strip_timings, LiveConfig, LiveHandle};
 
 pub use driver::{Admit, AdmitReason, DominoView, OracleStats, Timeouts};
@@ -920,7 +918,7 @@ where
         }
 
         let mut interrupted = None;
-        while let Some(goal) = session.goals().first() {
+        while let Some(goal) = session.front() {
             if options.stop_requested() {
                 interrupted = Some(Interrupted::NoOracleInFlight);
                 break;

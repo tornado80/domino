@@ -6,10 +6,10 @@
 //! One record per sentence sent, one JSON object per line:
 //! `{"file": <tag>, "ctx": <the caller's note>, "sentence": …, "ms": …, "response": …}`, with
 //! `"interrupts": <n>` before `response` when the sentence took `n` > 0 interrupts to stop.
-//! [`EcTranscriptMode::Full`] writes EasyCrypt's answer verbatim as `response`, which prints
-//! every open goal in full, 100–700 kB per record. [`EcTranscriptMode::Capped`] (the default)
-//! writes the same answer with its goals cut to what the live page embeds ([`cap_response`]):
-//! the first goal only, split into its conclusion (cut at [`GOAL_CONCL_CAP`] characters) and its
+//! [`EcTranscriptMode::Full`] writes EasyCrypt's answer verbatim as `response`: the front goal
+//! in full and the kind of each open goal (`domino-json/2`, ADR 0009). [`EcTranscriptMode::Capped`]
+//! (the default) writes the same answer with its front goal cut to what the live page embeds
+//! ([`cap_response`]): split into its conclusion (cut at [`GOAL_CONCL_CAP`] characters) and its
 //! hypotheses (cut at [`GOAL_HYPS_CAP`]), so at most ~5 kB of goal text per record (story 51;
 //! story 41 kept ~2 kB of the goal's start, story 31 3 goals of 12 000).
 //!
@@ -25,13 +25,12 @@ use serde::Deserialize as _;
 use serde_derive::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-/// The most goals of one answer kept in a capped record, and embedded per step in the live page.
+/// The most characters of the front goal's conclusion kept in a capped record, and embedded in
+/// the page. A longer conclusion keeps its head and its tail.
 ///
-/// A contract between the transcript and the page: a capped record holds exactly what the page
-/// shows, so the page renders the same from either mode. Defined here and nowhere else.
-pub const GOALS_PER_STEP: usize = 1;
-/// The most characters of one goal's conclusion kept in a capped record, and embedded in the page
-/// (see [`GOALS_PER_STEP`]). A longer conclusion keeps its head and its tail.
+/// The caps are a contract between the transcript and the page: a capped record holds exactly
+/// what the page shows, so the page renders the same from either mode. Defined here and nowhere
+/// else.
 pub const GOAL_CONCL_CAP: usize = 4_000;
 /// How much of a cut conclusion is its head; the rest of [`GOAL_CONCL_CAP`] is its tail (the
 /// post-condition). The page finds the cut from it.
@@ -143,30 +142,24 @@ pub fn record(
     )
 }
 
-/// EasyCrypt's answer with its goals cut to the page's limits, or `None` if it is not a JSON
+/// EasyCrypt's answer with its front goal cut to the page's limits, or `None` if it is not a JSON
 /// object (the caller then writes it verbatim).
 ///
 /// Every field but `proof` is kept verbatim and in order: `status`, `state`, `error` and
-/// `messages` are small and the page shows them all. `proof.goals` keeps its first
-/// [`GOALS_PER_STEP`] goals, each reduced to its `id` and the [`GoalParts`] of its `text`, and
-/// says what was cut:
+/// `messages` are small and the page shows them all. `proof.front` is reduced to its `id` and
+/// the [`GoalParts`] of its `text`, and `proof.kinds` is kept verbatim:
 ///
 /// ```json
-/// "proof": {"goals_dropped": 7, "goals": [{"id": 1, "concl": "…", "concl_cut": 41000,
-///                                          "hyps": "…", "hyps_cut": 3000}]}
+/// "proof": {"front": {"id": 1, "concl": "…", "concl_cut": 41000, "hyps": "…", "hyps_cut": 3000},
+///           "kinds": ["formula", "program"]}
 /// ```
 ///
 /// The structured goal (`hyps`, `concl`, …) is what makes an answer large, and nothing reads it
 /// back from the transcript. Its `concl.pp` prints the programs as `{...}`, so the conclusion is
-/// taken from `text`. `goals_dropped` is always written, so a capped record is told from a full
-/// one by its presence.
+/// taken from `text`. A capped record is told from a full one by its front's `concl`, a string.
 pub fn cap_response(answer: &str) -> Option<String> {
     let fields = serde_json::from_str::<Fields>(answer).ok()?.0;
-    let mut out = String::with_capacity(
-        answer
-            .len()
-            .min(4 * (GOAL_CONCL_CAP + GOAL_HYPS_CAP) * GOALS_PER_STEP),
-    );
+    let mut out = String::with_capacity(answer.len().min(4 * (GOAL_CONCL_CAP + GOAL_HYPS_CAP)));
     out.push('{');
     for (i, (key, value)) in fields.iter().enumerate() {
         if i > 0 {
@@ -209,7 +202,8 @@ impl<'de> serde::Deserialize<'de> for Fields {
 
 #[derive(Deserialize)]
 struct ProofText {
-    goals: Vec<GoalText>,
+    front: Option<GoalText>,
+    kinds: Box<RawValue>,
 }
 
 #[derive(Deserialize)]
@@ -219,24 +213,21 @@ struct GoalText {
     text: String,
 }
 
-/// `proof` cut as [`cap_response`] says, or `None` if it is not a proof with goals (`null`).
+/// `proof` cut as [`cap_response`] says, or `None` if it is not a proof (`null`).
 fn capped_proof(proof: &RawValue) -> Option<String> {
     // unknown fields are skipped without recursing, like `RawValue`
     let proof: ProofText =
         ProofText::deserialize(&mut serde_json::Deserializer::from_str(proof.get())).ok()?;
-    let goals_dropped = proof.goals.len().saturating_sub(GOALS_PER_STEP);
-    let goals: Vec<String> = proof
-        .goals
-        .into_iter()
-        .take(GOALS_PER_STEP)
-        .map(|goal| {
+    let front = match proof.front {
+        Some(goal) => {
             let parts = serde_json::to_string(&GoalParts::of_text(&goal.text)).ok()?;
-            Some(format!("{{\"id\":{},{}", goal.id.get(), &parts[1..]))
-        })
-        .collect::<Option<_>>()?;
+            format!("{{\"id\":{},{}", goal.id.get(), &parts[1..])
+        }
+        None => "null".to_string(),
+    };
     Some(format!(
-        "{{\"goals_dropped\":{goals_dropped},\"goals\":[{}]}}",
-        goals.join(",")
+        "{{\"front\":{front},\"kinds\":{}}}",
+        proof.kinds.get()
     ))
 }
 
@@ -244,48 +235,46 @@ fn capped_proof(proof: &RawValue) -> Option<String> {
 pub(crate) mod tests {
     use super::*;
 
-    /// An answer as `easycrypt cli -json` writes it, with `n` goals of `chars` characters each.
+    /// An answer as `easycrypt cli -json` writes it, with `n` open goals and a front goal of
+    /// `chars` characters.
     pub(crate) fn answer_with_goals(n: usize, chars: usize) -> String {
-        let goals: Vec<String> = (1..=n)
-            .map(|id| {
-                format!(
-                    "{{\"id\":{id},\"tvars\":[],\"hyps\":[{{\"name\":\"x\",\"kind\":\"var\"}}],\"concl\":{{\"kind\":\"app\",\"pp\":\"c\",\"args\":[{{\"kind\":\"local\",\"pp\":\"x\"}}]}},\"text\":{}}}",
-                    serde_json::Value::from("é".repeat(chars))
-                )
-            })
-            .collect();
+        let front = format!(
+            "{{\"id\":1,\"tvars\":[],\"hyps\":[{{\"name\":\"x\",\"kind\":\"var\"}}],\"concl\":{{\"kind\":\"app\",\"pp\":\"c\",\"args\":[{{\"kind\":\"local\"}}]}},\"text\":{}}}",
+            serde_json::Value::from("é".repeat(chars))
+        );
+        let kinds = vec!["\"formula\""; n].join(",");
         format!(
-            "{{\"version\":\"domino-json/1\",\"state\":7,\"status\":\"error\",\"error\":{{\"loc\":{{\"start\":0,\"end\":4}},\"msg\":\"no\"}},\"messages\":[{{\"level\":\"warning\",\"text\":\"careful\"}}],\"proof\":{{\"goals\":[{}]}}}}",
-            goals.join(",")
+            "{{\"version\":\"domino-json/2\",\"state\":7,\"status\":\"error\",\"error\":{{\"loc\":{{\"start\":0,\"end\":4}},\"msg\":\"no\"}},\"messages\":[{{\"level\":\"warning\",\"text\":\"careful\"}}],\"proof\":{{\"front\":{front},\"kinds\":[{kinds}]}}}}"
         )
     }
 
     #[test]
-    fn a_capped_answer_keeps_the_first_goal_cut_to_the_caps_and_says_what_it_cut() {
+    fn a_capped_answer_keeps_the_front_goal_cut_to_the_caps_and_the_kinds() {
         let answer = answer_with_goals(10, 50_000);
         let capped = cap_response(&answer).unwrap();
         let v: serde_json::Value = serde_json::from_str(&capped).unwrap();
-        let goals = v["proof"]["goals"].as_array().unwrap();
-        assert_eq!(goals.len(), GOALS_PER_STEP);
-        assert_eq!(goals.len(), 1);
-        assert_eq!(v["proof"]["goals_dropped"], 9);
-        for (i, goal) in goals.iter().enumerate() {
-            assert_eq!(goal["id"], i + 1);
-            assert_eq!(
-                goal["concl"].as_str().unwrap().chars().count(),
-                GOAL_CONCL_CAP
-            );
-            assert_eq!(goal["concl_cut"], 50_000 - GOAL_CONCL_CAP);
-            assert_eq!(goal["hyps"], "");
-            assert_eq!(goal["hyps_cut"], 0);
-            assert!(goal.get("text").is_none());
-        }
+        let front = &v["proof"]["front"];
+        assert_eq!(front["id"], 1);
+        assert_eq!(
+            front["concl"].as_str().unwrap().chars().count(),
+            GOAL_CONCL_CAP
+        );
+        assert_eq!(front["concl_cut"], 50_000 - GOAL_CONCL_CAP);
+        assert_eq!(front["hyps"], "");
+        assert_eq!(front["hyps_cut"], 0);
+        assert!(front.get("text").is_none());
+        assert_eq!(v["proof"]["kinds"].as_array().unwrap().len(), 10);
+        assert_eq!(
+            v["proof"].as_object().unwrap().len(),
+            2,
+            "front and kinds only"
+        );
         // everything else is intact, in order
         let full: serde_json::Value = serde_json::from_str(&answer).unwrap();
         for key in ["version", "state", "status", "error", "messages"] {
             assert_eq!(v[key], full[key], "{key}");
         }
-        assert!(capped.starts_with("{\"version\":\"domino-json/1\",\"state\":7,\"status\":\"error\",\"error\":{\"loc\":{\"start\":0,\"end\":4},\"msg\":\"no\"},\"messages\":[{\"level\":\"warning\",\"text\":\"careful\"}],\"proof\":"));
+        assert!(capped.starts_with("{\"version\":\"domino-json/2\",\"state\":7,\"status\":\"error\",\"error\":{\"loc\":{\"start\":0,\"end\":4},\"msg\":\"no\"},\"messages\":[{\"level\":\"warning\",\"text\":\"careful\"}],\"proof\":"));
         assert!(
             capped.len() < (GOAL_CONCL_CAP + GOAL_HYPS_CAP) * 2 + 1_000,
             "{}",
@@ -294,23 +283,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_five_goal_answer_holds_one_goal_and_says_four_were_dropped() {
-        let v: serde_json::Value =
-            serde_json::from_str(&cap_response(&answer_with_goals(5, 10)).unwrap()).unwrap();
-        assert_eq!(v["proof"]["goals"].as_array().unwrap().len(), 1);
-        assert_eq!(v["proof"]["goals"][0]["id"], 1);
-        assert_eq!(v["proof"]["goals_dropped"], 4);
-    }
-
-    #[test]
-    fn short_goals_and_answers_without_a_proof_are_kept_whole() {
+    fn short_goals_and_answers_without_a_proof_or_a_goal_are_kept_whole() {
         let answer = answer_with_goals(1, 10);
         let v: serde_json::Value = serde_json::from_str(&cap_response(&answer).unwrap()).unwrap();
-        assert_eq!(v["proof"]["goals_dropped"], 0);
-        assert_eq!(v["proof"]["goals"][0]["concl"], "é".repeat(10));
-        assert_eq!(v["proof"]["goals"][0]["concl_cut"], 0);
-        let no_proof = "{\"version\":\"domino-json/1\",\"state\":0,\"status\":\"ok\",\"messages\":[],\"proof\":null}";
+        assert_eq!(v["proof"]["front"]["concl"], "é".repeat(10));
+        assert_eq!(v["proof"]["front"]["concl_cut"], 0);
+        let no_proof = "{\"version\":\"domino-json/2\",\"state\":0,\"status\":\"ok\",\"messages\":[],\"proof\":null}";
         assert_eq!(cap_response(no_proof).unwrap(), no_proof);
+        let no_goal = "{\"version\":\"domino-json/2\",\"state\":3,\"status\":\"ok\",\"messages\":[],\"proof\":{\"front\":null,\"kinds\":[]}}";
+        assert_eq!(cap_response(no_goal).unwrap(), no_goal);
         assert_eq!(cap_response("not json"), None);
     }
 
@@ -337,26 +318,20 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_capped_record_of_a_real_answer_holds_its_goal_texts() {
+    fn a_capped_record_of_a_real_answer_holds_its_front_goal_text_and_kinds() {
         let answer =
             std::fs::read_to_string("testdata/easycrypt/story31/answer-two-goals.json").unwrap();
         let record = record(EcTranscriptMode::Capped, "Eq.ec", "", "split.", 12, 0, &answer);
         assert!(record.ends_with("}\n") && record.lines().count() == 1);
         let v: serde_json::Value = serde_json::from_str(&record).unwrap();
         let full: serde_json::Value = serde_json::from_str(&answer).unwrap();
-        let goals = full["proof"]["goals"].as_array().unwrap();
-        assert_eq!(goals.len(), 2);
-        for (capped, full) in v["response"]["proof"]["goals"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .zip(goals)
-        {
-            let parts = GoalParts::of_text(full["text"].as_str().unwrap());
-            assert_eq!(capped["concl"], parts.concl.as_str());
-            assert_eq!(capped["hyps"], parts.hyps.as_str());
-            assert_eq!(capped["id"], full["id"]);
-        }
+        let (capped, full) = (&v["response"]["proof"], &full["proof"]);
+        let parts = GoalParts::of_text(full["front"]["text"].as_str().unwrap());
+        assert_eq!(capped["front"]["concl"], parts.concl.as_str());
+        assert_eq!(capped["front"]["hyps"], parts.hyps.as_str());
+        assert_eq!(capped["front"]["id"], full["front"]["id"]);
+        assert_eq!(capped["kinds"], full["kinds"]);
+        assert_eq!(capped["kinds"].as_array().unwrap().len(), 2);
         assert!(record.len() < answer.len());
     }
 
@@ -415,7 +390,7 @@ pub(crate) mod tests {
         .unwrap();
         let capped: serde_json::Value =
             serde_json::from_str(&cap_response(&answer).unwrap()).unwrap();
-        let goal = &capped["proof"]["goals"][0];
+        let goal = &capped["proof"]["front"];
         let concl = goal["concl"].as_str().unwrap();
         assert!(concl.starts_with("&1 (left ) : {"), "{concl}");
         assert!(concl.contains("pre =") && concl.contains("post ="), "{concl}");

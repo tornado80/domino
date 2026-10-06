@@ -2,7 +2,7 @@
 
 //! Talking to a live EasyCrypt (`docs/stories/easycrypt/26-easycrypt-session-and-alignment.md`).
 //!
-//! - [`json`]: the Rust mirror of `easycrypt cli -json`'s `domino-json/1` format.
+//! - [`json`]: the Rust mirror of `easycrypt cli -json`'s `domino-json/2` format.
 //! - [`session`]: a running `easycrypt cli -json` process.
 //! - [`transcript`]: the records of `ec-transcript.jsonl`, capped or full (story 31).
 //! - [`skeleton`] and [`align`]: decision skeletons of EasyCrypt's program and of the

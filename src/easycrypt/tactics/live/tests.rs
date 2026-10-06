@@ -84,25 +84,20 @@ impl Rig {
                 None => self.state + 1,
             };
         }
-        let goal_json: Vec<String> = goals
-            .iter()
-            .enumerate()
-            .map(|(i, text)| {
-                format!(
-                    "{{\"id\":{},\"concl\":{{\"kind\":\"app\",\"pp\":\"c\"}},\"text\":{}}}",
-                    i + 1,
-                    serde_json::Value::from(*text)
-                )
-            })
-            .collect();
+        let front = goals.first().map_or("null".to_string(), |text| {
+            format!(
+                "{{\"id\":1,\"concl\":{{\"kind\":\"app\",\"pp\":\"c\"}},\"text\":{}}}",
+                serde_json::Value::from(*text)
+            )
+        });
+        let kinds = vec!["\"formula\""; goals.len()].join(",");
         let response = format!(
-            "{{\"version\":\"domino-json/1\",\"state\":{},\"status\":\"{status}\",{}\"messages\":[],\"proof\":{{\"goals\":[{}]}}}}",
+            "{{\"version\":\"domino-json/2\",\"state\":{},\"status\":\"{status}\",{}\"messages\":[],\"proof\":{{\"front\":{front},\"kinds\":[{kinds}]}}}}",
             self.state,
             error.map_or(String::new(), |e| format!(
                 "\"error\":{{\"msg\":{}}},",
                 serde_json::Value::from(e)
             )),
-            goal_json.join(",")
         );
         let record_bytes = self.mode.map(|mode| {
             let record = record(mode, "f", "", sentence, ms.into(), 0, &response);
@@ -323,7 +318,7 @@ fn the_conclusion_comes_first_and_the_hypotheses_are_folded() {
     rig.one_oracle();
     rig.live.node_entered("N0", "determined", vec![], Some(0));
     let goal = program_goal(300, GOAL_CONCL_CAP + 3_000);
-    let many: Vec<&str> = vec![goal.as_str(); GOALS_PER_STEP + 2];
+    let many: Vec<&str> = vec![goal.as_str(); 3];
     rig.answer("sp 1 1.", "ok", None, &many, 1);
     rig.live.node_left();
     rig.live.finish();
@@ -335,7 +330,8 @@ fn the_conclusion_comes_first_and_the_hypotheses_are_folded() {
     assert!(page.contains(" characters cut here: the full goal is in ec-transcript.jsonl, transcript record 0, with --ec-transcript full …"));
     assert!(page.contains("lines, cut)</summary>"));
     assert!(!page.contains("h299: int"));
-    assert!(page.contains("+2 goals not kept, see transcript record 0"));
+    assert!(page.contains("goal 1 of 3"));
+    assert!(!page.contains("goal 2 of 3"));
     assert!(page.len() < 100_000, "page is {} bytes", page.len());
 }
 
@@ -358,30 +354,8 @@ fn the_page_is_the_same_from_a_capped_and_a_full_transcript() {
     let (full, full_bytes) = run(EcTranscriptMode::Full);
     assert!(capped_bytes < full_bytes);
     assert!(capped.contains("characters cut here"));
-    assert!(capped.contains("+4 goals not kept, see transcript record 1"));
+    assert!(capped.contains("goal 1 of 5"));
     assert_eq!(capped, full);
-}
-
-#[test]
-fn a_capped_record_written_before_story_51_still_renders() {
-    let mut rig = Rig::new();
-    rig.one_oracle();
-    rig.live.node_entered("N0", "determined", vec![], Some(0));
-    // no page before the record is replaced, so no goal text is read early
-    rig.live.0.borrow_mut().flush_gap = Duration::from_secs(3600);
-    let placeholder = "p".repeat(300);
-    rig.answer("sp 1 1.", "ok", None, &[placeholder.as_str()], 1);
-    rig.live.node_left();
-    let older = "{\"file\":\"Eq.ec\",\"ctx\":\"\",\"sentence\":\"sp 1 1.\",\"ms\":1,\"response\":{\"version\":\"domino-json/1\",\"state\":1,\"status\":\"ok\",\"messages\":[],\"proof\":{\"goals_dropped\":0,\"goals\":[{\"id\":1,\"text\":\"x: int\\n---\\nOLD-GOAL\",\"text_dropped\":1234}]}}}\n";
-    let path = rig.dir.path().join("ec-transcript.jsonl");
-    let written = std::fs::read_to_string(&path).unwrap();
-    // the same record length, so the offset the model holds stays valid
-    std::fs::write(&path, format!("{older:<width$}", width = written.len() - 1) + "\n").unwrap();
-    rig.live.finish();
-    let page = rig.page();
-    assert!(page.contains("older record: context shown first"));
-    assert!(page.contains("OLD-GOAL"));
-    assert!(page.contains("... 1 234 more characters, see transcript record 0"));
 }
 
 #[test]

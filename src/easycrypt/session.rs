@@ -10,8 +10,8 @@
 //!
 //! The binary is found through the `DOMINO_EASYCRYPT` environment variable, falling back to
 //! `easycrypt` on `PATH`, and is checked at startup: a binary that does not answer in
-//! `domino-json/1` is refused with a message naming the variable and the branch of the
-//! EasyCrypt clone that adds the format.
+//! [`FORMAT_VERSION`] is refused with a message naming both versions, the variable and the
+//! branch of the EasyCrypt clone that adds the format.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
-use super::json::{self, Goal, Response, Status, FORMAT_VERSION};
+use super::json::{self, Goal, GoalKind, Proof, Response, Status, FORMAT_VERSION};
 use super::transcript::{self, EcTranscriptMode};
 
 /// The environment variable naming the `-json`-capable EasyCrypt binary.
@@ -619,11 +619,24 @@ impl Session {
             .or(self.empty.as_ref())
     }
 
-    /// The open goals after the last sentence.
-    pub fn goals(&self) -> &[Goal] {
-        self.last()
-            .and_then(|r| r.proof.as_ref())
-            .map_or(&[], |p| p.goals.as_slice())
+    /// The first open goal after the last sentence, the only one EasyCrypt prints in full
+    /// (ADR 0009). `None` with no proof, or with no goal open.
+    pub fn front(&self) -> Option<&Goal> {
+        self.proof().and_then(|p| p.front.as_deref())
+    }
+
+    /// The number of open goals after the last sentence; 0 with no proof.
+    pub fn count(&self) -> usize {
+        self.proof().map_or(0, |p| p.kinds.len())
+    }
+
+    /// The kind of the open goal at `index` (0 is the front goal), or `None` past the last one.
+    pub fn kind(&self, index: usize) -> Option<GoalKind> {
+        self.proof().and_then(|p| p.kinds.get(index).copied())
+    }
+
+    fn proof(&self) -> Option<&Proof> {
+        self.last().and_then(|r| r.proof.as_ref())
     }
 
     /// Every sentence sent since the start, with its answer, in order (an `undo` included). Only
@@ -749,6 +762,25 @@ pub(crate) mod tests {
         assert!(err.to_string().contains(ENV_VAR));
     }
 
+    #[test]
+    fn a_domino_json_1_binary_is_refused_naming_both_versions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake-easycrypt");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nwhile IFS= read -r line; do\n  echo '{\"version\":\"domino-json/1\",\"state\":1,\"status\":\"ok\",\"messages\":[],\"proof\":null}'\ndone\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = Session::start_with(&script, dir.path()).err().unwrap();
+        assert!(matches!(err, SessionError::NotJsonCapable { .. }), "{err}");
+        let text = err.to_string();
+        for needle in ["domino-json/1", "domino-json/2", ENV_VAR] {
+            assert!(text.contains(needle), "{needle}: {text}");
+        }
+    }
+
     /// A stand-in EasyCrypt that answers every line `ok` and takes 2.3 s over "slow" ones.
     #[test]
     fn the_observer_sees_the_sentence_ticks_while_it_runs_and_the_answer() {
@@ -757,7 +789,7 @@ pub(crate) mod tests {
         let script = dir.path().join("fake-easycrypt");
         std::fs::write(
             &script,
-            "#!/bin/sh\nwhile IFS= read -r line; do\n  case \"$line\" in *slow*) sleep 2.3;; esac\n  echo '{\"version\":\"domino-json/1\",\"state\":1,\"status\":\"ok\",\"messages\":[]}'\ndone\n",
+            "#!/bin/sh\nwhile IFS= read -r line; do\n  case \"$line\" in *slow*) sleep 2.3;; esac\n  echo '{\"version\":\"domino-json/2\",\"state\":1,\"status\":\"ok\",\"messages\":[]}'\ndone\n",
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -795,7 +827,7 @@ pub(crate) mod tests {
             r#"#!/bin/sh
 int=0
 trap 'int=1' INT
-ans() { echo "{\"version\":\"domino-json/1\",\"state\":1,\"status\":\"$1\",\"messages\":[]}"; }
+ans() { echo "{\"version\":\"domino-json/2\",\"state\":1,\"status\":\"$1\",\"messages\":[]}"; }
 while IFS= read -r line; do
   case "$line" in
     *slow*|undo*)
@@ -892,8 +924,8 @@ done
 goal='{"id":1,"concl":{"kind":"app","pp":"c"},"text":"g"}'
 while IFS= read -r line; do
   case "$line" in
-    pragma*) echo "{\"version\":\"domino-json/1\",\"state\":2,\"status\":\"ok\",\"messages\":[],\"proof\":{\"goals\":[$goal,$goal]}}";;
-    *) echo '{"version":"domino-json/1","state":2,"status":"ok","messages":[{"level":"critical","text":"cannot serialize the goals: Sys.Break"}],"proof":null}';;
+    pragma*) echo "{\"version\":\"domino-json/2\",\"state\":2,\"status\":\"ok\",\"messages\":[],\"proof\":{\"front\":$goal,\"kinds\":[\"formula\",\"program\"]}}";;
+    *) echo '{"version":"domino-json/2","state":2,"status":"ok","messages":[{"level":"critical","text":"cannot serialize the goals: Sys.Break"}],"proof":null}';;
   esac
 done
 "#,
@@ -903,7 +935,10 @@ done
         let mut session = Session::start_with(&script, dir.path()).unwrap();
         let r = session.send("rewrite /inv in hpre.").unwrap();
         assert_eq!((r.status, r.state), (Status::Ok, 2));
-        assert_eq!(session.goals().len(), 2);
+        assert_eq!(session.count(), 2);
+        assert_eq!(session.front().unwrap().concl.pp, "c");
+        assert_eq!(session.kind(1), Some(GoalKind::Program));
+        assert_eq!(session.kind(2), None);
         assert_eq!(session.transcript().len(), 1, "the re-read is not an exchange");
     }
 
@@ -924,7 +959,7 @@ done
                 r#"#!/bin/sh
 trap '' INT
 n=0
-ans() {{ echo "{{\"version\":\"domino-json/1\",\"state\":$n,\"status\":\"$1\",\"messages\":[]}}"; }}
+ans() {{ echo "{{\"version\":\"domino-json/2\",\"state\":$n,\"status\":\"$1\",\"messages\":[]}}"; }}
 while IFS= read -r line; do
   n=$((n+1))
   case "$line" in
@@ -1090,14 +1125,14 @@ done
     }
 
     #[test]
-    fn the_sink_caps_a_large_answer_to_its_first_goal_cut_to_the_caps() {
+    fn the_sink_caps_a_large_answer_to_its_front_goal_cut_to_the_caps() {
         let dir = tempfile::tempdir().unwrap();
         let answer = crate::easycrypt::transcript::tests::answer_with_goals(10, 50_000);
         let sink = TestSink::new(usize::MAX);
         let mut session = fake_session(dir.path(), &answer, &sink, EcTranscriptMode::Capped);
         session.set_context("O N0");
         let response = session.send("auto.").unwrap();
-        assert_eq!(response.proof.as_ref().unwrap().goals.len(), 10, "the session sees them all");
+        assert_eq!(response.proof.as_ref().unwrap().kinds.len(), 10, "the session sees them all");
         let text = sink.text();
         assert_eq!(text.lines().count(), 1);
         let record: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -1108,13 +1143,10 @@ done
         for key in ["version", "state", "status", "error", "messages"] {
             assert_eq!(capped[key], full[key], "{key}");
         }
-        let goals = capped["proof"]["goals"].as_array().unwrap();
-        assert_eq!(goals.len(), 1);
-        assert_eq!(capped["proof"]["goals_dropped"], 9);
-        for goal in goals {
-            assert_eq!(goal["concl"].as_str().unwrap().chars().count(), 4_000);
-            assert_eq!(goal["concl_cut"], 46_000);
-        }
+        let front = &capped["proof"]["front"];
+        assert_eq!(front["concl"].as_str().unwrap().chars().count(), 4_000);
+        assert_eq!(front["concl_cut"], 46_000);
+        assert_eq!(capped["proof"]["kinds"], full["proof"]["kinds"]);
     }
 
     #[test]
@@ -1200,30 +1232,30 @@ done
         let Some(mut ec) = session_in(dir.path()) else {
             return;
         };
-        assert!(ec.goals().is_empty());
+        assert!(ec.front().is_none());
 
         // send
         let r = ec.send("lemma l (x : int) : x = x.").unwrap().clone();
         assert_eq!(r.status, Status::Ok);
         let opened = r.state;
-        assert_eq!(ec.goals().len(), 1);
-        assert_eq!(ec.goals()[0].concl.pp, "x = x");
+        assert_eq!(ec.count(), 1);
+        assert_eq!(ec.front().unwrap().concl.pp, "x = x");
 
         // error: the goals stay, no undo level is pushed
         let r = ec.send("by exact foo.").unwrap();
         assert_eq!(r.status, Status::Error);
         assert!(r.error.is_some());
         assert_eq!(r.state, opened);
-        assert_eq!(ec.goals().len(), 1);
+        assert_eq!(ec.count(), 1);
 
         // a success, then undo to before it
         let r = ec.send("proof.").unwrap();
         assert_eq!(r.status, Status::Ok);
         let r = ec.send("trivial.").unwrap();
-        assert!(r.proof.as_ref().unwrap().goals.is_empty());
+        assert!(r.proof.as_ref().unwrap().kinds.is_empty());
         let r = ec.undo_to(opened).unwrap();
         assert_eq!(r.state, opened);
-        assert_eq!(ec.goals().len(), 1);
+        assert_eq!(ec.count(), 1);
         assert_eq!(ec.transcript().len(), 5);
 
         // interrupt: `do !` on a tactic that always succeeds never ends, so the timeout fires
@@ -1231,12 +1263,12 @@ done
         let r = ec.send("by do ! (have _ : true by trivial); trivial.").unwrap();
         assert_eq!(r.status, Status::Interrupted);
         assert_eq!(r.state, opened);
-        assert_eq!(ec.goals().len(), 1, "the goals are kept");
+        assert_eq!(ec.count(), 1, "the goals are kept");
 
         // and the session goes on
         ec.set_timeout(Duration::from_secs(60));
         let r = ec.send("trivial.").unwrap();
         assert_eq!(r.status, Status::Ok);
-        assert!(r.proof.as_ref().unwrap().goals.is_empty());
+        assert!(r.proof.as_ref().unwrap().kinds.is_empty());
     }
 }

@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn skeleton_of_the_json_program_keeps_decisions_and_drops_assignments() {
         let response = parse_response(FIXTURE).unwrap();
-        let goal = &response.proof.as_ref().unwrap().goals[0];
+        let goal = response.proof.as_ref().unwrap().front.as_ref().unwrap();
         assert_eq!(goal.concl.kind, "equivS");
         let left = ec_skeleton(&goal.concl.left.as_ref().unwrap().stmt);
         assert_eq!(left.len(), 1, "only the router's guard at top level: {left:#?}");

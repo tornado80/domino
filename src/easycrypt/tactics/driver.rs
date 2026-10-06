@@ -22,7 +22,7 @@ use crate::debug::lockstep::{
     ChildOutcome, HeadKind, JointChild, JointNode, LockstepOutcome, NodeKind, PairRecord,
     EQUAL_OUTPUT,
 };
-use crate::easycrypt::json::{Goal, Status};
+use crate::easycrypt::json::{Goal, GoalKind, Status};
 use crate::easycrypt::session::{Session, SessionError};
 
 use super::goals;
@@ -467,7 +467,7 @@ impl Prover<'_> {
     // ------------------------------------------------------------------
 
     pub(super) fn count(&self) -> usize {
-        self.session.goals().len()
+        self.session.count()
     }
 
     // ------------------------------------------------------------------
@@ -576,7 +576,11 @@ impl Prover<'_> {
     }
 
     fn front(&self) -> Option<&Goal> {
-        self.session.goals().first()
+        self.session.front()
+    }
+
+    fn is_if_split(&self) -> bool {
+        goals::is_if_split(self.front(), |i| self.session.kind(i))
     }
 
     fn state(&self) -> u64 {
@@ -1284,10 +1288,7 @@ impl Prover<'_> {
             return Ok(false);
         }
         // the condition, then the two arms: told apart by kind
-        let shape_ok = self.count() == before + 2 && {
-            let g = self.session.goals();
-            goals::is_ambient(&g[0]) && goals::is_program(&g[1]) && goals::is_program(&g[2])
-        };
+        let shape_ok = self.count() == before + 2 && self.is_if_split();
         if !shape_ok {
             return Ok(false);
         }
@@ -1346,10 +1347,8 @@ impl Prover<'_> {
 
     /// After a tactic that turned one goal (count `before`) into two program goals.
     fn two_programs_in_front(&self, before: usize) -> bool {
-        self.count() == before + 1 && {
-            let g = self.session.goals();
-            goals::is_program(&g[0]) && goals::is_program(&g[1])
-        }
+        self.count() == before + 1
+            && (0..2).all(|i| self.session.kind(i) == Some(GoalKind::Program))
     }
 
     fn sampling(&mut self, idx: usize, synchronized: bool) -> R<bool> {
@@ -1644,10 +1643,10 @@ impl Prover<'_> {
         // (where lockstep begins) and the case where both sides already aborted
         let after_inline = self.snap();
         let before = self.count();
-        let prelude = self.sp_front()? && self.send("if.")? && self.count() == before + 2 && {
-            let g = self.session.goals();
-            goals::is_ambient(&g[0]) && goals::is_program(&g[1]) && goals::is_program(&g[2])
-        };
+        let prelude = self.sp_front()?
+            && self.send("if.")?
+            && self.count() == before + 2
+            && self.is_if_split();
         if !prelude {
             self.rollback(after_inline)?;
             self.stats.fallbacks += 1;
@@ -1730,7 +1729,7 @@ impl Prover<'_> {
             let snap = self.snap();
             if self.send("if.")?
                 && self.count() == before + 2
-                && goals::is_ambient(&self.session.goals()[0])
+                && self.front().is_some_and(goals::is_ambient)
             {
                 self.bullet(|p| p.close_side_goal(node, "branch-condition", false))?;
                 self.bullet(|p| p.prove_blind(node, budget - 1))?;

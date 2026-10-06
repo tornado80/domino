@@ -6,9 +6,9 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use super::{
-    AttemptOutcome, AttemptRec, Closing, GoalTexts, GoalView, Live, NodeRec, RunState, StepStatus,
-};
+use crate::easycrypt::transcript::GoalParts;
+
+use super::{AttemptOutcome, AttemptRec, Closing, GoalTexts, Live, NodeRec, RunState, StepStatus};
 
 const CSS: &str = r##"
 :root { --bg:#fff; --fg:#1b1f24; --dim:#68707a; --line:#d5d9de; --card:#f5f6f8; --ok:#1a7f37; --bad:#c62828;
@@ -129,26 +129,8 @@ const JS: &str = r##"
 "##;
 
 /// One embedded goal: its conclusion, with a marker where its middle was cut, then its
-/// hypotheses folded. An older record's text is shown as it is.
-fn goal_html(out: &mut String, goal: &GoalView, record: &str) {
-    let parts = match goal {
-        GoalView::Parts(parts) => parts,
-        GoalView::Older { text, cut } => {
-            let _ = write!(
-                out,
-                "<div class=\"note\">older record: context shown first</div><pre>{}</pre>",
-                esc(text)
-            );
-            if *cut > 0 {
-                let _ = write!(
-                    out,
-                    "<div class=\"note\">... {} more characters, see {record}</div>",
-                    grouped(*cut)
-                );
-            }
-            return;
-        }
-    };
+/// hypotheses folded.
+fn goal_html(out: &mut String, parts: &GoalParts, record: &str) {
     let (head, tail) = parts.concl_head_tail();
     let _ = write!(out, "<pre>{}", esc(head));
     if parts.concl_cut > 0 {
@@ -313,11 +295,10 @@ impl Live {
                 out.push_str("</details>\n");
             }
         }
-        out.push_str("</main>\n<footer><p>Only the goal text of the steps shown here is embedded (the step EasyCrypt is working on, the steps of the goal being worked on, and the last step of each goal), at most ");
+        out.push_str("</main>\n<footer><p>Only the goal text of the steps shown here is embedded (the step EasyCrypt is working on, the steps of the goal being worked on, and the last step of each goal), the front goal of each step only (EasyCrypt prints no other), with ");
         let _ = writeln!(
             out,
-            "{} goal(s) per step, each goal's conclusion cut to {} characters (its head and its tail) and its hypotheses to {}. Every sentence with EasyCrypt's answer is in <code>ec-transcript.jsonl</code> next to this page (record numbers below are its line numbers); its goals are cut the same way unless the run had <code>--ec-transcript full</code>.</p></footer>",
-            super::GOALS_PER_STEP,
+            "its conclusion cut to {} characters (its head and its tail) and its hypotheses to {}. Every sentence with EasyCrypt's answer is in <code>ec-transcript.jsonl</code> next to this page (record numbers below are its line numbers); its front goal is cut the same way unless the run had <code>--ec-transcript full</code>.</p></footer>",
             super::GOAL_CONCL_CAP,
             super::GOAL_HYPS_CAP
         );
@@ -582,27 +563,17 @@ impl Live {
                     "<div class=\"note\">the goal text could not be read from the transcript</div>",
                 );
             }
-            (true, Some(texts)) => {
-                for (i, goal) in texts.goals.iter().enumerate() {
+            (true, Some(texts)) => match &texts.front {
+                Some(front) => {
                     let _ = write!(
                         out,
-                        "<div class=\"note\">goal {} of {}</div>",
-                        i + 1,
+                        "<div class=\"note\">goal 1 of {}</div>",
                         texts.total
                     );
-                    goal_html(out, goal, &record);
+                    goal_html(out, front, &record);
                 }
-                if texts.total > texts.goals.len() {
-                    let _ = write!(
-                        out,
-                        "<div class=\"note\">+{} goals not kept, see {record}</div>",
-                        texts.total - texts.goals.len(),
-                    );
-                }
-                if texts.total == 0 {
-                    out.push_str("<div class=\"note\">no goal left</div>");
-                }
-            }
+                None => out.push_str("<div class=\"note\">no goal left</div>"),
+            },
             _ => match step.record {
                 Some(span) => {
                     let _ = write!(

@@ -2,9 +2,11 @@
 
 //! Reading goals as EasyCrypt's JSON shows them (story 27 §3.2.4): subgoals are told apart by
 //! their **kind** (an ambient formula, an `equivS`, an `hoareS` under a quantifier) and by the
-//! head of their programs, never by position in EasyCrypt's list or in our listing.
+//! head of their programs, never by position in EasyCrypt's list or in our listing. Only the
+//! front goal is read in full; of the goals behind it only their [`GoalKind`] is known
+//! (ADR 0009).
 
-use crate::easycrypt::json::{Form, Goal, Instr, Side};
+use crate::easycrypt::json::{Form, Goal, GoalKind, Instr, Side};
 
 /// A relational program goal: `equiv[ S1 ~ S2 : pre ==> post ]`.
 pub(super) fn is_program(goal: &Goal) -> bool {
@@ -27,6 +29,14 @@ pub(super) fn is_ambient(goal: &Goal) -> bool {
             | "ehoareF"
             | "eagerF"
     )
+}
+
+/// The shape `if.` leaves on a pair of programs: the condition (an ambient formula) in front,
+/// then the two arms (program judgements). `kind(i)` is the kind of the open goal at `i`.
+pub(super) fn is_if_split(front: Option<&Goal>, kind: impl Fn(usize) -> Option<GoalKind>) -> bool {
+    front.is_some_and(is_ambient)
+        && kind(1) == Some(GoalKind::Program)
+        && kind(2) == Some(GoalKind::Program)
 }
 
 pub(super) fn sides(goal: &Goal) -> Option<(&Side, &Side)> {
@@ -88,8 +98,8 @@ pub(super) fn as_conjunction(form: &Form) -> Option<(&Form, &Form)> {
 /// `forall b1 … bk, body`: the names of the binders as `move =>` spells them, and the body.
 ///
 /// No binder is skipped. `move =>` must name every binder, and a goal of Domino's never binds a
-/// type. EasyCrypt writes a value binder with the kind `"type"`, so a filter on the kind would
-/// drop it. A memory binder's name already has its `&` (`&m`).
+/// type. A filter on the kind would drop a value binder (kind `"var"`; `"type"` before
+/// `domino-json/2`). A memory binder's name already has its `&` (`&m`).
 pub(super) fn as_forall(form: &Form) -> Option<(Vec<&str>, &Form)> {
     if form.kind == "quant" && form.quantifier.as_deref() == Some("forall") {
         let names = form.binders.iter().map(|b| b.name.as_str()).collect();
@@ -160,7 +170,7 @@ mod tests {
     #[test]
     fn the_recorded_goal_is_a_program_goal_and_its_prefix_is_counted() {
         let response = parse_response(FIXTURE).unwrap();
-        let goal = &response.proof.as_ref().unwrap().goals[0];
+        let goal = response.proof.as_ref().unwrap().front.as_ref().unwrap();
         assert!(is_program(goal));
         assert!(!is_ambient(goal));
         assert!(!is_skip_pair(goal));
@@ -175,7 +185,7 @@ mod tests {
     #[test]
     fn implications_conjunctions_and_operators_are_read_from_the_formula_tree() {
         let response = parse_response(FIXTURE).unwrap();
-        let goal = &response.proof.as_ref().unwrap().goals[0];
+        let goal = response.proof.as_ref().unwrap().front.as_ref().unwrap();
         let pre = goal.concl.pre.as_ref().unwrap();
         // the precondition is `true /\ inv …` (or a conjunction with it)
         assert!(mentions_op(pre, "inv"), "{}", pre.pp);
@@ -183,6 +193,25 @@ mod tests {
         let (a, b) = as_conjunction(post).expect("equal-output /\\ inv");
         assert!(!mentions_op(a, "inv"));
         assert_eq!(app_op_leaf(b), Some("inv"));
+    }
+
+    fn formula_goal() -> Goal {
+        serde_json::from_str(r#"{"id":1,"concl":{"kind":"app","pp":"c"}}"#).unwrap()
+    }
+
+    #[test]
+    fn an_if_split_is_a_formula_in_front_and_two_programs_behind_it() {
+        use GoalKind::{Formula, Program};
+        let front = formula_goal();
+        let split =
+            |front: Option<&Goal>, k: Vec<GoalKind>| is_if_split(front, |i| k.get(i).copied());
+        assert!(split(Some(&front), vec![Formula, Program, Program]));
+        assert!(!split(Some(&front), vec![Formula, Program, Formula]));
+        assert!(!split(Some(&front), vec![Formula, Program]));
+        assert!(!split(None, vec![Program, Program]));
+        let proof = parse_response(FIXTURE).unwrap().proof.unwrap();
+        let program = proof.front.unwrap();
+        assert!(!split(Some(&program), vec![Program, Program, Program]));
     }
 
     fn quant(binder: &str) -> Form {
@@ -195,8 +224,8 @@ mod tests {
 
     #[test]
     fn a_value_binder_is_kept_and_the_driver_can_introduce_it() {
-        // EasyCrypt writes a value binder (`GTty`) with the kind "type"
-        let form = quant(r#"{"name":"ctr","ident":{"name":"ctr","tag":1},"kind":"type","type":{"pp":"int"}}"#);
+        // EasyCrypt writes a value binder (`GTty`) with the kind "var"
+        let form = quant(r#"{"name":"ctr","ident":{"name":"ctr","tag":1},"kind":"var","type":{"pp":"int"}}"#);
         let (names, _) = as_forall(&form).unwrap();
         assert_eq!(names, ["ctr"]);
         assert_eq!(format!("move => {}.", names.join(" ")), "move => ctr.");

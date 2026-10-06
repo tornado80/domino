@@ -318,7 +318,7 @@ fn check_equivalence(
 
     let mut results: Vec<OracleAlignment> = Vec::new();
     // The goals are handled from the first one on; each is identified from its JSON.
-    while let Some(goal) = session.goals().first() {
+    while let Some(goal) = session.front() {
         let target = setup.oracle_of_goal(goal);
         if let Some(oracle) = target.filter(|name| {
             options
@@ -399,8 +399,7 @@ fn align_one(
         ));
     } else {
         match session
-            .goals()
-            .first()
+            .front()
             .and_then(|g| align_goal(g, (&left_ir, left_flag), (&right_ir, right_flag)))
         {
             Some(sides) => out.sides = sides.into(),
@@ -522,7 +521,7 @@ mod tests {
         )
         .unwrap();
         let response = parse_response(FIXTURE).unwrap();
-        let goal = &response.proof.as_ref().unwrap().goals[0];
+        let goal = response.proof.as_ref().unwrap().front.as_ref().unwrap();
 
         let [l, r] = align_goal(
             goal,

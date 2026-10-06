@@ -35,11 +35,12 @@ pub(crate) enum SmtOutArg {
 /// `progress/ec-transcript.jsonl` (story 31).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum EcTranscriptArg {
-    /// Each answer's goals cut to what the live page shows: at most the first goal, cut at 2 000
-    /// characters (the default). A failed write drops the transcript with a warning.
+    /// Each answer's front goal cut to what the live page shows: its conclusion to 4 000
+    /// characters and its hypotheses to 1 000 (the default). A failed write drops the
+    /// transcript with a warning.
     Capped,
-    /// EasyCrypt's answers verbatim, every goal in full (hundreds of MB on a large
-    /// theorem). A failed write fails the run.
+    /// EasyCrypt's answers verbatim: the front goal in full and the kind of each open goal. A
+    /// failed write fails the run.
     Full,
 }
 

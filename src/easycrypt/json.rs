@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The Rust mirror of `easycrypt cli -json` (format `domino-json/1`, specified in
+//! The Rust mirror of `easycrypt cli -json` (format `domino-json/2`, specified in
 //! `easycrypt/doc/json-output.md`).
 //!
 //! The mirror is lenient on purpose: every field a consumer does not read is left out, every
@@ -13,7 +13,7 @@ use serde::Deserialize as _;
 use serde_derive::Deserialize;
 
 /// The only format version this module understands.
-pub const FORMAT_VERSION: &str = "domino-json/1";
+pub const FORMAT_VERSION: &str = "domino-json/2";
 
 /// The answer to one sentence.
 #[derive(Debug, Clone, Deserialize)]
@@ -88,14 +88,28 @@ pub struct Message {
     pub text: String,
 }
 
+/// The open goals of a proof: the front goal in full, and the kind of each open goal (ADR 0009).
 #[derive(Debug, Clone, Deserialize)]
 pub struct Proof {
-    pub goals: Vec<Goal>,
+    /// The first open goal; `None` when no goal is open and `qed.` is due.
+    pub front: Option<Box<Goal>>,
+    /// One entry for each open goal, in order, the front goal included.
+    pub kinds: Vec<GoalKind>,
+}
+
+/// What [`Proof::kinds`] tells of a goal that is not printed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GoalKind {
+    /// A judgement over two programs (`equivS`).
+    Program,
+    /// Every other goal.
+    Formula,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Goal {
-    /// The ordinal of the goal among the open goals, from 1. Not stable across commands.
+    /// The ordinal of the goal among the open goals, from 1: always 1 for the front goal.
     pub id: u64,
     #[serde(default)]
     pub tvars: Vec<String>,
@@ -137,7 +151,8 @@ pub struct Node {
 }
 
 /// A formula. Which fields are present depends on `kind` (`equivS`, `equivF`, `app`, `quant`, …);
-/// see `json-output.md`.
+/// see `json-output.md`. Only a root formula (a conclusion, a hypothesis) has `pp`; a subnode's
+/// `pp` is empty.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Form {
     pub kind: String,

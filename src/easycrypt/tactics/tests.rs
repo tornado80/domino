@@ -556,7 +556,7 @@ fn answer_with(messages: &[&str]) -> crate::easycrypt::json::Response {
         .map(|m| format!(r#"{{"level":"warning","text":{}}}"#, serde_json::Value::from(*m)))
         .collect();
     crate::easycrypt::json::parse_response(&format!(
-        r#"{{"version":"domino-json/1","state":3,"status":"error","messages":[{}]}}"#,
+        r#"{{"version":"domino-json/2","state":3,"status":"error","messages":[{}]}}"#,
         messages.join(",")
     ))
     .unwrap()
@@ -885,7 +885,7 @@ mod live {
         assert!(transcript.contains("\"ctx\":\"UsefulOracle N0 sampling-synchronized\""));
         for line in transcript.lines() {
             let v: serde_json::Value = serde_json::from_str(line).unwrap();
-            assert!(v["response"]["version"] == "domino-json/1");
+            assert!(v["response"]["version"] == "domino-json/2");
         }
     }
 
@@ -947,7 +947,7 @@ mod live {
             session.send(base).unwrap().status,
             crate::easycrypt::json::Status::Ok
         );
-        assert!(session.goals()[0].concl.kind == "equivF");
+        assert!(session.front().unwrap().concl.kind == "equivF");
         let empty = crate::debug::lockstep::LockstepOutcome {
             tree: Default::default(),
             pairs: vec![],
@@ -1004,7 +1004,7 @@ mod live {
             "{script}"
         );
         assert_eq!(prover.script.admit_count(), 0);
-        assert!(session.goals().is_empty(), "the oracle's goal is closed");
+        assert_eq!(session.count(), 0, "the oracle's goal is closed");
     }
 
     #[test]
@@ -1061,10 +1061,10 @@ mod live {
             size(&full)
         );
         let text = std::fs::read_to_string(&capped.equivalences[0].transcript).unwrap();
-        assert!(text.contains("\"goals_dropped\":"));
+        assert!(text.contains("\"concl_cut\":"));
         assert!(!std::fs::read_to_string(&full.equivalences[0].transcript)
             .unwrap()
-            .contains("\"goals_dropped\":"));
+            .contains("\"concl_cut\":"));
     }
 
     #[test]

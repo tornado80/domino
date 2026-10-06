@@ -20,11 +20,9 @@
 //! where each record is (byte offset and length). When the page is written, the goal text of the
 //! *shown* steps only is read back from there, once per step: the step EasyCrypt is working on
 //! (the goals it was applied to), the steps of the goal being worked on, and the last step of
-//! each goal. Each goal is split into its conclusion and hypotheses ([`GoalParts`]), each cut to
-//! its cap, and at most [`GOALS_PER_STEP`] goals are embedded per step; the cut says where the
-//! rest is. A capped record written before story 51 holds the goal's `text` only, shown as it
-//! is. The capped
-//! transcript (story 31) holds exactly this much of each answer, and says what it cut, so the
+//! each goal. Only the front goal is embedded (EasyCrypt prints no other, ADR 0009), split into
+//! its conclusion and hypotheses ([`GoalParts`]), each cut to its cap; the cut says where the
+//! rest is. The capped transcript (story 31) holds exactly this much of each answer, so the
 //! page is the same whichever `--ec-transcript` mode wrote the transcript. A step with no record
 //! (the capped transcript was dropped after a failed write) has no goal text. So the page
 //! grows with the number of goals (nodes), not with the number of sentences or with the size of
@@ -49,7 +47,7 @@ use serde_derive::Deserialize;
 
 use crate::easycrypt::json::Status;
 use crate::easycrypt::session::SessionEvent;
-use crate::easycrypt::transcript::{GoalParts, GOALS_PER_STEP, GOAL_CONCL_CAP, GOAL_HYPS_CAP};
+use crate::easycrypt::transcript::{GoalParts, GOAL_CONCL_CAP, GOAL_HYPS_CAP};
 use crate::debug::progress::DebugObserver;
 use crate::writers::easycrypt::progress::{ExportEvent, ExportObserver, ExportPhase};
 
@@ -222,20 +220,12 @@ pub(super) enum RunState {
     EndedEarly(String),
 }
 
-/// One embedded goal.
-#[derive(Debug, Clone)]
-pub(super) enum GoalView {
-    Parts(GoalParts),
-    /// From a capped record written before story 51: the goal's start, and the characters cut
-    /// off its end.
-    Older { text: String, cut: usize },
-}
-
 /// The goal text embedded for one step.
 #[derive(Debug, Clone, Default)]
 pub(super) struct GoalTexts {
-    pub goals: Vec<GoalView>,
-    /// How many goals the answer held (more than `goals` when cut).
+    /// The front goal; `None` when no goal is open.
+    pub front: Option<GoalParts>,
+    /// How many goals were open.
     pub total: usize,
     pub unreadable: bool,
 }
@@ -754,7 +744,7 @@ impl Live {
                     ms: elapsed.as_millis() as u64,
                     interrupts: *interrupts,
                     state: response.state,
-                    goals_left: response.proof.as_ref().map_or(0, |p| p.goals.len()),
+                    goals_left: response.proof.as_ref().map_or(0, |p| p.kinds.len()),
                 };
                 let id = self.steps.len();
                 if let Some(to) = undo_to {
@@ -932,38 +922,31 @@ struct ResponseT {
     #[serde(default)]
     proof: Option<ProofT>,
 }
-/// A full answer's proof, or a capped one's (`goals_dropped`: story 31).
+/// The proof of a full record or of a capped one: they differ only in the front goal.
 #[derive(Deserialize)]
 struct ProofT {
-    goals: Vec<GoalT>,
-    #[serde(default)]
-    goals_dropped: usize,
+    front: Option<GoalT>,
+    kinds: Vec<serde::de::IgnoredAny>,
 }
-/// A goal of a full record (`text`), a capped one (the [`GoalParts`] fields), or a capped one
-/// written before story 51 (`text` and `text_dropped`).
+/// A front goal of a capped record (the [`GoalParts`] fields) or of a full one (`text`).
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum GoalT {
     Parts(GoalParts),
-    Older { text: String, text_dropped: usize },
     Full { text: String },
 }
 
 impl GoalT {
-    fn view(self) -> GoalView {
+    fn parts(self) -> GoalParts {
         match self {
-            GoalT::Parts(parts) => GoalView::Parts(parts),
-            GoalT::Older { text, text_dropped } => GoalView::Older {
-                text,
-                cut: text_dropped,
-            },
-            GoalT::Full { text } => GoalView::Parts(GoalParts::of_text(&text)),
+            GoalT::Parts(parts) => parts,
+            GoalT::Full { text } => GoalParts::of_text(&text),
         }
     }
 }
 
-/// The `pp` of the goals in the transcript record at `offset`, cut to the embedding limits. A
-/// capped record is cut to them already, and says how much more the answer held.
+/// The front goal's text in the transcript record at `offset`, cut to the embedding limits, and
+/// the number of open goals. A capped record is cut to them already.
 fn read_goal_texts(path: &Path, offset: u64, len: usize) -> GoalTexts {
     use std::io::{Read, Seek, SeekFrom};
     let read = || -> std::io::Result<Vec<u8>> {
@@ -985,17 +968,13 @@ fn read_goal_texts(path: &Path, offset: u64, len: usize) -> GoalTexts {
             ..GoalTexts::default()
         };
     };
-    let (goals, goals_dropped) = record
+    let (front, total) = record
         .response
         .proof
-        .map_or((Vec::new(), 0), |p| (p.goals, p.goals_dropped));
+        .map_or((None, 0), |p| (p.front.map(GoalT::parts), p.kinds.len()));
     GoalTexts {
-        total: goals.len() + goals_dropped,
-        goals: goals
-            .into_iter()
-            .take(GOALS_PER_STEP)
-            .map(GoalT::view)
-            .collect(),
+        front,
+        total,
         unreadable: false,
     }
 }
