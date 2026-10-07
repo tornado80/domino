@@ -1,0 +1,28 @@
+theorem T {
+    const n: Integer;
+
+    instance gl = GL {
+        params {
+            n: n,
+        }
+    }
+
+    instance gr = GR {
+        params {
+            n: n,
+        }
+    }
+
+    gamehops {
+        equivalence gl gr {
+            invariant: [./theorem/invariant.smt2]
+            Bump: {
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+        }
+    }
+}

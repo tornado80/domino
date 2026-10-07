@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The artifacts of a lockstep run (story 23): the trace (schema 12), the summary (the joint
+//! The artifacts of a lockstep run (story 23): the trace (schema 13), the summary (the joint
 //! tree as text, in the story-17 style), the concise stdout report, the viewer
 //! ([`crate::debug::lockstep_viewer`]), and the `smt/` files of the joint paths. On the
 //! EasyCrypt listing they are `trace.json`, `summary.txt`, `index.html` and `smt/`; on the Domino
@@ -197,10 +197,10 @@ fn render_node(
                 "{pad}    {name:<width$}{}{reason}",
                 render_verdict(&c.verdict)
             );
-            for r in &c.relations {
+            for r in &c.parts {
                 let _ = writeln!(
                     out,
-                    "{pad}      relation {}: {}",
+                    "{pad}      {}: {}",
                     r.name,
                     render_verdict(&r.verdict)
                 );
@@ -684,31 +684,18 @@ impl LockstepSmtWriter {
         }
         s.push_str("; ---- vacuity ----------------------------------------------------------\n(check-sat)\n\n");
 
-        let verdict_of = |name: &str| -> Option<&Verdict> {
-            pair.verdict_of(name).or_else(|| {
-                pair.claims
-                    .iter()
-                    .flat_map(|c| &c.relations)
-                    .find(|r| format!("relation-{}", r.name) == name)
-                    .map(|r| &r.verdict)
-            })
-        };
         for goal in goals {
-            let name = &goal.claim;
-            let Some(verdict) = verdict_of(name) else {
+            let Some(checked) = pair.claims.iter().find(|c| c.claim == goal.claim) else {
                 continue;
             };
-            if matches!(self.mode, SmtOut::Failures) && !verdict.is_failure() {
+            if matches!(self.mode, SmtOut::Failures) && !checked.verdict.is_failure() {
                 continue;
             }
-            let _ = writeln!(s, "; ---- {name}: {} ----", verdict.slug());
-            s.push_str("(push 1)\n");
-            for dependency in &goal.dependencies {
-                s.push_str(dependency);
-                s.push('\n');
-            }
-            s.push_str(&goal.negated);
-            s.push_str("\n(check-sat)\n(get-model)\n(pop 1)\n\n");
+            s.push_str(&goal.render(
+                &checked.verdict,
+                &checked.parts,
+                matches!(self.mode, SmtOut::Failures),
+            ));
         }
 
         std::fs::write(self.root.join(format!("{}.smt2", pair.id)), s)

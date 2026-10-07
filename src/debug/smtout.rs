@@ -308,18 +308,11 @@ impl SmtWriter {
                 if matches!(self.mode, SmtOut::Failures) && !checked.verdict.is_failure() {
                     continue;
                 }
-                s.push_str(&format!(
-                    "; ---- claim {}: {} ----\n",
-                    block.claim,
-                    checked.verdict.slug()
+                s.push_str(&block.render(
+                    &checked.verdict,
+                    &checked.parts,
+                    matches!(self.mode, SmtOut::Failures),
                 ));
-                s.push_str("(push 1)\n");
-                for dependency in &block.dependencies {
-                    s.push_str(dependency);
-                    s.push('\n');
-                }
-                s.push_str(&block.negated);
-                s.push_str("\n(check-sat)\n(get-model)\n(pop 1)\n\n");
             }
         }
 

@@ -55,6 +55,8 @@ pub struct EquivalenceReport {
     pub oracle_count: usize,
     pub admit_count: usize,
     pub oracle_set_mismatch: Option<String>,
+    /// The SMT names of the state relations the invariant file translates, file order.
+    pub state_relations: Vec<String>,
 }
 
 /// A game hop this exporter does not translate, named with its kind and the
@@ -244,6 +246,7 @@ pub fn export_theorem_observed(
             oracle_count: ef.proof.oracle_count,
             admit_count: ef.proof.admit_count,
             oracle_set_mismatch: ef.proof.oracle_set_mismatch.clone(),
+            state_relations: ef.invariants.state_relations.clone(),
         });
     }
 

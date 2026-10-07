@@ -500,6 +500,23 @@ mod tests {
         );
     }
 
+    /// Symbolic-execution story 21: the tactics run takes its state relations from the
+    /// invariant file, and the unfold list still holds `Domino_invariant`.
+    #[test]
+    fn the_unfold_list_from_the_invariant_files_relations_holds_domino_invariant() {
+        let (theorem, project) = load_project("example-projects/4WHS", "Simple4WHS");
+        let equivalence = find_equivalence(&theorem, "Hybrid1", "Hybrid2");
+        let file = build_invariant_file(&theorem, equivalence, project).unwrap();
+        assert!(file.state_relations.iter().any(|r| r == "invariant"), "{:?}", file.state_relations);
+        let left = theorem.find_game_instance("Hybrid1").unwrap();
+        let right = theorem.find_game_instance("Hybrid2").unwrap();
+        let ops: Vec<String> = invariant_ops(left, right, &file.state_relations)
+            .into_iter()
+            .map(|op| op.name)
+            .collect();
+        assert!(ops.iter().any(|op| op == "Domino_invariant"), "{ops:?}");
+    }
+
     #[test]
     fn hybrid1_hybrid2_gets_the_right_sides_package_and_game_invariant() {
         let text = rendered("example-projects/4WHS", "Simple4WHS", "Hybrid1", "Hybrid2");

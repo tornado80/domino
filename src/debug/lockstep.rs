@@ -66,7 +66,7 @@ use serde_derive::{Deserialize, Serialize};
 
 use crate::debug::claims::{check_claim, ClaimQuery, PairAborts};
 use crate::debug::driver::{
-    lines_view, steps_view, terminal_view, write_model, ClaimVerdict, DebugError, StepView,
+    lines_view, steps_view, terminal_view, ClaimVerdict, DebugError, PartVerdict, StepView,
     StopReason, TerminalView, Verdict,
 };
 use crate::debug::layout::Layout;
@@ -104,20 +104,8 @@ pub struct LockstepTerms {
     /// of the EasyCrypt listing has none, and groups `equal-aborts` and `same-output` as
     /// `equal-output`.
     pub claims: Vec<ClaimQuery>,
-    /// One entry per state relation the invariant conjoins, in file order.
-    pub relations: Vec<RelationGoal>,
-    /// One entry per one-sided invariant claim (`package-invariant!…!`, `game-invariant!…!`,
-    /// story 58), each a sub-verdict of `invariant` on every pair, in the same list as the
-    /// relations. Empty on the Domino listing, where these are claims of their own.
-    pub side_invariants: Vec<RelationGoal>,
     /// Every pairing the randomness mapping could make.
     pub pairings: Vec<Pairing>,
-}
-
-/// One state relation's negated goal on the new states.
-pub struct RelationGoal {
-    pub name: String,
-    pub negated: SmtExpr,
 }
 
 /// A candidate pairing of the randomness mapping: the left sampling
@@ -444,19 +432,19 @@ impl PairRecord {
             .map(|c| &c.verdict)
     }
 
-    /// Per-relation verdicts of the `invariant` claim, present only when it is neither
-    /// `verified` nor `unreachable`.
-    pub fn relations(&self) -> &[RelationVerdict] {
+    /// The part verdicts of the `invariant` claim, present only when it is neither `verified`
+    /// nor `unreachable`.
+    pub fn parts(&self) -> &[PartVerdict] {
         self.claims
             .iter()
             .find(|c| c.claim == "invariant")
-            .map_or(&[], |c| c.relations.as_slice())
+            .map_or(&[], |c| c.parts.as_slice())
     }
 
     /// Some claim failed or could not be decided.
     pub fn has_failure(&self) -> bool {
         self.claims.iter().any(|c| {
-            c.verdict.is_failure() || c.relations.iter().any(|r| r.verdict.is_failure())
+            c.verdict.is_failure() || c.parts.iter().any(|p| p.verdict.is_failure())
         })
     }
 }
@@ -469,12 +457,6 @@ pub struct PairSide {
     pub lines: Vec<[usize; 2]>,
     /// What the side computed; `None` for an abort.
     pub effect: Option<PathEffect>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RelationVerdict {
-    pub name: String,
-    pub verdict: Verdict,
 }
 
 // ---------------------------------------------------------------------------
@@ -1186,8 +1168,8 @@ impl<'a, S: SmtSolver> Engine<'_, 'a, S> {
         })
     }
 
-    /// The vacuity check, then each claim on its own dependencies and negated goal, and, when
-    /// the `invariant` is not verified, each state relation.
+    /// The vacuity check, then each claim on its own dependencies and negated goal, and its
+    /// parts where it is not verified ([`check_claim`]).
     fn check_pair(
         &mut self,
         id: &str,
@@ -1211,11 +1193,7 @@ impl<'a, S: SmtSolver> Engine<'_, 'a, S> {
             return Ok(terms
                 .claims
                 .iter()
-                .map(|claim| ClaimVerdict {
-                    claim: claim.name.clone(),
-                    verdict: Verdict::pair_infeasible(),
-                    relations: Vec::new(),
-                })
+                .map(|claim| ClaimVerdict::of(&claim.name, Verdict::pair_infeasible()))
                 .collect());
         }
 
@@ -1223,77 +1201,22 @@ impl<'a, S: SmtSolver> Engine<'_, 'a, S> {
             left: left.terminal.is_abort(),
             right: right.terminal.is_abort(),
         };
-        let mut checked = Vec::with_capacity(terms.claims.len());
-        for claim in &terms.claims {
-            let mut queries = 0;
-            let (verdict, _) = check_claim(
-                &mut *self.solver,
-                claim,
-                aborts,
-                self.opts.out_dir,
-                self.opts.layout,
-                &format!("{id}.{}", claim.name),
-                &mut queries,
-            )?;
-            let mut relations = Vec::new();
-            if claim.name == "invariant"
-                && !matches!(verdict, Verdict::Verified | Verdict::Unreachable { .. })
-            {
-                for relation in &terms.relations {
-                    relations.push(self.check_relation(relation, id)?);
-                }
-            }
-            if claim.name == "invariant" {
-                for side in &terms.side_invariants {
-                    relations.push(self.check_relation(side, id)?);
-                }
-            }
-            checked.push(ClaimVerdict {
-                claim: claim.name.clone(),
-                verdict,
-                relations,
-            });
-        }
-        Ok(checked)
-    }
-
-    /// The sub-verdict of one relation goal on the pair `id`.
-    fn check_relation(&mut self, relation: &RelationGoal, id: &str) -> Result<RelationVerdict, DebugError> {
-        let verdict = self.check_goal(&relation.negated, id, &format!("relation-{}", relation.name))?;
-        Ok(RelationVerdict {
-            name: relation.name.clone(),
-            verdict,
-        })
-    }
-
-    /// Assert one negated goal and classify the answer. A model of a failing
-    /// check goes to `models/<id>.<check>.smt2`.
-    fn check_goal(
-        &mut self,
-        negated: &SmtExpr,
-        id: &str,
-        check: &str,
-    ) -> Result<Verdict, DebugError> {
-        self.solver.push()?;
-        let verdict = (|| -> Result<Verdict, DebugError> {
-            self.solver.write_smt(negated.clone())?;
-            let model_id = format!("{id}.{check}");
-            Ok(match self.solver.check_sat()? {
-                SmtSolverResponse::Unsat => Verdict::Verified,
-                SmtSolverResponse::Sat => {
-                    let (model, _) = write_model(&mut *self.solver, self.opts.out_dir, self.opts.layout, &model_id)?;
-                    Verdict::GoalFails { model }
-                }
-                SmtSolverResponse::Unknown => {
-                    match write_model(&mut *self.solver, self.opts.out_dir, self.opts.layout, &model_id) {
-                        Ok((model, _)) => Verdict::Inconclusive { model: Some(model) },
-                        Err(_) => Verdict::Inconclusive { model: None },
-                    }
-                }
+        let mut queries = 0;
+        terms
+            .claims
+            .iter()
+            .map(|claim| {
+                check_claim(
+                    &mut *self.solver,
+                    claim,
+                    aborts,
+                    self.opts.out_dir,
+                    self.opts.layout,
+                    &format!("{id}.{}", claim.name),
+                    &mut queries,
+                )
             })
-        })();
-        self.solver.pop()?;
-        verdict
+            .collect()
     }
 }
 

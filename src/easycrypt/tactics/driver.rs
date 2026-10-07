@@ -32,7 +32,7 @@ use super::live::{Closing, LiveHandle};
 use super::ResumeMode;
 use super::script::{Mark, Script};
 use crate::easycrypt::job::{AdmitRecord, ClosedNode};
-use crate::writers::easycrypt::invariant::InvariantOp;
+use crate::writers::easycrypt::invariant::{relation_op_name, InvariantOp};
 
 type R<T> = Result<T, SessionError>;
 
@@ -324,38 +324,33 @@ pub(super) fn pair_view(pair: &PairRecord, part: &Part) -> DominoView {
     match part {
         Part::EqualOutput => view_of_verdict(claim(EQUAL_OUTPUT)),
         Part::Invariant => invariant(claim("invariant")),
-        Part::Relation(name) => pair
-            .relations()
-            .iter()
-            .find(|r| &r.name == name)
-            .map_or_else(|| invariant(claim("invariant")), |r| invariant(&r.verdict)),
-        Part::SideInvariant { claim: side_claim, .. } => {
-            side_invariant_view(pair, side_claim, claim("invariant")).map_or(
-                DominoView::Inconclusive,
-                &invariant,
-            )
-        }
+        Part::Relation(name) if name == "invariant" => invariant(claim("invariant")),
+        Part::Relation(name) => part_view(pair, &relation_op_name(name), claim("invariant"), invariant),
+        Part::SideInvariant { op, .. } => part_view(pair, op, claim("invariant"), invariant),
         Part::Whole => {
             view_of_verdict(claim(EQUAL_OUTPUT)).worst(invariant(claim("invariant")))
         }
     }
 }
 
-/// The sub-verdict of the one-sided invariant claim `claim` on `pair`. A pair that cannot
-/// happen has no sub-verdicts: its `invariant` verdict stands for them. `None` when the
-/// sub-verdict is not there (a tree saved before story 58).
-fn side_invariant_view<'p>(
-    pair: &'p PairRecord,
-    claim: &str,
-    invariant: &'p Verdict,
-) -> Option<&'p Verdict> {
-    if matches!(invariant, Verdict::Unreachable { .. }) {
-        return Some(invariant);
+/// What Domino says about the part of `invariant` called `name` (its EasyCrypt operator) on
+/// `pair`. A verified or unreachable `invariant` stands for every part: its goal holds them
+/// all. Else the part has the view of its own verdict through `view`, and is `Inconclusive`
+/// when it has none (a tree saved before symbolic-execution story 21). It never takes the
+/// `invariant` verdict when `invariant` failed.
+fn part_view(
+    pair: &PairRecord,
+    name: &str,
+    invariant: &Verdict,
+    view: impl Fn(&Verdict) -> DominoView,
+) -> DominoView {
+    if matches!(invariant, Verdict::Verified | Verdict::Unreachable { .. }) {
+        return view_of_verdict(invariant);
     }
-    pair.relations()
+    pair.parts()
         .iter()
-        .find(|r| r.name == claim)
-        .map(|r| &r.verdict)
+        .find(|p| p.name == name)
+        .map_or(DominoView::Inconclusive, |p| view(&p.verdict))
 }
 
 /// The lemmas every `smt(…)` of the last fallbacks is given (§3.5 step 5); the project's own come

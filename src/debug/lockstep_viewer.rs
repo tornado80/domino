@@ -26,7 +26,7 @@ use serde_derive::Serialize;
 use crate::debug::driver::ClaimInfo;
 use crate::debug::lockstep::{ChildOutcome, LockstepOutcome, PairRecord};
 use crate::debug::lockstep_run::{ClaimCounts, VerdictCounts};
-use crate::debug::report::{EFFECT_JS, GRID_CSS, LISTING_JS, VIEWER_CSS};
+use crate::debug::report::{EFFECT_JS, GRID_CSS, LISTING_JS, VERDICTS_CSS, VERDICTS_JS, VIEWER_CSS};
 
 /// What the Domino verdicts say about everything below one stuck point: how
 /// many joint paths lie below it, how each claim fared on them, and which state
@@ -105,7 +105,7 @@ pub fn stuck_rollups(outcome: &LockstepOutcome, claims: &[ClaimInfo]) -> Vec<Stu
                         c.counts.bump(verdict);
                     }
                 }
-                for r in pair.relations().iter().filter(|r| r.verdict.is_failure()) {
+                for r in pair.parts().iter().filter(|r| r.verdict.is_failure()) {
                     by_relation.entry(&r.name).or_default().push(RelationFailure {
                         pair: pair.id.clone(),
                         verdict: r.verdict.slug(),
@@ -138,6 +138,8 @@ pub fn render_html(trace_json: &str, rollups: &[StuckRollup], live: bool) -> Str
         .replace("__GRID_CSS__", GRID_CSS)
         .replace("__EFFECT_JS__", EFFECT_JS)
         .replace("__LISTING_JS__", LISTING_JS)
+        .replace("__VERDICTS_JS__", VERDICTS_JS)
+        .replace("__VERDICTS_CSS__", VERDICTS_CSS)
         .replace("__ROLLUPS_JSON__", &escape(&rollups_json))
         .replace("__TRACE_JSON__", &escape(trace_json))
 }
@@ -156,9 +158,9 @@ const TEMPLATE: &str = include_str!("lockstep_viewer.html");
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::debug::driver::{ClaimVerdict, StopReason, TerminalView, Verdict};
+    use crate::debug::driver::{ClaimVerdict, PartVerdict, StopReason, TerminalView, Verdict};
     use crate::debug::lockstep::{
-        HeadKind, HeadView, JointChild, JointNode, JointTree, NodeKind, PairSide, RelationVerdict,
+        HeadKind, HeadView, JointChild, JointNode, JointTree, NodeKind, PairSide, 
         SideStep, SideView, StuckPoint, StuckReason,
     };
 
@@ -225,16 +227,19 @@ mod tests {
                 ClaimVerdict {
                     claim: "equal-output".to_string(),
                     verdict: equal_output,
-                    relations: Vec::new(),
+                    model: None,
+                    parts: Vec::new(),
                 },
                 ClaimVerdict {
                     claim: "invariant".to_string(),
                     verdict: invariant,
-                    relations: relations
+                    model: None,
+                    parts: relations
                         .iter()
-                        .map(|(name, verdict)| RelationVerdict {
+                        .map(|(name, verdict)| PartVerdict {
                             name: name.to_string(),
                             verdict: verdict.clone(),
+                            model: None,
                         })
                         .collect(),
                 },

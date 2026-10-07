@@ -41,9 +41,11 @@ use std::time::{Duration, Instant};
 
 use serde_derive::{Deserialize, Serialize};
 
-use crate::debug::claims::{obligations, ClaimQuery};
+use crate::debug::claims::{
+    no_dependency_claim, obligations, state_relation_parts, ClaimGoalView, ClaimQuery,
+};
 use crate::debug::driver::{
-    equivalence_of, shared_base_frame, sites_view, ClaimInfo, DebugError, GoalBlock, SiteView,
+    equivalence_of, part_blocks, shared_base_frame, sites_view, ClaimInfo, DebugError, GoalBlock, SiteView,
     StopReason, Unreachability, Verdict,
 };
 use crate::debug::layout::{Layout, ALL_CLAIMS_DIR, DOMINO_DEBUG_DIR};
@@ -51,11 +53,12 @@ use crate::debug::exec::TerminalPath;
 use crate::debug::ir::{count_terminals, inline_oracle, FrameSpan, Label, LineInfo};
 use crate::debug::lockstep::{
     run_lockstep, ChildOutcome, LockstepObserver, LockstepOptions, LockstepOutcome, LockstepSide,
-    LockstepTerms, PairRecord, Pairing, RelationGoal, StuckPoint, EQUAL_OUTPUT,
+    LockstepTerms, PairRecord, Pairing, StuckPoint, EQUAL_OUTPUT,
 };
 use crate::debug::lockstep_report::{self, LockstepSmtWriter};
 use crate::debug::lockstep_viewer;
 use crate::debug::progress::{DebugEvent, DebugObserver};
+use crate::writers::easycrypt::invariant::{relation_op_name, side_invariant_ops};
 use crate::debug::render;
 use crate::debug::smtout::SmtOut;
 use crate::project::Project;
@@ -71,7 +74,7 @@ use crate::writers::smt::exprs::{SmtAnd, SmtAssert, SmtExpr, SmtNot};
 
 /// Schema version of a lockstep `trace.json`. Sequential traces keep
 /// [`crate::debug::driver::TRACE_SCHEMA`].
-pub const LOCKSTEP_TRACE_SCHEMA: u32 = 12;
+pub const LOCKSTEP_TRACE_SCHEMA: u32 = 13;
 
 /// The least time between two flushes of the partial artifacts while a run is
 /// in progress: at most two a second (story 24). The page refreshes every two
@@ -158,23 +161,8 @@ impl From<&LockstepDebugOptions> for LockstepOptionsView {
 /// The negated goals the run asks about, rendered.
 #[derive(Debug, Clone, Serialize)]
 pub struct GoalsView {
-    /// One per claim checked, in the order the engine checks them.
+    /// One per claim checked, in the order the engine checks them, each with its parts.
     pub claims: Vec<ClaimGoalView>,
-    pub relations: Vec<RelationGoalView>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ClaimGoalView {
-    pub claim: String,
-    /// The claim's own dependencies, as the assertions made at the terminal pair.
-    pub dependencies: Vec<String>,
-    pub smt: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RelationGoalView {
-    pub name: String,
-    pub smt: String,
 }
 
 /// What a lockstep run is about: its identity, options, goals and listings.
@@ -368,7 +356,7 @@ pub fn summarize(outcome: &LockstepOutcome, claims: &[ClaimInfo]) -> LockstepSum
             }
         }
         *combos.entry(combo).or_insert(0) += 1;
-        for r in p.relations() {
+        for r in p.parts() {
             if r.verdict.is_failure() {
                 *s.relation_failures.entry(r.name.clone()).or_insert(0) += 1;
             }
@@ -401,15 +389,6 @@ pub(crate) fn rank(v: &Verdict) -> usize {
 // ---------------------------------------------------------------------------
 // Terms
 // ---------------------------------------------------------------------------
-
-fn no_dependency_claim(name: &str, ty: ClaimType) -> Claim {
-    Claim {
-        name: name.to_string(),
-        ty,
-        dependencies: Vec::new(),
-        admitted: false,
-    }
-}
 
 /// Which claims a lockstep run checks on every joint path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -454,13 +433,7 @@ impl ClaimSet {
                         EQUAL_OUTPUT,
                         SmtAssert(SmtNot(equal_output)).into(),
                     ),
-                    ClaimQuery::without_dependencies(
-                        "invariant",
-                        eqctx.emit_claim_goal_negated(
-                            &no_dependency_claim("invariant", ClaimType::Invariant),
-                            oracle,
-                        ),
-                    ),
+                    easycrypt_invariant_query(eqctx, oracle),
                 ];
                 Ok(ResolvedClaims {
                     infos: queries
@@ -512,33 +485,14 @@ impl ClaimSet {
     }
 }
 
-/// The engine's solver vocabulary for `oracle`, from the equivalence context. On the EasyCrypt
-/// listing (`claim_set` is [`ClaimSet::NoDependencies`]), the one-sided invariant claims are
-/// sub-verdicts of `invariant`.
+/// The engine's solver vocabulary for `oracle`, from the equivalence context.
 fn lockstep_terms(
     eqctx: &EquivalenceContext<'_>,
     oracle: &str,
     claims: Vec<ClaimQuery>,
-    claim_set: &ClaimSet,
 ) -> LockstepTerms {
-    let negated_relation = |name: &str| {
-        eqctx.emit_claim_goal_negated(&no_dependency_claim(name, ClaimType::Invariant), oracle)
-    };
-
     LockstepTerms {
         claims,
-        relations: eqctx
-            .state_relation_names()
-            .into_iter()
-            .map(|name| RelationGoal {
-                negated: negated_relation(&name),
-                name,
-            })
-            .collect(),
-        side_invariants: match claim_set {
-            ClaimSet::NoDependencies => side_invariant_goals(eqctx, oracle),
-            ClaimSet::Obligations { .. } => Vec::new(),
-        },
         pairings: eqctx
             .randomness_mapping_candidates(oracle)
             .iter()
@@ -553,32 +507,65 @@ fn lockstep_terms(
     }
 }
 
-/// The negated goal of each one-sided invariant claim on the new states, without dependencies.
-fn side_invariant_goals(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<RelationGoal> {
-    eqctx
-        .generate_game_or_package_invariant_claims()
-        .into_iter()
-        .map(|claim| RelationGoal {
-            negated: eqctx
-                .emit_claim_goal_negated(&no_dependency_claim(claim.name(), claim.ty), oracle),
-            name: claim.name().to_string(),
-        })
-        .collect()
+/// The `invariant` check of the EasyCrypt listing. Its goal is what `inv` says after story 58:
+/// the invariant relation and each package and game invariant claim, on the new states, so a
+/// verified `invariant` means every part is verified. Its parts are the conjuncts of `inv` as
+/// [`invariant_ops`] names them: each state relation but `invariant`, then the one-sided
+/// invariant operators.
+fn easycrypt_invariant_query(eqctx: &EquivalenceContext<'_>, oracle: &str) -> ClaimQuery {
+    let goal = |claim: &Claim| eqctx.claim_assumptions_and_goal(claim, oracle).1;
+    let side_claims = eqctx.generate_game_or_package_invariant_claims();
+    let side_goal = |claim: &Claim| goal(&no_dependency_claim(claim.name(), claim.ty));
+    let whole: SmtExpr = SmtAnd(
+        std::iter::once(goal(&no_dependency_claim("invariant", ClaimType::Invariant)))
+            .chain(side_claims.iter().map(side_goal))
+            .collect(),
+    )
+    .into();
+    let mut parts = state_relation_parts(eqctx, oracle, relation_op_name);
+    let (left, right) = (
+        eqctx.left_game_inst_ctx().game_inst(),
+        eqctx.right_game_inst_ctx().game_inst(),
+    );
+    for op in side_invariant_ops(left, right) {
+        let Some(claim) = op.claim.as_ref().and_then(|name| side_claims.iter().find(|c| c.name() == name)) else {
+            continue;
+        };
+        let negated = SmtAssert(SmtNot(side_goal(claim))).into();
+        parts.push((op.name, negated));
+    }
+    ClaimQuery {
+        parts,
+        ..ClaimQuery::without_dependencies("invariant", SmtAssert(SmtNot(whole)).into())
+    }
 }
 
-/// The names of the claims and sub-verdicts that lockstep execution on the EasyCrypt listing
-/// checks for an oracle: `equal-output`, `invariant`, the state relations, then the one-sided
-/// invariant claims.
+/// The names of the checks that lockstep execution on the EasyCrypt listing makes for an
+/// oracle: `equal-output`, `invariant`, then the parts of `invariant` in the order of
+/// [`easycrypt_invariant_query`].
 pub(crate) fn easycrypt_check_names(eqctx: &EquivalenceContext<'_>) -> Vec<String> {
+    let side_claims = eqctx.generate_game_or_package_invariant_claims();
+    let side_ops = side_invariant_ops(
+        eqctx.left_game_inst_ctx().game_inst(),
+        eqctx.right_game_inst_ctx().game_inst(),
+    )
+    .into_iter()
+    .filter(|op| {
+        op.claim
+            .as_ref()
+            .is_some_and(|name| side_claims.iter().any(|c| c.name() == name))
+    })
+    .map(|op| op.name);
     [EQUAL_OUTPUT.to_string(), "invariant".to_string()]
         .into_iter()
-        .chain(eqctx.state_relation_names())
         .chain(
             eqctx
-                .generate_game_or_package_invariant_claims()
-                .iter()
-                .map(|c| c.name().to_string()),
+                .state_relation_names()
+                .into_iter()
+                .filter(|name| name != "invariant")
+                .map(|name| relation_op_name(&name)),
         )
+        .chain(side_ops)
         .collect()
 }
 
@@ -875,6 +862,7 @@ where
                 .map(|(_, assertion)| assertion.to_string())
                 .collect(),
             negated: claim.negated.to_string(),
+            parts: part_blocks(claim),
         })
         .collect();
 
@@ -915,33 +903,11 @@ where
         .collect::<Vec<_>>()
         .join("\n");
 
-    let terms = lockstep_terms(&eqctx, oracle, claim_queries, &claim_set);
     let goals_view = GoalsView {
-        claims: goal_blocks
-            .iter()
-            .map(|block| ClaimGoalView {
-                claim: block.claim.clone(),
-                dependencies: block.dependencies.clone(),
-                smt: block.negated.clone(),
-            })
-            .collect(),
-        relations: terms
-            .relations
-            .iter()
-            .chain(&terms.side_invariants)
-            .map(|r| RelationGoalView {
-                name: r.name.clone(),
-                smt: r.negated.to_string(),
-            })
-            .collect(),
+        claims: claim_queries.iter().map(ClaimQuery::view).collect(),
     };
-    // Every check, in the order the engine runs them: the claims, then the relations.
-    let mut goals = goal_blocks;
-    goals.extend(goals_view.relations.iter().map(|r| GoalBlock {
-        claim: format!("relation-{}", r.name),
-        dependencies: Vec::new(),
-        negated: r.smt.clone(),
-    }));
+    let terms = lockstep_terms(&eqctx, oracle, claim_queries);
+    let goals = goal_blocks;
 
     let meta = LockstepMeta {
         schema: LOCKSTEP_TRACE_SCHEMA,
@@ -1345,23 +1311,21 @@ mod tests {
         assert_eq!(model, "lockstep/models/J1.equal-output.smt2");
     }
 
+    /// Story 21: `invariant` is never a part of itself, so a project whose only state
+    /// relation is `invariant` has no parts.
     #[test]
-    fn a_failing_invariant_is_broken_down_by_state_relation() {
+    fn a_failing_invariant_is_not_a_part_of_itself() {
         let run = run_rules("BadState");
         assert_eq!(verdicts(&run), [("verified", "goal-fails")]);
-        let relations: Vec<_> = run.outcome.pairs[0]
-            .relations()
-            .iter()
-            .map(|r| (r.name.as_str(), rank(&r.verdict)))
-            .collect();
-        assert_eq!(relations, [("invariant", 2)]);
-        assert_eq!(run.summary.relation_failures["invariant"], 1);
+        assert!(run.outcome.pairs[0].parts().is_empty());
+        assert!(run.summary.relation_failures.is_empty());
     }
 
-    /// Story 58: on the EasyCrypt listing, every pair has a sub-verdict of `invariant` for each
-    /// one-sided invariant claim, also when `invariant` itself is verified.
+    /// Story 21: on the EasyCrypt listing, the `invariant` goal holds the package and game
+    /// invariant claims, and their part verdicts are there only where `invariant` is not
+    /// verified, named by their EasyCrypt operators.
     #[test]
-    fn every_pair_has_a_sub_verdict_for_each_one_sided_invariant_claim() {
+    fn the_one_sided_parts_are_checked_only_where_invariant_is_not_verified() {
         let dir = "testdata/easycrypt/story58";
         let files = DirectoryFiles::load(Path::new(dir)).unwrap();
         let project = DirectoryProject::load(PathBuf::from(dir), &files).unwrap();
@@ -1381,30 +1345,72 @@ mod tests {
         )
         .unwrap();
         assert!(!run.outcome.pairs.is_empty());
+        let invariant_goal = &run.meta.goals.claims[1];
+        assert_eq!(invariant_goal.claim, "invariant");
+        let part_names: Vec<&str> = invariant_goal.parts.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            part_names,
+            ["PkgInv_l_C", "PkgInv_r_C", "GameInv_L", "GameInv_R"]
+        );
+        for claim in ["package-invariant!L-C!", "package-invariant!R-C!", "game-invariant!L!", "game-invariant!R!"] {
+            assert!(invariant_goal.smt.contains(claim), "{claim} in {}", invariant_goal.smt);
+        }
         for pair in &run.outcome.pairs {
-            let subs: Vec<_> = pair
-                .relations()
-                .iter()
-                .map(|r| (r.name.as_str(), rank(&r.verdict)))
-                .collect();
-            assert_eq!(
-                subs,
-                [
-                    ("package-invariant!L-C!", 0),
-                    ("package-invariant!R-C!", 0),
-                    ("game-invariant!L!", 0),
-                    ("game-invariant!R!", 0),
-                ],
-                "{}",
-                pair.id
-            );
+            if matches!(invariant(pair), Verdict::Verified | Verdict::Unreachable { .. }) {
+                assert!(pair.parts().is_empty(), "{}", pair.id);
+            } else {
+                let names: Vec<&str> = pair.parts().iter().map(|p| p.name.as_str()).collect();
+                assert_eq!(names, part_names, "{}", pair.id);
+            }
+        }
+    }
+
+    /// Story 21: lockstep execution on the Domino listing gets the same breakdown from the
+    /// claim checker, and its page names no EasyCrypt operator.
+    #[test]
+    fn a_lockstep_run_on_the_domino_listing_breaks_a_failing_invariant_down() {
+        let dir = "testdata/debug/story21";
+        let files = DirectoryFiles::load(Path::new(dir)).unwrap();
+        let project = DirectoryProject::load(PathBuf::from(dir), &files).unwrap();
+        let opts = LockstepDebugOptions::default();
+        let out = tempfile::tempdir().unwrap().keep();
+        let run = run_lockstep_on(
+            ListingKind::Domino,
+            ClaimSet::Obligations { only: None },
+            &project,
+            "T",
+            0,
+            "Bump",
+            &opts,
+            &Cvc5LibBackend::new(true, opts.timeout_ms),
+            Some(out.clone()),
+            &mut NopObserver,
+            None,
+        )
+        .unwrap();
+        let parts: Vec<Vec<(&str, &str)>> = run
+            .outcome
+            .pairs
+            .iter()
+            .map(|p| p.parts().iter().map(|r| (r.name.as_str(), r.verdict.slug())).collect())
+            .collect();
+        assert!(parts.contains(&vec![
+            ("state-relation rel_ctr", "goal-fails"),
+            ("state-relation rel_seen", "verified"),
+        ]));
+        assert!(parts.contains(&Vec::new()));
+        let pages = crate::debug::driver::story21_tests::viewers_under(&out);
+        assert!(!pages.is_empty());
+        for page in pages {
+            assert!(!page.contains("Domino_"));
+            assert!(page.contains("function verdictsList("));
         }
     }
 
     #[test]
     fn a_relation_breakdown_is_only_made_for_a_failing_invariant() {
         let run = run_rules("Synced");
-        assert!(run.outcome.pairs.iter().all(|p| p.relations().is_empty()));
+        assert!(run.outcome.pairs.iter().all(|p| p.parts().is_empty()));
     }
 
     #[test]
@@ -1630,7 +1636,6 @@ mod tests {
                 .resolve(&eqctx, eq, "StuckOrder")
                 .unwrap()
                 .queries,
-            &ClaimSet::NoDependencies,
         );
         let mut solver = Cvc5LibBackend::new(true, None).new_smtsolver().unwrap();
         for e in &base {
@@ -1727,7 +1732,7 @@ mod tests {
             let trace: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(out.join("trace.json")).unwrap())
                     .unwrap();
-            assert_eq!(trace["schema"], 12);
+            assert_eq!(trace["schema"], 13);
             for key in ["left_lines", "right_lines", "left_frames", "right_frames"] {
                 assert!(trace[key].is_array(), "{oracle}: {key}");
             }
@@ -2141,9 +2146,10 @@ mod tests {
             assert!(text.contains(needle), "missing `{needle}` in:\n{text}");
         }
 
+        // `invariant` is the only state relation of BadState: no part, so no part failure
         let run = run_rules("BadState");
         let text = lockstep_report::render_summary(&run);
-        assert!(text.contains("state relations failing"), "{text}");
+        assert!(!text.contains("state relations failing"), "{text}");
         assert!(text.contains("J1"), "{text}");
     }
 
@@ -2197,21 +2203,23 @@ mod tests {
                     continue;
                 }
                 assert_ne!(vacuity, SmtSolverResponse::Unsat, "{oracle} {}", pair.id);
-                let answers: Vec<SmtSolverResponse> = goals
-                    .split("(push 1)\n")
-                    .skip(1)
-                    .map(|block| {
-                        let goal = block.split_once("\n(check-sat)").unwrap().0;
-                        solver.push().unwrap();
-                        solver.write_str(goal).unwrap();
-                        let answer = solver.check_sat().unwrap();
-                        solver.pop().unwrap();
-                        answer
+                // replay the goal blocks line by line, as the run sent them
+                let mut answers = Vec::new();
+                for line in goals.lines() {
+                    match line.trim() {
+                        "(push 1)" => solver.push().unwrap(),
+                        "(pop 1)" => solver.pop().unwrap(),
+                        "(check-sat)" => answers.push(solver.check_sat().unwrap()),
+                        "(get-model)" | "" => {}
+                        _ => writeln!(solver, "{line}").unwrap(),
+                    }
+                }
+                let expected: Vec<SmtSolverResponse> = pair
+                    .claims
+                    .iter()
+                    .flat_map(|c| {
+                        std::iter::once(&c.verdict).chain(c.parts.iter().map(|p| &p.verdict))
                     })
-                    .collect();
-                let expected: Vec<SmtSolverResponse> = [equal_output(pair), invariant(pair)]
-                    .into_iter()
-                    .chain(pair.relations().iter().map(|r| &r.verdict))
                     .map(|v| match v {
                         Verdict::Verified => SmtSolverResponse::Unsat,
                         Verdict::GoalFails { .. } => SmtSolverResponse::Sat,

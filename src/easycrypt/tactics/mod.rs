@@ -1361,7 +1361,8 @@ enum OracleEnd {
 struct WalkedTree {
     outcome: LockstepOutcome,
     summary: LockstepSummary,
-    /// The names of the loaded state relations (`Domino_<name>` is unfolded).
+    /// The SMT names of the state relations of the exported invariant file
+    /// (`Domino_<name>` is unfolded).
     relations: Vec<String>,
     /// What lockstep execution took (in the earlier job, for a saved tree).
     lockstep_time: Duration,
@@ -1553,7 +1554,7 @@ where
     let mut tree = WalkedTree {
         outcome: run.outcome,
         summary: run.summary,
-        relations: run.meta.goals.relations.iter().map(|r| r.name.clone()).collect(),
+        relations: eq.state_relations.clone(),
         lockstep_time,
         id: None,
     };

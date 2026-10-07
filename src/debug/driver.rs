@@ -59,7 +59,7 @@ use std::time::{Duration, Instant};
 use serde_derive::{Deserialize, Serialize};
 
 use crate::debug::claims::{
-    aggregate, check_claim, check_claims, obligations, ClaimQuery, PairAborts,
+    aggregate, check_claim, check_claims, obligations, ClaimGoalView, ClaimQuery, PairAborts,
 };
 use crate::debug::effect::PathEffect;
 use crate::debug::exec::{
@@ -184,7 +184,7 @@ pub enum DebugError {
 
 /// Schema version of `trace.json` (see `docs/stories/07-…`). Bump on any
 /// breaking change to the serialised shape.
-pub const TRACE_SCHEMA: u32 = 9;
+pub const TRACE_SCHEMA: u32 = 10;
 
 /// Why exploration ended. Serialised into `trace.json` (replacing the old bare
 /// `partial: bool`); `summary.txt` prints the human-readable form.
@@ -260,6 +260,10 @@ pub struct DebugRun {
     /// The viewer's `Claim assertion` section renders it (story 13). For an all-claim run:
     /// each claim's own dependencies and negated goal, under a `; claim <name>` comment.
     pub goal_smt: String,
+    /// Each check of the run as the solver gets it at a terminal pair, in that order: the
+    /// claim's dependencies, its negated goal, then its parts. The pages render the `Claim
+    /// assertion` section and the runnable query from this.
+    pub checks: Vec<ClaimGoalView>,
     /// The left game instance's inlined listing (line `n` == `Label` `n`).
     pub left_listing: String,
     /// The right game instance's inlined listing (numbered independently).
@@ -542,10 +546,54 @@ impl Verdict {
 pub struct ClaimVerdict {
     pub claim: String,
     pub verdict: Verdict,
-    /// Sub-verdicts of `invariant`, present only when it is neither verified nor unreachable
-    /// (lockstep execution). Empty for every other claim.
+    /// The model text of a failing check, so the page needs no sidecar file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The verdict of each part of the claim's goal, present only when the claim failed or is
+    /// inconclusive. Empty for every claim but `invariant`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub relations: Vec<crate::debug::lockstep::RelationVerdict>,
+    pub parts: Vec<PartVerdict>,
+}
+
+impl ClaimVerdict {
+    /// The checks of this claim that are not verified, when the claim's verdict is `wanted`:
+    /// `claim → part` for each failing part, else the claim name alone.
+    pub fn failing_checks(&self, wanted: fn(&Verdict) -> bool) -> Vec<String> {
+        if !wanted(&self.verdict) {
+            return Vec::new();
+        }
+        let parts: Vec<String> = self
+            .parts
+            .iter()
+            .filter(|p| p.verdict.is_failure())
+            .map(|p| format!("{} → {}", self.claim, p.name))
+            .collect();
+        if parts.is_empty() {
+            vec![self.claim.clone()]
+        } else {
+            parts
+        }
+    }
+
+    /// A verdict with no model and no parts.
+    pub fn of(claim: &str, verdict: Verdict) -> Self {
+        Self {
+            claim: claim.to_string(),
+            verdict,
+            model: None,
+            parts: Vec::new(),
+        }
+    }
+}
+
+/// What one part of a claim's goal said about a terminal pair.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartVerdict {
+    pub name: String,
+    pub verdict: Verdict,
+    /// The model text of a failing part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -773,6 +821,7 @@ where
         options: OptionsView::from(opts),
         base_frame_smt: String::new(),
         goal_smt: String::new(),
+        checks: Vec::new(),
         left_listing: left_inl.listing.text.clone(),
         right_listing: right_inl.listing.text.clone(),
         left_sites: sites_view(&left_inl.listing),
@@ -809,6 +858,7 @@ where
         // re-derive them per pair; the `smt/` files embed their text.
         let checking = Checking::new(&eqctx, &claims, oracle, all_claims, opts, layout);
         run.goal_smt = checking.goal_text();
+        run.checks = checking.claims.iter().map(ClaimQuery::view).collect();
 
         let mut solver = if opts.transcript {
             std::fs::create_dir_all(layout.path(&out_dir, ""))?;
@@ -1034,6 +1084,7 @@ impl Checking {
                     .map(|(_, assertion)| assertion.to_string())
                     .collect(),
                 negated: claim.negated.to_string(),
+                parts: part_blocks(claim),
             })
             .collect()
     }
@@ -1055,11 +1106,7 @@ impl Checking {
             let claims = if self.all {
                 self.claims
                     .iter()
-                    .map(|claim| ClaimVerdict {
-                        claim: claim.name.clone(),
-                        verdict: Verdict::pair_infeasible(),
-                        relations: Vec::new(),
-                    })
+                    .map(|claim| ClaimVerdict::of(&claim.name, Verdict::pair_infeasible()))
                     .collect()
             } else {
                 Vec::new()
@@ -1091,7 +1138,7 @@ impl Checking {
                 },
             )?;
             if self.first_failure_per_claim {
-                for (claim, _) in &checked {
+                for claim in &checked {
                     if matches!(claim.verdict, Verdict::GoalFails { .. }) {
                         self.failed.borrow_mut().insert(claim.claim.clone());
                     }
@@ -1101,7 +1148,7 @@ impl Checking {
             PairCheck {
                 verdict,
                 model_smt,
-                claims: checked.into_iter().map(|(claim, _)| claim).collect(),
+                claims: checked,
             }
         } else {
             // Story 11: the negated goal was computed once, in `Checking::new` (its text
@@ -1109,13 +1156,12 @@ impl Checking {
             let [claim] = self.claims.as_slice() else {
                 unreachable!("a single-claim run checks one claim");
             };
-            let (verdict, model_smt) = check_claim(
-                solver, claim, aborts, out_dir, self.layout, rid, &mut queries,
-            )?;
+            let checked = check_claim(solver, claim, aborts, out_dir, self.layout, rid, &mut queries)?;
             PairCheck {
-                verdict,
-                model_smt,
-                claims: Vec::new(),
+                verdict: checked.verdict.clone(),
+                model_smt: checked.model.clone(),
+                // the parts are the only breakdown a single-claim run has
+                claims: if checked.parts.is_empty() { Vec::new() } else { vec![checked] },
             }
         };
         counters.claims.set(counters.claims.get() + queries);
@@ -1169,6 +1215,47 @@ pub struct GoalBlock {
     /// the base frame).
     pub dependencies: Vec<String>,
     pub negated: String,
+    /// `(name, negated part)` for each part of the claim's goal.
+    pub parts: Vec<(String, String)>,
+}
+
+/// The parts of `claim`, rendered for its [`GoalBlock`].
+pub(crate) fn part_blocks(claim: &ClaimQuery) -> Vec<(String, String)> {
+    claim
+        .parts
+        .iter()
+        .map(|(name, negated)| (name.clone(), negated.to_string()))
+        .collect()
+}
+
+impl GoalBlock {
+    /// The check as the solver got it at a pair, for an `smt/` file: `push`, the dependencies,
+    /// the negated goal and its `check-sat`, then each part of `parts` that has a verdict in
+    /// the same way, then `pop`. `failures_only` leaves out the parts that verified.
+    pub fn render(&self, verdict: &Verdict, parts: &[PartVerdict], failures_only: bool) -> String {
+        let mut s = format!("; ---- {}: {} ----\n(push 1)\n", self.claim, verdict.slug());
+        for dependency in &self.dependencies {
+            s.push_str(dependency);
+            s.push('\n');
+        }
+        s.push_str(&format!("(push 1)\n{}\n(check-sat)\n(get-model)\n(pop 1)\n", self.negated));
+        for part in parts {
+            if failures_only && !part.verdict.is_failure() {
+                continue;
+            }
+            let Some((_, negated)) = self.parts.iter().find(|(name, _)| *name == part.name) else {
+                continue;
+            };
+            s.push_str(&format!(
+                "; ---- {} → {}: {} ----\n(push 1)\n{negated}\n(check-sat)\n(get-model)\n(pop 1)\n",
+                self.claim,
+                part.name,
+                part.verdict.slug()
+            ));
+        }
+        s.push_str("(pop 1)\n\n");
+        s
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1918,48 +2005,7 @@ pub fn render_tree(run: &DebugRun) -> String {
 
         let _ = writeln!(out, "\n  right paths under #{}:", lp.id);
         for rp in &lp.right_paths {
-            let steps: String = rp
-                .steps
-                .iter()
-                .map(|s| format!("L{} {} -> {}", s.label, s.line, s.decision))
-                .collect::<Vec<_>>()
-                .join("   ");
-            let terminal = format!("L{} {}", rp.terminal.label, rp.terminal.line);
-            let sep = if steps.is_empty() { "" } else { "   " };
-            let note = match &rp.verdict {
-                Verdict::Unreachable { reason } if rp.claims.is_empty() => format!(
-                    " ({})",
-                    describe_unreachable(reason, &lp.terminal, &rp.terminal)
-                ),
-                _ => String::new(),
-            };
-            let _ = writeln!(
-                out,
-                "    #{}  {}{}{}   {}{}",
-                rp.id,
-                steps,
-                sep,
-                terminal,
-                render_verdict(&rp.verdict),
-                note
-            );
-            // an all-claim run: what each claim said about the pair
-            for checked in &rp.claims {
-                let note = match &checked.verdict {
-                    Verdict::Unreachable { reason } => format!(
-                        " — {}",
-                        describe_unreachable(reason, &lp.terminal, &rp.terminal)
-                    ),
-                    _ => String::new(),
-                };
-                let _ = writeln!(
-                    out,
-                    "        {:<28} {}{}",
-                    checked.claim,
-                    render_verdict(&checked.verdict),
-                    note
-                );
-            }
+            write_right_path(&mut out, lp, rp);
         }
         if !lp.pruned_branches.is_empty() {
             let _ = writeln!(out, "\n    pruned under #{}:", lp.id);
@@ -2016,6 +2062,63 @@ pub fn render_tree(run: &DebugRun) -> String {
     );
 
     out
+}
+
+/// One right path of [`render_tree`]: its steps and verdict, then what each claim and each
+/// part said about the pair.
+fn write_right_path(out: &mut String, lp: &LeftPath, rp: &RightPath) {
+    use std::fmt::Write as _;
+
+    let steps: String = rp
+        .steps
+        .iter()
+        .map(|s| format!("L{} {} -> {}", s.label, s.line, s.decision))
+        .collect::<Vec<_>>()
+        .join("   ");
+    let terminal = format!("L{} {}", rp.terminal.label, rp.terminal.line);
+    let sep = if steps.is_empty() { "" } else { "   " };
+    let note = match &rp.verdict {
+        Verdict::Unreachable { reason } if rp.claims.is_empty() => format!(
+            " ({})",
+            describe_unreachable(reason, &lp.terminal, &rp.terminal)
+        ),
+        _ => String::new(),
+    };
+    let _ = writeln!(
+        out,
+        "    #{}  {}{}{}   {}{}",
+        rp.id,
+        steps,
+        sep,
+        terminal,
+        render_verdict(&rp.verdict),
+        note
+    );
+    // an all-claim run: what each claim said about the pair
+    for checked in &rp.claims {
+        let note = match &checked.verdict {
+            Verdict::Unreachable { reason } => format!(
+                " — {}",
+                describe_unreachable(reason, &lp.terminal, &rp.terminal)
+            ),
+            _ => String::new(),
+        };
+        let _ = writeln!(
+            out,
+            "        {:<28} {}{}",
+            checked.claim,
+            render_verdict(&checked.verdict),
+            note
+        );
+        for part in &checked.parts {
+            let _ = writeln!(
+                out,
+                "          {:<26} {}",
+                part.name,
+                render_verdict(&part.verdict)
+            );
+        }
+    }
 }
 
 /// Why a pair is unreachable, in the words of the terminals: `left aborts at L27, and this
@@ -2266,7 +2369,7 @@ mod tests {
             &std::fs::read_to_string(std::path::Path::new(&run.out_dir).join("sequential_trace.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(parsed["schema"], 9);
+        assert_eq!(parsed["schema"], 10);
         assert_eq!(parsed["goal_smt"], run.goal_smt);
     }
 
@@ -2317,7 +2420,7 @@ mod tests {
         let trace = std::path::Path::new(&run.out_dir).join("sequential_trace.json");
         let a = std::fs::read_to_string(&trace).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&a).unwrap();
-        assert_eq!(parsed["schema"], 9);
+        assert_eq!(parsed["schema"], 10);
         // effect is present in the serialised shape.
         assert!(a.contains("\"effect\""));
 
@@ -2970,7 +3073,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["stop_reason"]["kind"], "interrupted");
-        assert_eq!(parsed["schema"], 9);
+        assert_eq!(parsed["schema"], 10);
 
         // story 17: the summary.txt written by the same (interrupted) flush is
         // the per-left-path tree, ending with the bracketed stop line.
@@ -3378,3 +3481,96 @@ mod story19_tests {
     }
 }
 
+
+#[cfg(all(test, feature = "cvc5-lib"))]
+pub(crate) mod story21_tests {
+    //! Symbolic-execution story 21 — the parts of `invariant`. In `testdata/debug/story21`,
+    //! `invariant` is `rel_ctr ∧ rel_seen`; on pair `#1.1` the left side bumps its counter, so
+    //! `rel_ctr` fails there and `rel_seen` holds.
+
+    use super::*;
+    use crate::debug::progress::NopObserver;
+    use crate::project::{DirectoryFiles, DirectoryProject};
+    use crate::util::smtsolver::cvc5lib::Cvc5LibBackend;
+
+    const DIR: &str = "testdata/debug/story21";
+
+    fn run(claim: Option<&str>) -> (DebugRun, PathBuf) {
+        let files = DirectoryFiles::load(Path::new(DIR)).unwrap();
+        let proj = DirectoryProject::load(PathBuf::from(DIR), &files).unwrap();
+        let out = tempfile::tempdir().unwrap().keep();
+        let opts = DebugOptions::default();
+        let run = run_debug_command(
+            &proj,
+            "T",
+            0,
+            "Bump",
+            claim,
+            &opts,
+            &Cvc5LibBackend::new(true, opts.timeout_ms),
+            Some(out.clone()),
+            &mut NopObserver,
+            None,
+        )
+        .unwrap();
+        (run, out)
+    }
+
+    fn parts_of<'r>(run: &'r DebugRun, pair: &str) -> Vec<(&'r str, &'static str)> {
+        run.left_paths
+            .iter()
+            .flat_map(|lp| &lp.right_paths)
+            .filter(|rp| rp.id == pair)
+            .flat_map(|rp| &rp.claims)
+            .filter(|c| c.claim == "invariant")
+            .flat_map(|c| &c.parts)
+            .map(|p| (p.name.as_str(), p.verdict.slug()))
+            .collect()
+    }
+
+    pub(crate) fn viewers_under(dir: &Path) -> Vec<String> {
+        let mut pages = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pages.extend(viewers_under(&path));
+            } else if path.to_string_lossy().ends_with("_viewer.html") {
+                pages.push(std::fs::read_to_string(&path).unwrap());
+            }
+        }
+        pages
+    }
+
+    #[test]
+    fn a_sequential_run_breaks_a_failing_invariant_down_by_state_relation() {
+        let (run, out) = run(None);
+        assert_eq!(
+            parts_of(&run, "1.1"),
+            [("state-relation rel_ctr", "goal-fails"), ("state-relation rel_seen", "verified")]
+        );
+        // `invariant` verified: no part is checked
+        assert!(parts_of(&run, "2.1").is_empty());
+        let invariant = run.checks.iter().find(|c| c.claim == "invariant").unwrap();
+        let names: Vec<&str> = invariant.parts.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["state-relation rel_ctr", "state-relation rel_seen"]);
+        let failing = run.left_paths[0].right_paths[0].claims.iter().find(|c| c.claim == "invariant").unwrap();
+        assert!(failing.model.is_some() && failing.parts[0].model.is_some());
+
+        let pages = viewers_under(&out);
+        assert!(!pages.is_empty());
+        for page in pages {
+            assert!(!page.contains("Domino_"), "a Domino listing page names an EasyCrypt operator");
+            assert!(page.contains("function verdictsList("));
+        }
+    }
+
+    #[test]
+    fn a_single_claim_run_on_invariant_has_the_breakdown_too() {
+        let (run, _) = run(Some("invariant"));
+        assert_eq!(
+            parts_of(&run, "1.1"),
+            [("state-relation rel_ctr", "goal-fails"), ("state-relation rel_seen", "verified")]
+        );
+        assert!(parts_of(&run, "2.1").is_empty());
+    }
+}

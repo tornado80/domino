@@ -1,0 +1,15 @@
+composition GL {
+    const n: Integer;
+
+    instance p = A {
+        params {
+            n: n,
+        }
+    }
+
+    compose {
+        adversary: {
+            Bump: p,
+        },
+    }
+}

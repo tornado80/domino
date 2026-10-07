@@ -189,6 +189,9 @@ pub struct InvariantFile {
     /// stdout report, mirroring `export::ExportedTheorem::skipped`
     /// (story 05).
     pub skipped: Vec<String>,
+    /// The SMT names of every translated `define-state-relation`, file order, `invariant`
+    /// too. The tactics run gives these to [`invariant_ops`].
+    pub state_relations: Vec<String>,
 }
 
 /// Build `Eq_<left>_<right>_Invariants.ec` for `equivalence`, reading its
@@ -254,6 +257,7 @@ pub fn build_invariant_file(
         ops: OpRegistry::default(),
         items: Vec::new(),
         state_relations: Vec::new(),
+        relation_names: Vec::new(),
         skipped: Vec::new(),
     };
 
@@ -386,6 +390,7 @@ pub fn build_invariant_file(
         left_state_type: left_side.record_type_name,
         right_state_type: right_side.record_type_name,
         skipped: state.skipped,
+        state_relations: state.relation_names,
     })
 }
 
@@ -1900,6 +1905,8 @@ struct InvariantParserState<'a> {
     /// order. `define-fun` helpers are *not* included here. Only the one
     /// named `invariant` reaches `op inv` (see [`Self::invariant_op`]).
     state_relations: Vec<String>,
+    /// The SMT names of the same relations, same order.
+    relation_names: Vec<String>,
     skipped: Vec<String>,
 }
 
@@ -2057,6 +2064,7 @@ impl SmtParser<InvariantError> for InvariantParserState<'_> {
             body: body_expr,
         });
         self.state_relations.push(mangled_name);
+        self.relation_names.push(funname.to_string());
         Ok(Sexp::Atom(String::new()))
     }
 
@@ -2555,6 +2563,7 @@ mod tests {
             ops: OpRegistry::default(),
             items: Vec::new(),
             state_relations: Vec::new(),
+            relation_names: Vec::new(),
             skipped: Vec::new(),
         }
     }

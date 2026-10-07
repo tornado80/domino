@@ -251,44 +251,7 @@ pub fn render_summary(run: &DebugRun) -> String {
     write_claim_table(&mut s, run);
 
     // ---- failing / inconclusive pairs --------------------------------
-    let mut goal_fails: Vec<(String, String, Option<String>)> = Vec::new();
-    let mut inconclusive: Vec<(String, String, Option<String>)> = Vec::new();
-    for lp in &run.left_paths {
-        for rp in &lp.right_paths {
-            let chain = chain_str(&rp.steps, &rp.terminal);
-            // An all-claim run names the claims that failed on the pair; a single-claim run
-            // has one claim, already in the header.
-            let failed = |wanted: fn(&Verdict) -> bool| -> String {
-                rp.claims
-                    .iter()
-                    .filter(|c| wanted(&c.verdict))
-                    .map(|c| c.claim.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
-            match &rp.verdict {
-                Verdict::GoalFails { model } => {
-                    let claims = failed(|v| matches!(v, Verdict::GoalFails { .. }));
-                    let chain = if claims.is_empty() {
-                        chain
-                    } else {
-                        format!("{chain}  [{claims}]")
-                    };
-                    goal_fails.push((rp.id.clone(), chain, Some(model.clone())))
-                }
-                Verdict::Inconclusive { model } => {
-                    let claims = failed(|v| matches!(v, Verdict::Inconclusive { .. }));
-                    let chain = if claims.is_empty() {
-                        chain
-                    } else {
-                        format!("{chain}  [{claims}]")
-                    };
-                    inconclusive.push((rp.id.clone(), chain, model.clone()))
-                }
-                _ => {}
-            }
-        }
-    }
+    let (goal_fails, inconclusive) = failing_pairs(run);
     write_pair_block(&mut s, "goal failures", &goal_fails);
     write_pair_block(&mut s, "inconclusive", &inconclusive);
 
@@ -323,6 +286,44 @@ pub fn render_summary(run: &DebugRun) -> String {
     }
 
     s
+}
+
+/// A row of `summary.txt`'s failure blocks: pair id, path chain, model.
+type PairRow = (String, String, Option<String>);
+
+/// The `goal-fails` and the `inconclusive` pairs of `run`. An all-claim run names the checks
+/// that are not verified on each pair; a single-claim run has one claim, already in the header.
+fn failing_pairs(run: &DebugRun) -> (Vec<PairRow>, Vec<PairRow>) {
+    let mut goal_fails: Vec<PairRow> = Vec::new();
+    let mut inconclusive: Vec<PairRow> = Vec::new();
+    for lp in &run.left_paths {
+        for rp in &lp.right_paths {
+            let tagged = |wanted: fn(&Verdict) -> bool| -> String {
+                let chain = chain_str(&rp.steps, &rp.terminal);
+                let checks: Vec<String> =
+                    rp.claims.iter().flat_map(|c| c.failing_checks(wanted)).collect();
+                if checks.is_empty() {
+                    chain
+                } else {
+                    format!("{chain}  [{}]", checks.join(", "))
+                }
+            };
+            match &rp.verdict {
+                Verdict::GoalFails { model } => goal_fails.push((
+                    rp.id.clone(),
+                    tagged(|v| matches!(v, Verdict::GoalFails { .. })),
+                    Some(model.clone()),
+                )),
+                Verdict::Inconclusive { model } => inconclusive.push((
+                    rp.id.clone(),
+                    tagged(|v| matches!(v, Verdict::Inconclusive { .. })),
+                    model.clone(),
+                )),
+                _ => {}
+            }
+        }
+    }
+    (goal_fails, inconclusive)
 }
 
 /// `same-output`, or `all 5 claims of the oracle`.
@@ -426,6 +427,8 @@ fn render_html(trace_json: &str) -> String {
         .replace("__GRID_CSS__", GRID_CSS)
         .replace("__EFFECT_JS__", EFFECT_JS)
         .replace("__LISTING_JS__", LISTING_JS)
+        .replace("__VERDICTS_JS__", VERDICTS_JS)
+        .replace("__VERDICTS_CSS__", VERDICTS_CSS)
         .replace("__TRACE_JSON__", &safe)
 }
 
@@ -438,6 +441,7 @@ const TEMPLATE: &str = r##"<!doctype html>
 <style>
 __VIEWER_CSS__
 __GRID_CSS__
+__VERDICTS_CSS__
 .lp-head:focus, .rp:focus { outline: 1px dotted var(--accent); outline-offset: -1px; }
 </style>
 </head>
@@ -483,6 +487,18 @@ const badgeClass = k => ({ "verified":"verified", "unreachable":"unreachable",
   "goal-fails":"goalfails", "inconclusive":"inconclusive", "pruned":"pruned" }[k] || "verified");
 const badgeText = k => ({ "verified":"verified", "unreachable":"unreachable",
   "goal-fails":"GOAL FAILS", "inconclusive":"inconclusive", "pruned":"pruned (unsat)" }[k] || k);
+
+__VERDICTS_JS__
+// "left aborts at L27, and this claim assumes no-abort" for an unreachable verdict.
+const reasonText = v => {
+  if (!v || v.kind !== "unreachable" || !v.reason) return "";
+  if (v.reason.kind === "pair-infeasible") return "pair infeasible";
+  return `this claim assumes ${v.reason.dependency}, which is false here`;
+};
+// What each check said about a pair. A single-claim run records only the pair's verdict,
+// and its parts where the claim failed.
+const pairClaims = rp => (rp.claims && rp.claims.length) ? rp.claims
+  : (T.checks || []).slice(0, 1).map(k => ({ claim: k.claim, verdict: rp.verdict, model: rp.model_smt, parts: [] }));
 
 // A pruned branch is rendered with the same machinery as a path: a synthetic
 // row whose "terminal" is the cut fork line and whose verdict is "pruned".
@@ -583,8 +599,9 @@ const rpRow = (lp, rp) => {
   row.appendChild(el("span", "twist", ""));
   row.appendChild(el("span", "pid", "#" + rp.id));
   row.appendChild(chainSpan(rp.steps, rp.terminal, rp.pruned));
+  const failed = rp.pruned ? [] : failingChecks(rp.claims || []);
   const bt = rp.pruned ? `pruned at L${rp.terminal.label} (unsat)` : badgeText(k);
-  row.appendChild(el("span", "badge " + badgeClass(k), bt));
+  row.appendChild(el("span", "badge " + badgeClass(k), bt + (failed.length ? ` [${failed.join(", ")}]` : "")));
   row.onclick = () => select(row, row, lp, rp);
   return row;
 };
@@ -787,15 +804,18 @@ function smtOnDisk(rp) {
 }
 
 // The runnable query for a pair: base frame, both path deltas, the vacuity
-// check-sat, then the negated goal and its check-sat — the sequence `domino
-// debug` sent the solver, and what `smt/<L>/<R>.smt2` records.
+// check-sat, then each check as the solver got it (story 21) — the sequence
+// `domino debug` sent the solver.
 function pairQueryText(lp, rp) {
   const parts = [];
   if (T.base_frame_smt) parts.push(T.base_frame_smt);
   lp.smt.forEach(l => parts.push(l));
   if (rp) rp.smt.forEach(l => parts.push(l));
   parts.push("(check-sat)");
-  if (T.goal_smt) parts.push("(push 1)", T.goal_smt, "(check-sat)", "(pop 1)");
+  if (rp) {
+    const checks = checksQueryText(T.checks, pairClaims(rp));
+    if (checks) parts.push(checks);
+  }
   return parts.join("\n") + "\n";
 }
 
@@ -866,24 +886,23 @@ function claimAssertionSec(lp, rp) {
     `checked after right path #${rp.id} terminates at L${rp.terminal.label} (${tw})`));
   wrap.appendChild(copyBtn("Copy runnable query", () => pairQueryText(lp, rp)));
 
-  const pre = el("pre");
-  if (k === "unreachable") {
+  const infeasible = k === "unreachable" && rp.verdict.reason && rp.verdict.reason.kind === "pair-infeasible";
+  if (infeasible) {
+    const pre = el("pre");
     pre.textContent =
       "; the vacuity (check-sat) was `unsat` — this (left, right) pair cannot\n" +
-      "; occur, so the negated goal below was never checked.\n\n" +
-      (T.goal_smt || "(goal not recorded)");
+      "; occur, so no check was made.";
+    wrap.appendChild(pre);
   } else {
-    pre.textContent =
-      "(check-sat)          ; vacuity — is this (left, right) pair reachable?\n\n" +
-      (T.goal_smt || "(goal not recorded)") + "\n" +
-      "(check-sat)          ; the negated claim goal";
+    wrap.appendChild(el("div", "assertion-note",
+      "(check-sat) — vacuity: is this (left, right) pair reachable? Then each check, in the order the solver got them:"));
+    wrap.appendChild(checkBlocks(T.checks, pairClaims(rp)));
   }
-  wrap.appendChild(pre);
 
   const outcome = {
     "verified": "vacuity `sat`, goal check `unsat` — the claim holds on this pair.",
     "unreachable": "vacuity check `unsat` — the pair is unreachable; the goal was not checked.",
-    "goal-fails": "goal check `sat` — the claim FAILS; the Model section above has the witness.",
+    "goal-fails": "a goal check `sat` — a check FAILS; the Verdicts section above has its model.",
     "inconclusive": "goal check `unknown` — timed out or undecided within the budget.",
   }[k] || "";
   const out = el("div", "assertion-outcome");
@@ -970,12 +989,13 @@ function renderDetail(lp, rp) {
   // What the path actually computed (story 18) — the first thing you read.
   detail.appendChild(effectSec(lp, isRight ? rp : null));
 
-  if (isRight) detail.appendChild(claimAssertionSec(lp, rp));
 
-  if (isRight && rp.model_smt) {
-    const p = el("pre");
-    p.textContent = rp.model_smt;
-    detail.appendChild(sec("Model", p, true));
+  if (isRight) {
+    const claims = pairClaims(rp);
+    const failed = failingChecks(claims);
+    detail.appendChild(sec("Verdicts", verdictsList(claims, T.checks, { reason: reasonText }), true,
+      failed.length ? failed.join(", ") : badgeText(verdictKind(rp.verdict))));
+    detail.appendChild(claimAssertionSec(lp, rp));
   }
 
   detail.appendChild(sec("SMT asserted", smtBlock(lp, isRight ? rp : null), false,
@@ -1463,6 +1483,132 @@ function effectColumn(gameName, eff, terminal) {
 }
 "##;
 
+/// The checks of a pair (symbolic-execution story 21), shared by both viewers: the `Verdicts`
+/// section (`verdictsList`), the `Claim assertion` blocks (`checkBlocks`), the runnable query
+/// of the checks (`checksQueryText`) and the tree-row summary (`failingChecks`). Spliced in at
+/// `__VERDICTS_JS__`; needs `el`, `verdictKind`, `badgeClass` and `badgeText`.
+///
+/// `claims` is a pair's claim verdicts (`claim`, `verdict`, `model`, `parts`); `checks` is the
+/// run's checks (`claim`, `dependencies`, `smt`, `parts[].name`, `parts[].smt`). The names come
+/// from these, so the page has no prefix rule of its own.
+pub(crate) const VERDICTS_JS: &str = r##"const isFailing = v => verdictKind(v) === "goal-fails" || verdictKind(v) === "inconclusive";
+
+function modelDetails(text) {
+  const d = el("details", "vmodel");
+  d.appendChild(el("summary", null, "model"));
+  const p = el("pre");
+  p.textContent = text;
+  d.appendChild(p);
+  return d;
+}
+
+// `opts.reason(v)`: the text for an unreachable verdict; `opts.modelLink(path)`: a node for a
+// model file, or null.
+function verdictRow(cls, name, v, model, opts) {
+  const r = el("div", "vrow " + cls);
+  r.appendChild(el("span", "k", name));
+  r.appendChild(el("span", "badge " + badgeClass(verdictKind(v)), badgeText(verdictKind(v))));
+  const link = v.model && opts.modelLink ? opts.modelLink(v.model) : null;
+  if (link) r.appendChild(link);
+  const why = opts.reason ? opts.reason(v) : "";
+  if (why) r.appendChild(el("span", "eff-dim", " — " + why));
+  const box = el("div", "vcheck");
+  box.appendChild(r);
+  if (model) box.appendChild(modelDetails(model));
+  return box;
+}
+
+function partNames(checks, claim) {
+  const check = (checks || []).find(k => k.claim === claim);
+  return check ? (check.parts || []).map(p => p.name) : [];
+}
+
+// One row for each check: each claim, then the parts of a claim under it. A part with no
+// verdict was not checked, because its claim did not fail.
+function verdictsList(claims, checks, opts) {
+  const wrap = el("div", "verdicts");
+  claims.forEach(c => {
+    wrap.appendChild(verdictRow("vclaim", c.claim, c.verdict, c.model, opts));
+    partNames(checks, c.claim).forEach(name => {
+      const pv = (c.parts || []).find(p => p.name === name);
+      if (pv) {
+        wrap.appendChild(verdictRow("vpart", name, pv.verdict, pv.model, opts));
+        return;
+      }
+      const r = el("div", "vrow vpart");
+      r.appendChild(el("span", "k", name));
+      r.appendChild(el("span", "eff-dim", `not checked: ${c.claim} ${badgeText(verdictKind(c.verdict))}`));
+      wrap.appendChild(r);
+    });
+  });
+  return wrap;
+}
+
+// "invariant → state-relation r" for each part that is not verified, else the claim's name,
+// for each claim that is not verified.
+function failingChecks(claims) {
+  const out = [];
+  claims.filter(c => isFailing(c.verdict)).forEach(c => {
+    const parts = (c.parts || []).filter(p => isFailing(p.verdict));
+    if (parts.length) parts.forEach(p => out.push(`${c.claim} → ${p.name}`));
+    else out.push(c.claim);
+  });
+  return out;
+}
+
+// A dependency that the terminals decide: the solver gets nothing for its claim.
+const TERMINAL_DEPENDENCIES = ["no-abort", "left-no-abort", "right-no-abort", "equal-aborts"];
+const askedNothing = v => verdictKind(v) === "unreachable" && (!v.reason || v.reason.kind === "pair-infeasible" ||
+  TERMINAL_DEPENDENCIES.includes(v.reason.dependency));
+
+// The checks of a pair in the order the solver got them, each as `[title, lines]`: `push`,
+// the dependencies, the negated goal and its `check-sat`, then each part that has a verdict,
+// then `pop`. A claim that the run did not check on the pair is left out.
+function checkSequence(checks, claims) {
+  const out = [];
+  (checks || []).forEach(k => {
+    const c = claims.find(x => x.claim === k.claim);
+    if (!c || askedNothing(c.verdict)) return;
+    const lines = ["(push 1)"].concat(k.dependencies || [], ["(push 1)", k.smt, "(check-sat)", "(pop 1)"]);
+    (k.parts || []).forEach(p => {
+      if ((c.parts || []).some(pv => pv.name === p.name)) lines.push(`; part ${p.name}`, "(push 1)", p.smt, "(check-sat)", "(pop 1)");
+    });
+    if (verdictKind(c.verdict) === "unreachable") lines.push("(check-sat)          ; the dependencies alone");
+    lines.push("(pop 1)");
+    out.push([c, lines]);
+  });
+  return out;
+}
+
+function checksQueryText(checks, claims) {
+  return checkSequence(checks, claims).map(([c, lines]) => `; claim ${c.claim}\n` + lines.join("\n")).join("\n");
+}
+
+// One block for each check of the pair, in the order the solver got them.
+function checkBlocks(checks, claims) {
+  const wrap = el("div", "checks");
+  checkSequence(checks, claims).forEach(([c, lines]) => {
+    const head = el("div", "path-sub");
+    head.appendChild(document.createTextNode(c.claim + " "));
+    head.appendChild(el("span", "badge " + badgeClass(verdictKind(c.verdict)), badgeText(verdictKind(c.verdict))));
+    wrap.appendChild(head);
+    const pre = el("pre");
+    pre.textContent = lines.join("\n");
+    wrap.appendChild(pre);
+  });
+  return wrap;
+}
+"##;
+
+/// The styles of [`VERDICTS_JS`]. Spliced in at `__VERDICTS_CSS__`.
+pub(crate) const VERDICTS_CSS: &str = r##".vrow { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin: 4px 0; font: 12px/1.4 var(--mono); }
+.vrow .k { color: var(--fg-muted); min-width: 13ch; overflow-wrap: anywhere; }
+.vrow a { color: var(--accent); }
+.vpart { margin-left: 26px; }
+.vmodel { margin: 0 0 6px 26px; font-size: 12px; }
+.vmodel pre { max-height: 240px; overflow: auto; }
+"##;
+
 /// The 2×2 debug grid (story 48): tree and detail on top, the two listings
 /// below, one column splitter shared by both rows and one row splitter. Spliced
 /// in at `__GRID_CSS__`, after `VIEWER_CSS`.
@@ -1765,6 +1911,7 @@ mod tests {
             },
             base_frame_smt: "(declare-const x Int)".into(),
             goal_smt: "(assert (not (= x 0)))".into(),
+            checks: vec![],
             left_listing: "OracleO {\n    if (k != bot) {\n    return k\n}".into(),
             right_listing: "OracleO {\n    return k\n}".into(),
             left_sites,
@@ -1876,7 +2023,7 @@ mod tests {
         assert!(!first.contains("absolute/path"), "out_dir must be skipped");
 
         let parsed: serde_json::Value = serde_json::from_str(&first).unwrap();
-        assert_eq!(parsed["schema"], 9);
+        assert_eq!(parsed["schema"], 10);
         assert_eq!(parsed["options"]["max_paths"], 1000);
         assert_eq!(parsed["goal_smt"], "(assert (not (= x 0)))");
         assert_eq!(parsed["left_paths"][0]["right_paths"][1]["verdict"]["kind"], "goal-fails");
@@ -1897,7 +2044,7 @@ mod tests {
         let p = write_trace_json(&run, dir.path()).unwrap();
         let parsed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
-        assert_eq!(parsed["schema"], 9);
+        assert_eq!(parsed["schema"], 10);
         assert!(parsed["options"]["max_paths"].is_null());
     }
 

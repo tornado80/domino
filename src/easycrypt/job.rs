@@ -922,8 +922,8 @@ mod tests {
         "claims": [
           {"claim": "equal-output", "verdict": {"kind": "verified"}},
           {"claim": "invariant", "verdict": {"kind": "goal-fails", "model": "models/J1.smt2"},
-           "relations": [{"name": "rel", "verdict": {"kind": "inconclusive", "model": null}},
-                         {"name": "other", "verdict": {"kind": "unreachable", "reason": {"kind": "dependency-false", "dependency": "no-abort"}}}]}
+           "parts": [{"name": "Domino_rel", "verdict": {"kind": "inconclusive", "model": null}},
+                         {"name": "Domino_other", "verdict": {"kind": "unreachable", "reason": {"kind": "dependency-false", "dependency": "no-abort"}}}]}
         ]}],
       "stuck": [{"id": "S1", "node": 0, "side": "right", "label": 4, "left_label": 3, "right_label": 4,
                  "sample": "P.o.r", "draw": 0, "reason": "pairing-sat-not-valid"}],

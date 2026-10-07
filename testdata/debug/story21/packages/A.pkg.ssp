@@ -1,0 +1,19 @@
+package A {
+    params {
+        n: Integer,
+    }
+
+    state {
+        ctr: Integer,
+        seen: Integer,
+    }
+
+    /* a positive argument moves the counter on this side only */
+    oracle Bump(x: Integer) -> Integer {
+        if (x > 0) {
+            ctr <- (ctr + 1);
+        }
+        seen <- x;
+        return 0;
+    }
+}

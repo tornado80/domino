@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(a, fingerprint(Path::new(PROJECT)));
         // the same in every process and build profile: no hash seed, no pointer, no `HashMap`
         // order (a change to the project or to what is hashed changes it, and that is all)
-        assert_eq!(a.hex, "9fc87caae096bf14a1d0314f8bf9452f");
+        assert_eq!(a.hex, "e81558bf382ba51a83ecd56076e9d689");
         assert_eq!(
             a.parts.keys().collect::<Vec<_>>(),
             ["claims", "code", "constants", "invariants", "randomness"]

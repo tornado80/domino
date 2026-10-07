@@ -1,0 +1,15 @@
+package B {
+    params {
+        n: Integer,
+    }
+
+    state {
+        ctr: Integer,
+        seen: Integer,
+    }
+
+    oracle Bump(x: Integer) -> Integer {
+        seen <- x;
+        return 0;
+    }
+}

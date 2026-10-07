@@ -2,8 +2,8 @@
 
 use super::driver::{pair_view, Part};
 use super::*;
-use crate::debug::driver::{ClaimVerdict, TerminalView, Verdict};
-use crate::debug::lockstep::{PairRecord, PairSide, RelationVerdict, EQUAL_OUTPUT};
+use crate::debug::driver::{ClaimVerdict, PartVerdict, TerminalView, Verdict};
+use crate::debug::lockstep::{PairRecord, PairSide, EQUAL_OUTPUT};
 use crate::easycrypt::job::AdmitRecord;
 
 fn pair_view_for_tests(p: &PairRecord, part: &Part) -> &'static str {
@@ -38,16 +38,19 @@ fn pair(
             ClaimVerdict {
                 claim: EQUAL_OUTPUT.into(),
                 verdict: equal_output,
-                relations: Vec::new(),
+                model: None,
+                parts: Vec::new(),
             },
             ClaimVerdict {
                 claim: "invariant".into(),
                 verdict: invariant,
-                relations: relations
+                model: None,
+                parts: relations
                     .iter()
-                    .map(|(name, verdict)| RelationVerdict {
+                    .map(|(name, verdict)| PartVerdict {
                         name: name.to_string(),
                         verdict: verdict.clone(),
+                        model: None,
                     })
                     .collect(),
             },
@@ -127,7 +130,7 @@ fn dominos_verdicts_steer_per_claim_and_per_relation() {
     let p = pair(
         Verdict::Verified,
         fails(),
-        &[("a", Verdict::Verified), ("b", fails())],
+        &[("Domino_a", Verdict::Verified), ("Domino_b", fails())],
         false,
     );
     assert_eq!(
@@ -138,10 +141,11 @@ fn dominos_verdicts_steer_per_claim_and_per_relation() {
         pair_view_for_tests(&p, &Part::Relation("b".into())),
         "fails"
     );
-    // a relation the sub-verdicts do not list falls back to the invariant's verdict
+    // a part with no verdict where `invariant` failed is inconclusive, never the invariant's
+    // verdict
     assert_eq!(
         pair_view_for_tests(&p, &Part::Relation("c".into())),
-        "fails"
+        "inconclusive"
     );
 
     // unreachable pairs count as verified; inconclusive stays inconclusive
@@ -158,7 +162,7 @@ fn dominos_verdicts_steer_per_claim_and_per_relation() {
 #[test]
 fn an_invariant_failure_where_a_side_aborts_is_not_held_against_easycrypt() {
     // story 23: Domino's invariant verdict is stricter than EasyCrypt's `inv` at abort pairs
-    let p = pair(Verdict::Verified, fails(), &[("a", fails())], true);
+    let p = pair(Verdict::Verified, fails(), &[("Domino_a", fails())], true);
     assert_eq!(pair_view_for_tests(&p, &Part::Invariant), "inconclusive");
     assert_eq!(
         pair_view_for_tests(&p, &Part::Relation("a".into())),
@@ -415,6 +419,7 @@ fn eq_report() -> EquivalenceReport {
         oracle_count: 3,
         admit_count: 0,
         oracle_set_mismatch: None,
+        state_relations: vec!["invariant".into()],
     }
 }
 
@@ -2660,9 +2665,10 @@ done
     assert_eq!(said, expected);
 }
 
-/// Story 58: each one-sided invariant part has the view of its own claim only.
+/// Story 58 and symbolic-execution story 21: each one-sided invariant part has the view of
+/// its own part verdict where `invariant` is not verified.
 #[test]
-fn a_one_sided_invariant_part_has_the_view_of_its_own_claim() {
+fn a_one_sided_invariant_part_has_the_view_of_its_own_part_verdict() {
     let part = |op: &str, claim: &str| Part::SideInvariant {
         op: op.into(),
         claim: claim.into(),
@@ -2671,26 +2677,33 @@ fn a_one_sided_invariant_part_has_the_view_of_its_own_claim() {
     let right = part("PkgInv_r_Prf", "package-invariant!Ideal_Hybrid3-Prf!");
     let p = pair(
         Verdict::Verified,
-        Verdict::Verified,
-        &[
-            ("package-invariant!Real_Hybrid3-Prf!", fails()),
-            ("package-invariant!Ideal_Hybrid3-Prf!", Verdict::Verified),
-        ],
+        fails(),
+        &[("PkgInv_l_Prf", fails()), ("PkgInv_r_Prf", Verdict::Verified)],
         false,
     );
     assert_eq!(pair_view_for_tests(&p, &left), "fails");
     assert_eq!(pair_view_for_tests(&p, &right), "verified");
 
     // a pair where a side aborts: a failure counts as inconclusive
-    let aborting = pair(
-        Verdict::Verified,
-        Verdict::Verified,
-        &[("package-invariant!Real_Hybrid3-Prf!", fails())],
-        true,
-    );
+    let aborting = pair(Verdict::Verified, fails(), &[("PkgInv_l_Prf", fails())], true);
     assert_eq!(pair_view_for_tests(&aborting, &left), "inconclusive");
 
-    // a sub-verdict that is not there (a tree saved before story 58)
+    // a part verdict that is not there (a tree saved before story 21)
     let old = pair(Verdict::Verified, fails(), &[], false);
     assert_eq!(pair_view_for_tests(&old, &left), "inconclusive");
+}
+
+/// Symbolic-execution story 21: a verified `invariant` holds every part, so a part on that
+/// pair is verified with no part verdict of its own.
+#[test]
+fn a_part_on_a_pair_with_invariant_verified_is_verified() {
+    let p = pair(Verdict::Verified, Verdict::Verified, &[], false);
+    assert_eq!(pair_view_for_tests(&p, &Part::Relation("a".into())), "verified");
+    let side = Part::SideInvariant {
+        op: "GameInv_G".into(),
+        claim: "game-invariant!G!".into(),
+    };
+    assert_eq!(pair_view_for_tests(&p, &side), "verified");
+    let unreachable = pair(Verdict::Verified, Verdict::pair_infeasible(), &[], false);
+    assert_eq!(pair_view_for_tests(&unreachable, &side), "verified");
 }
