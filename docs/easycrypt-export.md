@@ -175,9 +175,10 @@ For the bits that are initialized with concrete value, we can also directly expr
 Moreover, they always hold regardless abort flag. So the translated invariant 
 in EasyCrypt is op invariant (left : Game_left_state) (right : Game_right_state) = package_parameters_invariant left right /\ 
 left.game_module.abort_flag = right.game_module.abort_flag /\
-!left.game_module.abort_flag => Domino_invariant left right. 
+!left.game_module.abort_flag => StateRelation_invariant left right. 
 (I am not putting the arguments.. THis is a sketch.)
-And all Domino state relations and helper functions can be translated to operators with prefix "Domino_"
+Each Domino state relation (`define-state-relation`) is translated to an operator with the prefix
+"StateRelation_", and each other helper function (`define-fun`) to an operator with the prefix "Helper_".
 
 ## Translating code equivalence proofs
 We need a directory per theorem and for each theorem we have a list of game hops. 

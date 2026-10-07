@@ -3571,7 +3571,7 @@ pub(crate) mod story21_tests {
         let pages = viewers_under(&out);
         assert!(!pages.is_empty());
         for page in pages {
-            assert!(!page.contains("Domino_"), "a Domino listing page names an EasyCrypt operator");
+            assert!(!page.contains("StateRelation_"), "a Domino listing page names an EasyCrypt operator");
             assert!(page.contains("function verdictsList("));
         }
     }

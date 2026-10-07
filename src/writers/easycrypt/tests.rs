@@ -182,7 +182,7 @@ fn an_op_body_chain_puts_every_operator_first_on_its_own_line() {
                     op: EcUnop::Not,
                     arg: Box::new(field("l", "l_abort_flag")),
                 },
-                app("Domino_invariant", vec![var("l"), var("r")]),
+                app("StateRelation_invariant", vec![var("l"), var("r")]),
             ),
         ),
     );
@@ -193,7 +193,7 @@ fn an_op_body_chain_puts_every_operator_first_on_its_own_line() {
             "     params_inv l r\n",
             "  /\\ l.`l_abort_flag = r.`r_abort_flag\n",
             "  /\\ (   !l.`l_abort_flag\n",
-            "      => Domino_invariant l r).\n",
+            "      => StateRelation_invariant l r).\n",
         )
     );
 }

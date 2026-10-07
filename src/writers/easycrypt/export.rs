@@ -57,6 +57,8 @@ pub struct EquivalenceReport {
     pub oracle_set_mismatch: Option<String>,
     /// The SMT names of the state relations the invariant file translates, file order.
     pub state_relations: Vec<String>,
+    /// The SMT names of the helper `define-fun`s the invariant file translates, file order.
+    pub helpers: Vec<String>,
 }
 
 /// A game hop this exporter does not translate, named with its kind and the
@@ -247,6 +249,7 @@ pub fn export_theorem_observed(
             admit_count: ef.proof.admit_count,
             oracle_set_mismatch: ef.proof.oracle_set_mismatch.clone(),
             state_relations: ef.invariants.state_relations.clone(),
+            helpers: ef.invariants.helpers.clone(),
         });
     }
 
@@ -361,7 +364,7 @@ mod tests {
         let invariants = &exported.files[Path::new(&eq.invariants_file)];
         assert!(
             invariants.contains(
-                "op Domino_invariant (l : medium_composition_state) (r : small_composition_state) : bool =\n  l.`l_pkg_rand.`Rand_ctr = r.`r_pkg_rand.`Rand_ctr."
+                "op StateRelation_invariant (l : medium_composition_state) (r : small_composition_state) : bool =\n  l.`l_pkg_rand.`Rand_ctr = r.`r_pkg_rand.`Rand_ctr."
             ),
             "{invariants}"
         );

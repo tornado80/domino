@@ -192,6 +192,9 @@ pub struct InvariantFile {
     /// The SMT names of every translated `define-state-relation`, file order, `invariant`
     /// too. The tactics run gives these to [`invariant_ops`].
     pub state_relations: Vec<String>,
+    /// The SMT names of every translated helper `define-fun`, file order. The tactics run
+    /// gives these to [`invariant_ops`] too.
+    pub helpers: Vec<String>,
 }
 
 /// Build `Eq_<left>_<right>_Invariants.ec` for `equivalence`, reading its
@@ -258,6 +261,7 @@ pub fn build_invariant_file(
         items: Vec::new(),
         state_relations: Vec::new(),
         relation_names: Vec::new(),
+        helper_names: Vec::new(),
         skipped: Vec::new(),
     };
 
@@ -391,6 +395,7 @@ pub fn build_invariant_file(
         right_state_type: right_side.record_type_name,
         skipped: state.skipped,
         state_relations: state.relation_names,
+        helpers: state.helper_names,
     })
 }
 
@@ -877,10 +882,28 @@ fn build_params_inv(left: &SideRecord, right: &SideRecord) -> Result<EcExpr, Inv
     Ok(fold_and(conjuncts))
 }
 
-// --- the SMT-definition-name -> `Domino_<name>` op registry -----------
+// --- the SMT-definition-name -> `StateRelation_`/`Helper_` op registry ---
+
+/// The kind of an operator that an SMT definition of the invariant file gives (story 59).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DefKind {
+    /// A `define-state-relation`: a predicate over the left and right states.
+    StateRelation,
+    /// Any other `define-fun`.
+    Helper,
+}
+
+impl DefKind {
+    fn op_name(self, raw: &str) -> String {
+        match self {
+            DefKind::StateRelation => state_relation_op_name(raw),
+            DefKind::Helper => helper_op_name(raw),
+        }
+    }
+}
 
 /// Maps a `define-fun`/`define-state-relation`'s raw SMT name to its
-/// mangled `Domino_<name>` op name and declared return type, catching a
+/// `StateRelation_<name>` or `Helper_<name>` op name and declared return type, catching a
 /// hard collision (two different raw names mangling to the same result —
 /// e.g. `no-overwriting-state` and `no_overwriting_state`) the same way
 /// [`Names::mangle`] does, but over this module's own richer character
@@ -893,8 +916,14 @@ struct OpRegistry {
 }
 
 impl OpRegistry {
-    fn define(&mut self, file: &str, raw: &str, ret: EcType) -> Result<String, InvariantError> {
-        let mangled = relation_op_name(raw);
+    fn define(
+        &mut self,
+        file: &str,
+        raw: &str,
+        kind: DefKind,
+        ret: EcType,
+    ) -> Result<String, InvariantError> {
+        let mangled = kind.op_name(raw);
         match self.seen_mangled.get(&mangled) {
             Some(existing) if existing == raw => {}
             Some(existing) => {
@@ -937,11 +966,17 @@ impl OpRegistry {
     }
 }
 
-/// The EasyCrypt op that a `define-fun`/`define-state-relation` named `raw` becomes:
-/// `Domino_<mangled>`. This is the one rule for that name. The tactics run uses it to unfold
-/// the relations, so the writer and the tactics run cannot disagree.
-pub(crate) fn relation_op_name(raw: &str) -> String {
-    format!("Domino_{}", mangle_smt_def_name(raw))
+/// The EasyCrypt op that the state relation (`define-state-relation`) named `raw` becomes:
+/// `StateRelation_<mangled>`. This is the one rule for that name. The tactics run and the
+/// debug pages use it, so they cannot disagree with the writer.
+pub(crate) fn state_relation_op_name(raw: &str) -> String {
+    format!("StateRelation_{}", mangle_smt_def_name(raw))
+}
+
+/// The EasyCrypt op that any other `define-fun` of the invariant file, named `raw`, becomes:
+/// `Helper_<mangled>`. A helper is never a claim of its own.
+pub(crate) fn helper_op_name(raw: &str) -> String {
+    format!("Helper_{}", mangle_smt_def_name(raw))
 }
 
 /// One operator of the invariant file that the tactics run unfolds (story 58 §3.6).
@@ -950,29 +985,61 @@ pub struct InvariantOp {
     /// The EasyCrypt operator, e.g. `PkgInv_r_Prf`.
     pub name: String,
     /// The one Domino claim it stands for: `package-invariant!Hybrid2-Prf!` for a wrapper,
-    /// `game-invariant!Hybrid2!` for a `GameInv_` operator. `None` for `inv`, `params_inv`,
-    /// the `Domino_` operators and the `PkgInv_<Pkg>` templates.
+    /// `game-invariant!Hybrid2!` for a `GameInv_` operator. `None` for every other operator.
     pub claim: Option<String>,
+    /// The raw SMT name of the state relation, for a `StateRelation_` operator only.
+    pub relation: Option<String>,
 }
 
 impl InvariantOp {
     fn plain(name: String) -> Self {
-        InvariantOp { name, claim: None }
+        InvariantOp {
+            name,
+            claim: None,
+            relation: None,
+        }
+    }
+
+    fn state_relation(raw: &str) -> Self {
+        InvariantOp {
+            relation: Some(raw.to_string()),
+            ..InvariantOp::plain(state_relation_op_name(raw))
+        }
     }
 }
 
 /// The operators of the invariant file of `left ~ right`, in the order `rewrite /… in` unfolds
-/// them: `inv`, `params_inv`, `Domino_<r>` for each of `relations` (the raw names of the state
-/// relations), then [`side_invariant_ops`]. Reads no file.
+/// them: `inv`, `params_inv`, then [`leaf_part_ops`]. Reads no file.
 pub fn invariant_ops(
     left: &GameInstance,
     right: &GameInstance,
     relations: &[String],
+    helpers: &[String],
 ) -> Vec<InvariantOp> {
     ["inv".to_string(), "params_inv".to_string()]
         .into_iter()
-        .chain(relations.iter().map(|r| relation_op_name(r)))
         .map(InvariantOp::plain)
+        .chain(leaf_part_ops(left, right, relations, helpers))
+        .collect()
+}
+
+/// The operators that the tactics run unfolds inside a leaf part: `StateRelation_<r>` for
+/// each of `relations` (the raw names of the state relations), `Helper_<h>` for each of
+/// `helpers` (the raw names of the other `define-fun`s), then [`side_invariant_ops`].
+pub fn leaf_part_ops(
+    left: &GameInstance,
+    right: &GameInstance,
+    relations: &[String],
+    helpers: &[String],
+) -> Vec<InvariantOp> {
+    relations
+        .iter()
+        .map(|r| InvariantOp::state_relation(r))
+        .chain(
+            helpers
+                .iter()
+                .map(|h| InvariantOp::plain(helper_op_name(h))),
+        )
         .chain(side_invariant_ops(left, right))
         .collect()
 }
@@ -989,8 +1056,8 @@ pub fn side_invariant_ops(left: &GameInstance, right: &GameInstance) -> Vec<Inva
     for (letter, game_inst) in sides {
         for inst in side::invariant_instances(game_inst) {
             wrappers.push(InvariantOp {
-                name: pkg_inv_op_name(letter, inst.name()),
                 claim: Some(package_invariant_claim_name(game_inst.name(), inst.name())),
+                ..InvariantOp::plain(pkg_inv_op_name(letter, inst.name()))
             });
             let template = pkg_inv_template_name(&inst.pkg.name);
             if !templates.iter().any(|t| t.name == template) {
@@ -999,8 +1066,8 @@ pub fn side_invariant_ops(left: &GameInstance, right: &GameInstance) -> Vec<Inva
         }
         if !game_inst.game().invariants.is_empty() {
             games.push(InvariantOp {
-                name: game_inv_op_name(game_inst.name()),
                 claim: Some(game_invariant_claim_name(game_inst.name())),
+                ..InvariantOp::plain(game_inv_op_name(game_inst.name()))
             });
         }
     }
@@ -1012,7 +1079,7 @@ pub fn side_invariant_ops(left: &GameInstance, right: &GameInstance) -> Vec<Inva
 /// story); every other punctuation character the `smt.pest` atom charset
 /// allows (`= < > $ ! + @ . *`) becomes an underscore-delimited word
 /// (`state=` -> `state_eq`, `=prf` -> `eq_prf`), so the result is always a
-/// legal EasyCrypt identifier fragment once prefixed with `Domino_`.
+/// legal EasyCrypt identifier fragment once prefixed with `StateRelation_` or `Helper_`.
 fn mangle_smt_def_name(raw: &str) -> String {
     let mut out = String::new();
     for c in raw.chars() {
@@ -1907,6 +1974,8 @@ struct InvariantParserState<'a> {
     state_relations: Vec<String>,
     /// The SMT names of the same relations, same order.
     relation_names: Vec<String>,
+    /// The SMT names of the translated `define-fun` helpers, file order.
+    helper_names: Vec<String>,
     skipped: Vec<String>,
 }
 
@@ -1991,13 +2060,16 @@ impl SmtParser<InvariantError> for InvariantParserState<'_> {
             tctx.translate(&body, &locals)?
         };
 
-        let mangled_name = self.ops.define(&self.file, funname, ret_ty.clone())?;
+        let mangled_name = self
+            .ops
+            .define(&self.file, funname, DefKind::Helper, ret_ty.clone())?;
         self.items.push(EcItem::OpDef {
             name: mangled_name,
             args: arg_list,
             ret: Some(ret_ty),
             body: body_expr,
         });
+        self.helper_names.push(funname.to_string());
         Ok(Sexp::Atom(String::new()))
     }
 
@@ -2053,7 +2125,9 @@ impl SmtParser<InvariantError> for InvariantParserState<'_> {
             tctx.translate(&body, &side_locals)?
         };
 
-        let mangled_name = self.ops.define(&self.file, funname, EcType::Bool)?;
+        let mangled_name =
+            self.ops
+                .define(&self.file, funname, DefKind::StateRelation, EcType::Bool)?;
         self.items.push(EcItem::OpDef {
             name: mangled_name.clone(),
             args: vec![
@@ -2334,7 +2408,8 @@ mod tests {
     fn calling_a_previously_defined_op_translates() {
         let sexp = parse_sort_text("(state= left right)");
         let mut ops = OpRegistry::default();
-        ops.define("test.smt2", "state=", EcType::Bool).unwrap();
+        ops.define("test.smt2", "state=", DefKind::StateRelation, EcType::Bool)
+            .unwrap();
         let mut tctx = TCtx {
             file: "test.smt2".to_string(),
             lookup: &StateLookup::default(),
@@ -2345,7 +2420,7 @@ mod tests {
             local_names: Names::new(),
         };
         let (expr, _) = tctx.translate(&sexp, &Locals::new()).unwrap();
-        assert_eq!(render_expr(&expr), "Domino_state_eq l r");
+        assert_eq!(render_expr(&expr), "StateRelation_state_eq l r");
     }
 
     #[test]
@@ -2378,10 +2453,20 @@ mod tests {
     #[test]
     fn name_collision_differing_only_by_dash_underscore_is_a_hard_error() {
         let mut ops = OpRegistry::default();
-        ops.define("test.smt2", "no-overwriting-state", EcType::Bool)
-            .unwrap();
+        ops.define(
+            "test.smt2",
+            "no-overwriting-state",
+            DefKind::Helper,
+            EcType::Bool,
+        )
+        .unwrap();
         let err = ops
-            .define("test.smt2", "no_overwriting_state", EcType::Bool)
+            .define(
+                "test.smt2",
+                "no_overwriting_state",
+                DefKind::Helper,
+                EcType::Bool,
+            )
             .unwrap_err();
         assert!(matches!(err, InvariantError::NameCollision { .. }));
     }
@@ -2564,6 +2649,7 @@ mod tests {
             items: Vec::new(),
             state_relations: Vec::new(),
             relation_names: Vec::new(),
+        helper_names: Vec::new(),
             skipped: Vec::new(),
         }
     }
@@ -2629,7 +2715,7 @@ mod tests {
         state
             .parse_stmts("(define-state-relation foo (a b) true)")
             .unwrap();
-        assert_eq!(state.state_relations, vec!["Domino_foo".to_string()]);
+        assert_eq!(state.state_relations, vec!["StateRelation_foo".to_string()]);
     }
 
     #[test]
@@ -2842,8 +2928,8 @@ mod tests {
     fn a_dotted_state_atom_is_a_projection_of_the_package_record() {
         let rendered = params_project_file("Params", "L", "R").unwrap();
         assert_eq!(
-            item_text(&rendered, "op Domino_dotted_state"),
-            "op Domino_dotted_state (l : L_state) (r : R_state) : bool =\n  \
+            item_text(&rendered, "op StateRelation_dotted_state"),
+            "op StateRelation_dotted_state (l : L_state) (r : R_state) : bool =\n  \
                l.`l_pkg_Store.`Ctr_ctr = r.`r_pkg_Keep.`CtrToo_ctr."
         );
     }
@@ -2852,8 +2938,8 @@ mod tests {
     fn a_dotted_parameter_atom_is_the_game_record_parameter_field() {
         let rendered = params_project_file("Params", "L", "R").unwrap();
         assert_eq!(
-            item_text(&rendered, "op Domino_dotted_param"),
-            "op Domino_dotted_param (l : L_state) (r : R_state) : bool =\n  \
+            item_text(&rendered, "op StateRelation_dotted_param"),
+            "op StateRelation_dotted_param (l : L_state) (r : R_state) : bool =\n  \
                l.`l_pkg_Front_b = r.`r_pkg_Front_b."
         );
     }
@@ -2862,8 +2948,8 @@ mod tests {
     fn a_whole_package_equality_with_state_is_one_record_equality_without_parameters() {
         let rendered = params_project_file("Params", "L", "R").unwrap();
         assert_eq!(
-            item_text(&rendered, "op Domino_same_package_with_state"),
-            "op Domino_same_package_with_state (l : L_state) (r : R_state) : bool =\n  \
+            item_text(&rendered, "op StateRelation_same_package_with_state"),
+            "op StateRelation_same_package_with_state (l : L_state) (r : R_state) : bool =\n  \
                l.`l_pkg_T = r.`r_pkg_T."
         );
     }
@@ -2872,8 +2958,8 @@ mod tests {
     fn a_whole_package_equality_between_stateless_instances_is_true() {
         let rendered = params_project_file("Params", "L", "R").unwrap();
         assert_eq!(
-            item_text(&rendered, "op Domino_same_package_stateless"),
-            "op Domino_same_package_stateless (l : L_state) (r : R_state) : bool =\n  \
+            item_text(&rendered, "op StateRelation_same_package_stateless"),
+            "op StateRelation_same_package_stateless (l : L_state) (r : R_state) : bool =\n  \
                true."
         );
     }
@@ -2913,16 +2999,16 @@ mod tests {
                 "     params_inv l r\n",
                 "  /\\ l.`l_abort_flag = r.`r_abort_flag\n",
                 "  /\\ (   !l.`l_abort_flag\n",
-                "      => Domino_invariant l r)."
+                "      => StateRelation_invariant l r)."
             )
         );
         // Every relation still has its own op, in file order.
         let order: Vec<usize> = [
-            "op Domino_dotted_state ",
-            "op Domino_dotted_param ",
-            "op Domino_same_package_with_state ",
-            "op Domino_same_package_stateless ",
-            "op Domino_invariant ",
+            "op StateRelation_dotted_state ",
+            "op StateRelation_dotted_param ",
+            "op StateRelation_same_package_with_state ",
+            "op StateRelation_same_package_stateless ",
+            "op StateRelation_invariant ",
         ]
         .iter()
         .map(|h| rendered.find(h).unwrap_or_else(|| panic!("no `{h}`")))
@@ -3217,6 +3303,52 @@ mod tests {
             file_path.to_str().unwrap(),
         );
         let _ = std::fs::remove_dir_all(&scratch_dir);
+    }
+
+    /// Story 59: a `define-state-relation` is a `StateRelation_` operator, a `define-fun` a
+    /// `Helper_` operator, and the old `Domino_` prefix is gone.
+    #[test]
+    fn a_state_relation_and_a_helper_get_their_own_prefixes() {
+        let (theorem, project) = load_project(PARAMS_PROJECT, "ParamsHelper");
+        let equivalence = find_equivalence(&theorem, "L", "R");
+        let result = build_invariant_file(&theorem, equivalence, project).unwrap();
+        assert_eq!(result.state_relations, ["invariant"]);
+        assert_eq!(result.helpers, ["same-bit"]);
+        let rendered = crate::writers::easycrypt::render::render_file(&result.file);
+        assert_eq!(
+            item_text(&rendered, "op Helper_same_bit"),
+            "op Helper_same_bit (a : bool) (b : bool) : bool =\n  a = b."
+        );
+        assert_eq!(
+            item_text(&rendered, "op StateRelation_invariant"),
+            "op StateRelation_invariant (l : L_state) (r : R_state) : bool =\n  \
+               Helper_same_bit l.`l_pkg_Front_b r.`r_pkg_Front_b."
+        );
+        assert!(
+            item_text(&rendered, "op inv").ends_with("=> StateRelation_invariant l r)."),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("Domino_"), "{rendered}");
+    }
+
+    #[test]
+    fn a_state_relation_and_a_helper_compile() {
+        let (theorem, project) = load_project(PARAMS_PROJECT, "ParamsHelper");
+        let equivalence = find_equivalence(&theorem, "L", "R");
+        let result = build_invariant_file(&theorem, equivalence, project).unwrap();
+        let rendered = crate::writers::easycrypt::render::render_file(&result.file);
+        let scratch = tempfile::tempdir().unwrap();
+        let file_path = scratch.path().join(&result.file_name);
+        std::fs::write(&file_path, &rendered).unwrap();
+        std::fs::write(
+            scratch.path().join("Types.ec"),
+            "require import AllCore Distr FMap Int IntDiv.\n",
+        )
+        .unwrap();
+        crate::writers::easycrypt::test_support::assert_compiles_with_paths(
+            &[scratch.path().to_str().unwrap()],
+            file_path.to_str().unwrap(),
+        );
     }
 
     #[test]

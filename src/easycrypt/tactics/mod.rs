@@ -65,7 +65,7 @@ use crate::transforms::theorem_transforms::EasyCryptTransform;
 use crate::transforms::TheoremTransform;
 use crate::util::smtsolver::SmtSolverBackend;
 use crate::writers::easycrypt::export::{EquivalenceReport, ExportedTheorem};
-use crate::writers::easycrypt::invariant::{invariant_ops, side_invariant_ops};
+use crate::writers::easycrypt::invariant::{invariant_ops, leaf_part_ops};
 use crate::writers::easycrypt::lower::inline_oracle_ec;
 
 use super::check::{
@@ -1362,8 +1362,10 @@ struct WalkedTree {
     outcome: LockstepOutcome,
     summary: LockstepSummary,
     /// The SMT names of the state relations of the exported invariant file
-    /// (`Domino_<name>` is unfolded).
+    /// (`StateRelation_<name>` is unfolded).
     relations: Vec<String>,
+    /// The SMT names of its helper `define-fun`s (`Helper_<name>` is unfolded).
+    helpers: Vec<String>,
     /// What lockstep execution took (in the earlier job, for a saved tree).
     lockstep_time: Duration,
     /// Its [`SavedTree::id`]; `None` when it could not be saved.
@@ -1478,6 +1480,7 @@ fn resuming<P: Project>(
             outcome: saved.outcome,
             summary: saved.summary,
             relations: saved.relations,
+            helpers: saved.helpers,
             lockstep_time,
             id: Some(saved.id),
         },
@@ -1555,6 +1558,7 @@ where
         outcome: run.outcome,
         summary: run.summary,
         relations: eq.state_relations.clone(),
+        helpers: eq.helpers.clone(),
         lockstep_time,
         id: None,
     };
@@ -1602,6 +1606,7 @@ fn save_tree<P: Project>(
         outcome: tree.outcome.clone(),
         summary: tree.summary.clone(),
         relations: tree.relations.clone(),
+        helpers: tree.helpers.clone(),
     };
     write_atomically(&path, proof.progress_dir, &saved.to_json())?;
     Ok(Some(saved.id))
@@ -1646,12 +1651,12 @@ where
     let resume = resume_from.as_ref().map(|from| {
         Resume::new(&tree, from.mode, from.closed.clone(), &from.in_flight)
     });
-    let unfold_ops: Vec<String> =
-        invariant_ops(setup.left_inst, setup.right_inst, &walked.relations)
-            .into_iter()
-            .map(|op| op.name)
-            .collect();
-    let side_ops = side_invariant_ops(setup.left_inst, setup.right_inst);
+    let (left, right) = (setup.left_inst, setup.right_inst);
+    let unfold_ops: Vec<String> = invariant_ops(left, right, &walked.relations, &walked.helpers)
+        .into_iter()
+        .map(|op| op.name)
+        .collect();
+    let part_ops = leaf_part_ops(left, right, &walked.relations, &walked.helpers);
     let left_ir = inline_oracle_ec(setup.left_inst, oracle)?;
     let right_ir = inline_oracle_ec(setup.right_inst, oracle)?;
     let began = Instant::now();
@@ -1696,7 +1701,7 @@ where
         tree: &tree,
         hints: &options.smt_hints,
         unfold_ops: &unfold_ops,
-        side_ops: &side_ops,
+        part_ops: &part_ops,
         quick_close: options.quick_close,
         oracle,
         leaf_budget: options.leaf_budget,

@@ -501,20 +501,23 @@ mod tests {
     }
 
     /// Symbolic-execution story 21: the tactics run takes its state relations from the
-    /// invariant file, and the unfold list still holds `Domino_invariant`.
+    /// invariant file, and the unfold list still holds `StateRelation_invariant`.
     #[test]
-    fn the_unfold_list_from_the_invariant_files_relations_holds_domino_invariant() {
+    fn the_unfold_list_from_the_invariant_files_relations_holds_state_relation_invariant() {
         let (theorem, project) = load_project("example-projects/4WHS", "Simple4WHS");
         let equivalence = find_equivalence(&theorem, "Hybrid1", "Hybrid2");
         let file = build_invariant_file(&theorem, equivalence, project).unwrap();
         assert!(file.state_relations.iter().any(|r| r == "invariant"), "{:?}", file.state_relations);
         let left = theorem.find_game_instance("Hybrid1").unwrap();
         let right = theorem.find_game_instance("Hybrid2").unwrap();
-        let ops: Vec<String> = invariant_ops(left, right, &file.state_relations)
+        let ops: Vec<String> = invariant_ops(left, right, &file.state_relations, &file.helpers)
             .into_iter()
             .map(|op| op.name)
             .collect();
-        assert!(ops.iter().any(|op| op == "Domino_invariant"), "{ops:?}");
+        assert!(
+            ops.iter().any(|op| op == "StateRelation_invariant"),
+            "{ops:?}"
+        );
     }
 
     #[test]
@@ -526,7 +529,7 @@ mod tests {
         assert_eq!(count(&text, "op PkgInv_l_"), 0, "{text}");
         let inv = item_text(&text, "op inv");
         assert!(
-            inv.contains("=>    Domino_invariant l r\n         /\\ PkgInv_r_Prf r\n         /\\ GameInv_Hybrid2 r)."),
+            inv.contains("=>    StateRelation_invariant l r\n         /\\ PkgInv_r_Prf r\n         /\\ GameInv_Hybrid2 r)."),
             "{inv}"
         );
         golden(&text, "Eq_Hybrid1_Hybrid2_Invariants.ec");
@@ -555,7 +558,7 @@ mod tests {
         assert!(item_text(&text, "op PkgInv_PRF").contains("kid <= 0"), "{text}");
         // templates, then wrappers, then the game invariants, then `params_inv`
         let order: Vec<usize> = [
-            "op Domino_invariant ",
+            "op StateRelation_invariant ",
             "op PkgInv_PRF ",
             "op PkgInv_l_Prf ",
             "op PkgInv_r_Prf ",
@@ -581,7 +584,7 @@ mod tests {
                 "     params_inv l r\n",
                 "  /\\ l.`l_abort_flag = r.`r_abort_flag\n",
                 "  /\\ (   !l.`l_abort_flag\n",
-                "      =>    Domino_invariant l r\n",
+                "      =>    StateRelation_invariant l r\n",
                 "         /\\ PkgInv_l_C l\n",
                 "         /\\ GameInv_L l\n",
                 "         /\\ PkgInv_r_C r\n",
@@ -658,23 +661,29 @@ mod tests {
         let (theorem, _) = load_project("example-projects/4WHS", "Simple4WHS");
         let left = theorem.find_game_instance("Real_Hybrid3").unwrap();
         let right = theorem.find_game_instance("Ideal_Hybrid3").unwrap();
-        let ops = invariant_ops(left, right, &["relation-a-b".to_string(), "state=".to_string()]);
-        let pairs: Vec<(&str, Option<&str>)> = ops
+        let ops = invariant_ops(
+            left,
+            right,
+            &["relation-a-b".to_string(), "state=".to_string()],
+            &["eq-prf".to_string()],
+        );
+        let rows: Vec<(&str, Option<&str>, Option<&str>)> = ops
             .iter()
-            .map(|o| (o.name.as_str(), o.claim.as_deref()))
+            .map(|o| (o.name.as_str(), o.claim.as_deref(), o.relation.as_deref()))
             .collect();
         assert_eq!(
-            pairs,
+            rows,
             [
-                ("inv", None),
-                ("params_inv", None),
-                ("Domino_relation_a_b", None),
-                ("Domino_state_eq", None),
-                ("PkgInv_l_Prf", Some("package-invariant!Real_Hybrid3-Prf!")),
-                ("PkgInv_r_Prf", Some("package-invariant!Ideal_Hybrid3-Prf!")),
-                ("PkgInv_PRF", None),
-                ("GameInv_Real_Hybrid3", Some("game-invariant!Real_Hybrid3!")),
-                ("GameInv_Ideal_Hybrid3", Some("game-invariant!Ideal_Hybrid3!")),
+                ("inv", None, None),
+                ("params_inv", None, None),
+                ("StateRelation_relation_a_b", None, Some("relation-a-b")),
+                ("StateRelation_state_eq", None, Some("state=")),
+                ("Helper_eq_prf", None, None),
+                ("PkgInv_l_Prf", Some("package-invariant!Real_Hybrid3-Prf!"), None),
+                ("PkgInv_r_Prf", Some("package-invariant!Ideal_Hybrid3-Prf!"), None),
+                ("PkgInv_PRF", None, None),
+                ("GameInv_Real_Hybrid3", Some("game-invariant!Real_Hybrid3!"), None),
+                ("GameInv_Ideal_Hybrid3", Some("game-invariant!Ideal_Hybrid3!"), None),
             ]
         );
     }

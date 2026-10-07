@@ -100,13 +100,13 @@ fn an_admit_label_names_the_id_the_claim_the_reason_and_dominos_verdict() {
     let admit = Admit {
         reason: AdmitReason::DominoVerifiedEcFailed,
         id: "J7".into(),
-        claim: "invariant/Domino_rel_keys".into(),
+        claim: "invariant/StateRelation_rel_keys".into(),
         domino: DominoView::Verified,
         goal: String::new(),
     };
     assert_eq!(
         admit.label(),
-        "(* domino: J7 invariant/Domino_rel_keys; reason: domino-verified-ec-failed; Domino: verified *)"
+        "(* domino: J7 invariant/StateRelation_rel_keys; reason: domino-verified-ec-failed; Domino: verified *)"
     );
     // a sentence with such a comment is still one sentence for the session
     let sentences = split_sentences(&format!("admit. {}\nauto.", admit.label()));
@@ -130,7 +130,10 @@ fn dominos_verdicts_steer_per_claim_and_per_relation() {
     let p = pair(
         Verdict::Verified,
         fails(),
-        &[("Domino_a", Verdict::Verified), ("Domino_b", fails())],
+        &[
+            ("StateRelation_a", Verdict::Verified),
+            ("StateRelation_b", fails()),
+        ],
         false,
     );
     assert_eq!(
@@ -159,10 +162,67 @@ fn dominos_verdicts_steer_per_claim_and_per_relation() {
     assert_eq!(pair_view_for_tests(&p, &Part::Invariant), "inconclusive");
 }
 
+/// An ambient goal whose conclusion is `concl` (formula JSON).
+fn ambient_goal(concl: &str) -> crate::easycrypt::json::Goal {
+    serde_json::from_str(&format!(r#"{{"id":1,"concl":{concl}}}"#)).unwrap()
+}
+
+fn app(op: &str, args: &[&str]) -> String {
+    format!(
+        r#"{{"kind":"app","pp":"","op":"{op}","args":[{}]}}"#,
+        args.join(",")
+    )
+}
+
+/// Story 59 §3.3: a `StateRelation_` conjunct starts its state-relation part; a `Helper_`
+/// conjunct is unfolded and stays in the part that contains it, never a part of its own.
+#[test]
+fn a_state_relation_starts_a_part_and_a_helper_stays_inside_one() {
+    use super::driver::{ambient_step, Step};
+    use crate::writers::easycrypt::invariant::InvariantOp;
+    let op = |name: &str, relation: Option<&str>| InvariantOp {
+        name: name.into(),
+        claim: None,
+        relation: relation.map(Into::into),
+    };
+    let part_ops = [op("StateRelation_a", Some("a")), op("Helper_h", None)];
+    let var = r#"{"kind":"local","pp":"x"}"#;
+    let relation = app("Top.Eq_L_R_Invariants.StateRelation_a", &[var, var]);
+    let helper = app("Top.Eq_L_R_Invariants.Helper_h", &[var]);
+    // JSON spells the operator `/\` with an escaped backslash
+    let leaf = app(r"Top.Logic./\\", &[&relation, &helper]);
+
+    let step = |concl: &str, part: Part| ambient_step(&ambient_goal(concl), &part, &part_ops);
+    assert_eq!(step(&leaf, Part::Whole), (Step::Split, Part::Whole));
+    assert_eq!(
+        step(&relation, Part::Whole),
+        (
+            Step::Unfold("StateRelation_a".into()),
+            Part::Relation("a".into())
+        )
+    );
+    // the helper is unfolded in whatever part it is in
+    for part in [Part::Whole, Part::Invariant, Part::Relation("a".into())] {
+        assert_eq!(
+            step(&helper, part.clone()),
+            (Step::Unfold("Helper_h".into()), part)
+        );
+    }
+    assert_eq!(
+        Part::Relation("a".into()).claim_label(),
+        "invariant/StateRelation_a"
+    );
+}
+
 #[test]
 fn an_invariant_failure_where_a_side_aborts_is_not_held_against_easycrypt() {
     // story 23: Domino's invariant verdict is stricter than EasyCrypt's `inv` at abort pairs
-    let p = pair(Verdict::Verified, fails(), &[("Domino_a", fails())], true);
+    let p = pair(
+        Verdict::Verified,
+        fails(),
+        &[("StateRelation_a", fails())],
+        true,
+    );
     assert_eq!(pair_view_for_tests(&p, &Part::Invariant), "inconclusive");
     assert_eq!(
         pair_view_for_tests(&p, &Part::Relation("a".into())),
@@ -420,6 +480,7 @@ fn eq_report() -> EquivalenceReport {
         admit_count: 0,
         oracle_set_mismatch: None,
         state_relations: vec!["invariant".into()],
+        helpers: Vec::new(),
     }
 }
 
@@ -1036,7 +1097,7 @@ mod live {
             tree: &tree,
             hints: &[],
             unfold_ops: &["inv".to_string(), "params_inv".to_string()],
-            side_ops: &[],
+            part_ops: &[],
             timeouts: Timeouts {
                 general: Duration::from_secs(60),
                 quick_close: Duration::from_secs(2),
@@ -2414,6 +2475,28 @@ wait $ec
         );
     }
 
+    /// Story 59: a tree saved before the `StateRelation_` names (its `claims` part hashes the
+    /// old names, and it has no `helpers`) is stale, and it is still used (ADR 0008).
+    #[test]
+    fn a_tree_saved_before_the_state_relation_names_is_stale_and_still_used() {
+        let Some((first_run, out)) = stopped_mid_oracle() else {
+            return;
+        };
+        let tree = out
+            .path()
+            .join(saved_tree_name(&first_run.equivalences[0].proof_file, "Branch"));
+        edit_json(&tree, |t| {
+            t["fingerprint"] = "0".into();
+            t["fingerprint_parts"]["claims"] = "0".into();
+            t.as_object_mut().unwrap().remove("helpers");
+        });
+        walk_events();
+        let result = run_again_on(TWO_BRANCHES, out.path(), &resume_with(ResumeMode::Trust));
+        assert!(!walk_events().contains(&"lockstep Branch".to_string()));
+        let at = the_oracle(&result).resumed_at.clone().expect("resumed");
+        assert_eq!(at.stale, vec!["claims"]);
+    }
+
     #[test]
     fn a_closed_node_whose_replay_is_rejected_is_proved_again() {
         let Some((first_run, out)) = stopped_mid_oracle() else {
@@ -2600,7 +2683,7 @@ done
         tree: &tree,
         hints: &[],
         unfold_ops: &["inv".to_string()],
-        side_ops: &[],
+        part_ops: &[],
         timeouts: Timeouts {
             general: Duration::from_secs(10),
             quick_close: Duration::from_secs(10),

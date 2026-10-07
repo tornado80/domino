@@ -801,7 +801,7 @@ fn render_expr_inner(e: &EcExpr) -> String {
             // precedence therefore always needs parentheses, on either
             // side — verified by compiling `a = b = c` against
             // `r2026.06-12-g7e192dd` and getting a parse error, surfaced by
-            // story 06's `Domino_state_eq` (`(is-mk-none L) = (is-mk-none
+            // story 06's `StateRelation_state_eq` (`(is-mk-none L) = (is-mk-none
             // R)`, where both operands are themselves `=`).
             let (lhs_min, rhs_min) = match op {
                 EcBinop::Eq | EcBinop::Ne => (level + 1, level + 1),

@@ -36,7 +36,7 @@ type Hybrid1_state = {
   r_abort_flag : bool
 }.
 
-op Domino_state_eq (l : Hybrid0_state) (r : Hybrid1_state) : bool =
+op StateRelation_state_eq (l : Hybrid0_state) (r : Hybrid1_state) : bool =
   forall (ctr : int),
        (l.`l_pkg_KX.`KX_d_State.[ctr] = None) = (r.`r_pkg_KX.`KX_NoKeys_d_State.[ctr] = None)
     /\ (let state = l.`l_pkg_KX.`KX_d_State.[ctr] in
@@ -54,7 +54,7 @@ op Domino_state_eq (l : Hybrid0_state) (r : Hybrid1_state) : bool =
                                  let mess = (oget state).`11 in
                                    r.`r_pkg_KX.`KX_NoKeys_d_State.[ctr] = Some (d_U, u, d_V, ltk, acc, ni, nr, kmac, sid, mess)).
 
-op Domino_keys_computed_correctly (l : Hybrid0_state) (r : Hybrid1_state) : bool =
+op StateRelation_keys_computed_correctly (l : Hybrid0_state) (r : Hybrid1_state) : bool =
   forall (ctr : int),
     let state = l.`l_pkg_KX.`KX_d_State.[ctr] in
          !(state = None)
@@ -71,7 +71,7 @@ op Domino_keys_computed_correctly (l : Hybrid0_state) (r : Hybrid1_state) : bool
                              let mess = (oget state).`11 in
                                if u /\ 0 < mess \/ !u /\ 1 < mess then k = Some (func_prf ltk (d_U, d_V, oget ni, oget nr, true)) else k = None.
 
-op Domino_time_of_acceptance (l : Hybrid0_state) (r : Hybrid1_state) : bool =
+op StateRelation_time_of_acceptance (l : Hybrid0_state) (r : Hybrid1_state) : bool =
   forall (ctr : int),
     let state = l.`l_pkg_KX.`KX_d_State.[ctr] in
          !(state = None)
@@ -81,7 +81,7 @@ op Domino_time_of_acceptance (l : Hybrid0_state) (r : Hybrid1_state) : bool =
                   !(acc = None)
                => if u then 1 < mess else 2 < mess.
 
-op Domino_time_of_nonces (l : Hybrid0_state) (r : Hybrid1_state) : bool =
+op StateRelation_time_of_nonces (l : Hybrid0_state) (r : Hybrid1_state) : bool =
   forall (ctr : int),
     let state = l.`l_pkg_KX.`KX_d_State.[ctr] in
          !(state = None)
@@ -97,7 +97,7 @@ op Domino_time_of_nonces (l : Hybrid0_state) (r : Hybrid1_state) : bool =
                            /\ !u
                      => !(nr = None)).
 
-op Domino_time_of_sid (l : Hybrid0_state) (r : Hybrid1_state) : bool =
+op StateRelation_time_of_sid (l : Hybrid0_state) (r : Hybrid1_state) : bool =
   forall (ctr : int),
     let state = l.`l_pkg_KX.`KX_d_State.[ctr] in
          !(state = None)
@@ -110,18 +110,18 @@ op Domino_time_of_sid (l : Hybrid0_state) (r : Hybrid1_state) : bool =
                      /\ !u
                => !(sid = None).
 
-op Domino_invariant (l : Hybrid0_state) (r : Hybrid1_state) : bool =
+op StateRelation_invariant (l : Hybrid0_state) (r : Hybrid1_state) : bool =
      l.`l_pkg_KX.`KX_kid_ = r.`r_pkg_KX.`KX_NoKeys_kid_
   /\ l.`l_pkg_KX.`KX_ctr_ = r.`r_pkg_KX.`KX_NoKeys_ctr_
   /\ l.`l_pkg_KX.`KX_d_LTK = r.`r_pkg_KX.`KX_NoKeys_d_LTK
   /\ l.`l_pkg_KX.`KX_d_H = r.`r_pkg_KX.`KX_NoKeys_d_H
   /\ l.`l_pkg_KX.`KX_d_Fresh = r.`r_pkg_KX.`KX_NoKeys_d_Fresh
   /\ l.`l_pkg_KX.`KX_d_RevTested = r.`r_pkg_KX.`KX_NoKeys_d_RevTested
-  /\ Domino_state_eq l r
-  /\ Domino_keys_computed_correctly l r
-  /\ Domino_time_of_nonces l r
-  /\ Domino_time_of_sid l r
-  /\ Domino_time_of_acceptance l r.
+  /\ StateRelation_state_eq l r
+  /\ StateRelation_keys_computed_correctly l r
+  /\ StateRelation_time_of_nonces l r
+  /\ StateRelation_time_of_sid l r
+  /\ StateRelation_time_of_acceptance l r.
 
 op params_inv (l : Hybrid0_state) (r : Hybrid1_state) : bool =
   l.`l_pkg_KX_b = r.`r_pkg_KX_b.
@@ -130,4 +130,4 @@ op inv (l : Hybrid0_state) (r : Hybrid1_state) : bool =
      params_inv l r
   /\ l.`l_abort_flag = r.`r_abort_flag
   /\ (   !l.`l_abort_flag
-      => Domino_invariant l r).
+      => StateRelation_invariant l r).

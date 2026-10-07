@@ -121,8 +121,8 @@ pub(super) fn wraps_program(form: &Form) -> bool {
     }
 }
 
-/// The last path component of an application's operator: `Domino_rel` for
-/// `Top.Eq_A_B_Invariants.Domino_rel`.
+/// The last path component of an application's operator: `StateRelation_rel` for
+/// `Top.Eq_A_B_Invariants.StateRelation_rel`.
 pub(super) fn app_op_leaf(form: &Form) -> Option<&str> {
     if form.kind != "app" {
         return None;

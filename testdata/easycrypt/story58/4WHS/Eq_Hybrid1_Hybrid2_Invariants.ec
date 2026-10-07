@@ -40,7 +40,7 @@ type Hybrid2_state = {
   r_abort_flag : bool
 }.
 
-op Domino_state_eq (l : Hybrid1_state) (r : Hybrid2_state) : bool =
+op StateRelation_state_eq (l : Hybrid1_state) (r : Hybrid2_state) : bool =
   forall (ctr : int),
        (l.`l_pkg_KX.`KX_NoKeys_d_State.[ctr] = None) = (r.`r_pkg_KX.`KX_NoPrf_d_State.[ctr] = None)
     /\ (let state = r.`r_pkg_KX.`KX_NoPrf_d_State.[ctr] in
@@ -59,14 +59,14 @@ op Domino_state_eq (l : Hybrid1_state) (r : Hybrid2_state) : bool =
                                       !(ltk = None)
                                    /\ l.`l_pkg_KX.`KX_NoKeys_d_State.[ctr] = Some (d_U, u, d_V, oget ltk, acc, ni, nr, kmac, sid, mess)).
 
-op Domino_invariant (l : Hybrid1_state) (r : Hybrid2_state) : bool =
+op StateRelation_invariant (l : Hybrid1_state) (r : Hybrid2_state) : bool =
      l.`l_pkg_KX.`KX_NoKeys_kid_ = r.`r_pkg_Prf.`PRF_kid_
   /\ l.`l_pkg_KX.`KX_NoKeys_ctr_ = r.`r_pkg_KX.`KX_NoPrf_ctr_
   /\ l.`l_pkg_KX.`KX_NoKeys_d_LTK = r.`r_pkg_Prf.`PRF_d_LTK
   /\ l.`l_pkg_KX.`KX_NoKeys_d_H = r.`r_pkg_Prf.`PRF_d_H
   /\ l.`l_pkg_KX.`KX_NoKeys_d_Fresh = r.`r_pkg_KX.`KX_NoPrf_d_Fresh
   /\ l.`l_pkg_KX.`KX_NoKeys_d_RevTested = r.`r_pkg_KX.`KX_NoPrf_d_RevTested
-  /\ Domino_state_eq l r.
+  /\ StateRelation_state_eq l r.
 
 (* skipped `define-fun randomness-mapping-NewKey` (randomness mapping, not translated) *)
 
@@ -96,6 +96,6 @@ op inv (l : Hybrid1_state) (r : Hybrid2_state) : bool =
      params_inv l r
   /\ l.`l_abort_flag = r.`r_abort_flag
   /\ (   !l.`l_abort_flag
-      =>    Domino_invariant l r
+      =>    StateRelation_invariant l r
          /\ PkgInv_r_Prf r
          /\ GameInv_Hybrid2 r).

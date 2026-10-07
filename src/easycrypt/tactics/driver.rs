@@ -32,7 +32,7 @@ use super::live::{Closing, LiveHandle};
 use super::ResumeMode;
 use super::script::{Mark, Script};
 use crate::easycrypt::job::{AdmitRecord, ClosedNode};
-use crate::writers::easycrypt::invariant::{relation_op_name, InvariantOp};
+use crate::writers::easycrypt::invariant::{state_relation_op_name, InvariantOp};
 
 type R<T> = Result<T, SessionError>;
 
@@ -139,7 +139,7 @@ pub struct Admit {
     /// `J<n>` (a joint path), `S<n>` (a stuck point), `N<n>` (a node of the joint tree) or
     /// `router`.
     pub id: String,
-    /// `equal-output`, `invariant`, `invariant/Domino_<rel>`, `side-goal`, …
+    /// `equal-output`, `invariant`, `invariant/StateRelation_<rel>`, `side-goal`, …
     pub claim: String,
     pub domino: DominoView,
     /// The goal as EasyCrypt prints it on one line.
@@ -147,7 +147,7 @@ pub struct Admit {
 }
 
 impl Admit {
-    /// The comment after the `admit.`: `(* domino: J7 invariant/Domino_rel; reason: <slug>;
+    /// The comment after the `admit.`: `(* domino: J7 invariant/StateRelation_rel; reason: <slug>;
     /// Domino: verified *)`.
     pub fn label(&self) -> String {
         format!(
@@ -281,15 +281,66 @@ pub(super) enum Part {
 }
 
 impl Part {
-    fn claim_label(&self) -> String {
+    pub(super) fn claim_label(&self) -> String {
         match self {
             Part::Whole => "equal-output+invariant".into(),
             Part::EqualOutput => "equal-output".into(),
             Part::Invariant => "invariant".into(),
-            Part::Relation(name) => format!("invariant/Domino_{name}"),
+            Part::Relation(name) => format!("invariant/{}", state_relation_op_name(name)),
             Part::SideInvariant { op, .. } => format!("invariant/{op}"),
         }
     }
+}
+
+/// One step of [`Prover::solve_ambient`] on an ambient goal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Step {
+    /// The binders of a `forall`.
+    Intro(String),
+    /// The premise of an implication, named.
+    Premise(String),
+    Split,
+    Unfold(String),
+    Atom,
+}
+
+/// The next step on `goal`, and the part it belongs to. `inv` starts [`Part::Invariant`]; an
+/// operator of `part_ops` is unfolded and starts the part of [`part_of_op`], or stays in
+/// `part`; anything else is an atom of `part`.
+pub(super) fn ambient_step(goal: &Goal, part: &Part, part_ops: &[InvariantOp]) -> (Step, Part) {
+    let concl = &goal.concl;
+    if let Some((names, _)) = goals::as_forall(concl) {
+        return (Step::Intro(names.join(" ")), part.clone());
+    }
+    if goals::as_implication(concl).is_some() {
+        return (Step::Premise(goals::fresh_name(goal, "hpre")), part.clone());
+    }
+    if goals::as_conjunction(concl).is_some() {
+        return (Step::Split, part.clone());
+    }
+    match goals::app_op_leaf(concl) {
+        Some("inv") => (Step::Unfold("inv".into()), Part::Invariant),
+        Some(op) => match part_ops.iter().find(|o| o.name == op) {
+            Some(listed) => (
+                Step::Unfold(op.to_string()),
+                part_of_op(listed).unwrap_or_else(|| part.clone()),
+            ),
+            None => (Step::Atom, part.clone()),
+        },
+        None => (Step::Atom, part.clone()),
+    }
+}
+
+/// The part that an application of `op` starts, or `None` when `op` stays inside the part
+/// that contains it.
+pub(super) fn part_of_op(op: &InvariantOp) -> Option<Part> {
+    if let Some(relation) = &op.relation {
+        return Some(Part::Relation(relation.clone()));
+    }
+    op.claim.as_ref().map(|claim| Part::SideInvariant {
+        op: op.name.clone(),
+        claim: claim.clone(),
+    })
 }
 
 fn view_of_verdict(verdict: &Verdict) -> DominoView {
@@ -325,7 +376,7 @@ pub(super) fn pair_view(pair: &PairRecord, part: &Part) -> DominoView {
         Part::EqualOutput => view_of_verdict(claim(EQUAL_OUTPUT)),
         Part::Invariant => invariant(claim("invariant")),
         Part::Relation(name) if name == "invariant" => invariant(claim("invariant")),
-        Part::Relation(name) => part_view(pair, &relation_op_name(name), claim("invariant"), invariant),
+        Part::Relation(name) => part_view(pair, &state_relation_op_name(name), claim("invariant"), invariant),
         Part::SideInvariant { op, .. } => part_view(pair, op, claim("invariant"), invariant),
         Part::Whole => {
             view_of_verdict(claim(EQUAL_OUTPUT)).worst(invariant(claim("invariant")))
@@ -454,15 +505,18 @@ pub(super) struct Prover<'a> {
     pub script: Script,
     pub tree: &'a OracleTree<'a>,
     pub hints: &'a [String],
-    /// The operators of the invariant file, `inv`, `params_inv` and `Domino_<rel>`, in the order
-    /// `rewrite /… in` unfolds them.
-    pub unfold_ops: &'a [String],
-    /// The one-sided invariant operators ([`side_invariant_ops`]): a wrapper or `GameInv_`
-    /// operator in a goal starts a [`Part::SideInvariant`]; a template is unfolded in the part
-    /// it is in.
+    /// The operators of the invariant file ([`invariant_ops`]), in the order `rewrite /… in`
+    /// unfolds them.
     ///
-    /// [`side_invariant_ops`]: crate::writers::easycrypt::invariant::side_invariant_ops
-    pub side_ops: &'a [InvariantOp],
+    /// [`invariant_ops`]: crate::writers::easycrypt::invariant::invariant_ops
+    pub unfold_ops: &'a [String],
+    /// The operators unfolded inside a leaf part ([`leaf_part_ops`]): a `StateRelation_`
+    /// operator starts a [`Part::Relation`], a wrapper or `GameInv_` operator a
+    /// [`Part::SideInvariant`]; a `Helper_` operator or a template is unfolded in the part it
+    /// is in, and is never a part of its own.
+    ///
+    /// [`leaf_part_ops`]: crate::writers::easycrypt::invariant::leaf_part_ops
+    pub part_ops: &'a [InvariantOp],
     pub timeouts: Timeouts,
     /// The quick close (`auto => /#.` on every program goal) is on unless a test turns it off to
     /// exercise the walk.
@@ -894,7 +948,7 @@ impl Prover<'_> {
     }
 
     /// Unfolds the invariant's operators in the hypothesis `name` (`rewrite /inv /params_inv
-    /// /Domino_… in name.`), so a solver sees through them; only if the hypothesis mentions
+    /// /StateRelation_… /Helper_… in name.`), so a solver sees through them; only if the hypothesis mentions
     /// `inv`. `Ok(false)` if there was nothing to unfold or EasyCrypt refused.
     fn unfold_premise(&mut self, name: &str) -> R<bool> {
         let mentions = self.front().is_some_and(|g| {
@@ -1560,18 +1614,9 @@ impl Prover<'_> {
     }
 
     /// Takes the front ambient goal apart along the JSON of its formula: binders and premises
-    /// are introduced, conjunctions split, `inv` and `Domino_<rel>` unfolded; what is left is
-    /// closed by [`Self::atom`].
+    /// are introduced, conjunctions split, `inv` and the [`Self::part_ops`] unfolded; what is
+    /// left is closed by [`Self::atom`].
     fn solve_ambient(&mut self, node: usize, pair: Option<&PairRecord>, part: Part) -> R<()> {
-        enum Step {
-            /// The binders of a `forall`.
-            Intro(String),
-            /// The premise of an implication, named.
-            Premise(String),
-            Split,
-            Unfold(String),
-            Atom,
-        }
         let mut part = part;
         for _ in 0..64 {
             if self
@@ -1580,40 +1625,11 @@ impl Prover<'_> {
             {
                 return self.admit_part(node, pair, &part, " (leaf time budget spent)");
             }
-            let (step, now) = {
-                let Some(goal) = self.front() else {
-                    return Ok(());
-                };
-                let concl = &goal.concl;
-                let mut now = part.clone();
-                let step = if let Some((names, _)) = goals::as_forall(concl) {
-                    Step::Intro(names.join(" "))
-                } else if goals::as_implication(concl).is_some() {
-                    Step::Premise(goals::fresh_name(goal, "hpre"))
-                } else if goals::as_conjunction(concl).is_some() {
-                    Step::Split
-                } else if let Some(op) = goals::app_op_leaf(concl) {
-                    if op == "inv" {
-                        now = Part::Invariant;
-                        Step::Unfold("inv".into())
-                    } else if let Some(rel) = op.strip_prefix("Domino_") {
-                        now = Part::Relation(rel.to_string());
-                        Step::Unfold(op.to_string())
-                    } else if let Some(side) = self.side_ops.iter().find(|o| o.name == op) {
-                        if let Some(claim) = &side.claim {
-                            now = Part::SideInvariant {
-                                op: side.name.clone(),
-                                claim: claim.clone(),
-                            };
-                        }
-                        Step::Unfold(op.to_string())
-                    } else {
-                        Step::Atom
-                    }
-                } else {
-                    Step::Atom
-                };
-                (step, now)
+            let Some((step, now)) = self
+                .front()
+                .map(|goal| ambient_step(goal, &part, self.part_ops))
+            else {
+                return Ok(());
             };
             part = now;
 

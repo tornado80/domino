@@ -41,7 +41,7 @@ type H2_0_state = {
   r_abort_flag : bool
 }.
 
-op Domino_invariant (l : H1_1_state) (r : H2_0_state) : bool =
+op StateRelation_invariant (l : H1_1_state) (r : H2_0_state) : bool =
      l.`l_pkg_KX = r.`r_pkg_KX
   /\ l.`l_pkg_Nonces = r.`r_pkg_Nonces.
 
@@ -55,4 +55,4 @@ op inv (l : H1_1_state) (r : H2_0_state) : bool =
      params_inv l r
   /\ l.`l_abort_flag = r.`r_abort_flag
   /\ (   !l.`l_abort_flag
-      => Domino_invariant l r).
+      => StateRelation_invariant l r).

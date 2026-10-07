@@ -537,7 +537,7 @@ pub(crate) mod tests {
                 serde_json::from_str(&event("Eq.ec", &ctx, Event::Between, 1)).unwrap();
             v["ctx"].clone()
         };
-        let part = "invariant/Domino_rel".to_string();
+        let part = "invariant/StateRelation_rel".to_string();
         assert_eq!(
             ctx(Role::PartFallback {
                 n: 2,

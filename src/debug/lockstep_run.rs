@@ -61,7 +61,7 @@ use crate::debug::lockstep::{
 use crate::debug::lockstep_report::{self, LockstepSmtWriter};
 use crate::debug::lockstep_viewer;
 use crate::debug::progress::{DebugEvent, DebugObserver};
-use crate::writers::easycrypt::invariant::{relation_op_name, side_invariant_ops};
+use crate::writers::easycrypt::invariant::{state_relation_op_name, side_invariant_ops};
 use crate::debug::render;
 use crate::debug::smtout::SmtOut;
 use crate::project::Project;
@@ -449,7 +449,7 @@ pub(crate) fn easycrypt_invariant_query(eqctx: &EquivalenceContext<'_>, oracle: 
             .collect(),
     )
     .into();
-    let mut parts = state_relation_parts(eqctx, oracle, relation_op_name);
+    let mut parts = state_relation_parts(eqctx, oracle, state_relation_op_name);
     let (left, right) = (
         eqctx.left_game_inst_ctx().game_inst(),
         eqctx.right_game_inst_ctx().game_inst(),
@@ -490,7 +490,7 @@ pub(crate) fn easycrypt_check_names(eqctx: &EquivalenceContext<'_>) -> Vec<Strin
                 .state_relation_names()
                 .into_iter()
                 .filter(|name| name != "invariant")
-                .map(|name| relation_op_name(&name)),
+                .map(|name| state_relation_op_name(&name)),
         )
         .chain(side_ops)
         .collect()
@@ -1331,7 +1331,7 @@ mod tests {
         let pages = crate::debug::driver::story21_tests::viewers_under(&out);
         assert!(!pages.is_empty());
         for page in pages {
-            assert!(!page.contains("Domino_"));
+            assert!(!page.contains("StateRelation_"));
             assert!(page.contains("function verdictsList("));
         }
     }

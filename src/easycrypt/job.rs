@@ -417,9 +417,13 @@ pub struct SavedTree {
     pub fingerprint_parts: std::collections::BTreeMap<String, String>,
     pub outcome: LockstepOutcome,
     pub summary: LockstepSummary,
-    /// The names of the loaded state relations: the walk unfolds `Domino_<name>`.
+    /// The names of the loaded state relations: the walk unfolds `StateRelation_<name>`.
     #[serde(default)]
     pub relations: Vec<String>,
+    /// The names of the helper `define-fun`s: the walk unfolds `Helper_<name>`. Empty in a tree
+    /// saved before story 59.
+    #[serde(default)]
+    pub helpers: Vec<String>,
 }
 
 impl SavedTree {
@@ -922,8 +926,8 @@ mod tests {
         "claims": [
           {"claim": "equal-output", "verdict": {"kind": "verified"}},
           {"claim": "invariant", "verdict": {"kind": "goal-fails", "model": "models/J1.smt2"},
-           "parts": [{"name": "Domino_rel", "verdict": {"kind": "inconclusive", "model": null}},
-                         {"name": "Domino_other", "verdict": {"kind": "unreachable", "reason": {"kind": "dependency-false", "dependency": "no-abort"}}}]}
+           "parts": [{"name": "StateRelation_rel", "verdict": {"kind": "inconclusive", "model": null}},
+                         {"name": "StateRelation_other", "verdict": {"kind": "unreachable", "reason": {"kind": "dependency-false", "dependency": "no-abort"}}}]}
         ]}],
       "stuck": [{"id": "S1", "node": 0, "side": "right", "label": 4, "left_label": 3, "right_label": 4,
                  "sample": "P.o.r", "draw": 0, "reason": "pairing-sat-not-valid"}],
@@ -947,6 +951,7 @@ mod tests {
             outcome: serde_json::from_str(OUTCOME).unwrap(),
             summary: serde_json::from_str(SUMMARY).unwrap(),
             relations: vec!["rel".into()],
+            helpers: vec!["same-bit".into()],
         }
     }
 

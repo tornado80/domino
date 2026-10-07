@@ -32,7 +32,7 @@ type Ideal_Hybrid3_state = {
   r_abort_flag : bool
 }.
 
-op Domino_eq_prf (left_prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) (right_prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) (hon : (int, bool) fmap) : bool =
+op Helper_eq_prf (left_prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) (right_prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) (hon : (int, bool) fmap) : bool =
   forall (kid : int) (d_U : int) (d_V : int) (ni : bits_n) (nr : bits_n),
     let kmac_index = (kid, (d_U, d_V, ni, nr, false)) in
       let k_index = (kid, (d_U, d_V, ni, nr, true)) in
@@ -40,11 +40,11 @@ op Domino_eq_prf (left_prf : ((int * (int * int * bits_n * bits_n * bool)), bits
             => left_prf.[k_index] = right_prf.[k_index])
         /\ left_prf.[kmac_index] = right_prf.[kmac_index].
 
-op Domino_no_overwriting_state (max_ctr : int) (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) : bool =
+op Helper_no_overwriting_state (max_ctr : int) (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) : bool =
   forall (ctr : int),
     (max_ctr < ctr \/ ctr <= 0) = (d_State.[ctr] = None).
 
-op Domino_kmac_before_sid (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) : bool =
+op Helper_kmac_before_sid (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) : bool =
   forall (ctr : int),
     let state = d_State.[ctr] in
          !(state = None)
@@ -53,7 +53,7 @@ op Domino_kmac_before_sid (d_State : (int, (int * bool * int * int * bool option
                 kmac = None
              => sid = None.
 
-op Domino_referenced_kid_exist (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) (d_Prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) (d_Ltk : (int, bits_n) fmap) : bool =
+op Helper_referenced_kid_exist (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) (d_Prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) (d_Ltk : (int, bits_n) fmap) : bool =
      (forall (kid : int) (d_U : int) (d_V : int) (ni : bits_n) (nr : bits_n) (flag : bool),
            d_Ltk.[kid] = None
         => d_Prf.[(kid, (d_U, d_V, ni, nr, flag))] = None)
@@ -63,14 +63,14 @@ op Domino_referenced_kid_exist (d_State : (int, (int * bool * int * int * bool o
           => let kid = (oget state).`4 in
                !(d_Ltk.[kid] = None)).
 
-op Domino_k_prf_implies_rev_tested_sid (d_Prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) (d_RevTested : ((int * int * bits_n * bits_n * bits_n), bool) fmap) : bool =
+op Helper_k_prf_implies_rev_tested_sid (d_Prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) (d_RevTested : ((int * int * bits_n * bits_n * bits_n), bool) fmap) : bool =
   forall (kid : int) (d_U : int) (d_V : int) (ni : bits_n) (nr : bits_n),
        !(d_Prf.[(kid, (d_U, d_V, ni, nr, true))] = None)
     => let kmac = oget d_Prf.[(kid, (d_U, d_V, ni, nr, false))] in
          let tau = func_mac kmac nr 2 in
            !(d_RevTested.[(d_U, d_V, ni, nr, tau)] = None).
 
-op Domino_sid_is_wellformed (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) (d_H : (int, bool) fmap) (d_Ltk : (int, bits_n) fmap) (d_Prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) : bool =
+op Helper_sid_is_wellformed (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) (d_H : (int, bool) fmap) (d_Ltk : (int, bits_n) fmap) (d_Prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) : bool =
   forall (ctr : int),
     let state = d_State.[ctr] in
          !(state = None)
@@ -87,7 +87,7 @@ op Domino_sid_is_wellformed (d_State : (int, (int * bool * int * int * bool opti
                                 !(sid = None)
                              => sid = Some (d_U, d_V, oget ni, oget nr, func_mac (oget kmac) (oget nr) 2).
 
-op Domino_kmac_requires_nonces (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) : bool =
+op Helper_kmac_requires_nonces (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) : bool =
   forall (ctr : int),
     let state = d_State.[ctr] in
          !(state = None)
@@ -98,7 +98,7 @@ op Domino_kmac_requires_nonces (d_State : (int, (int * bool * int * int * bool o
                =>    !(ni = None)
                   /\ !(nr = None).
 
-op Domino_sid_requires_nonces (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) : bool =
+op Helper_sid_requires_nonces (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) : bool =
   forall (ctr : int),
     let state = d_State.[ctr] in
          !(state = None)
@@ -109,7 +109,7 @@ op Domino_sid_requires_nonces (d_State : (int, (int * bool * int * int * bool op
                =>    !(ni = None)
                   /\ !(nr = None).
 
-op Domino_no_sid_in_send1 (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) : bool =
+op Helper_no_sid_in_send1 (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) : bool =
   forall (ctr : int),
     let state = d_State.[ctr] in
          !(state = None)
@@ -118,7 +118,7 @@ op Domino_no_sid_in_send1 (d_State : (int, (int * bool * int * int * bool option
                 mess = 0
              => sid = None.
 
-op Domino_no_kmac_in_send1 (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) : bool =
+op Helper_no_kmac_in_send1 (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) : bool =
   forall (ctr : int),
     let state = d_State.[ctr] in
          !(state = None)
@@ -127,7 +127,7 @@ op Domino_no_kmac_in_send1 (d_State : (int, (int * bool * int * int * bool optio
                 mess = 0
              => kmac = None.
 
-op Domino_kmac_is_wellformed (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) (d_Fresh : (int, bool) fmap) (d_Ltk : (int, bits_n) fmap) (d_Prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) : bool =
+op Helper_kmac_is_wellformed (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) (d_Fresh : (int, bool) fmap) (d_Ltk : (int, bits_n) fmap) (d_Prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) : bool =
   forall (ctr : int),
     let state = d_State.[ctr] in
          !(state = None)
@@ -144,7 +144,7 @@ op Domino_kmac_is_wellformed (d_State : (int, (int * bool * int * int * bool opt
                                 !(kmac = None)
                              => oget kmac = (if d_Fresh.[ctr] = Some true then oget d_Prf.[(kid, (d_U, d_V, oget ni, oget nr, false))] else func_prf (oget d_Ltk.[kid]) (d_U, d_V, oget ni, oget nr, false)).
 
-op Domino_honest_kmac (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) (d_Prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) (d_Fresh : (int, bool) fmap) (d_H : (int, bool) fmap) : bool =
+op Helper_honest_kmac (d_State : (int, (int * bool * int * int * bool option * bits_n option * bits_n option * bits_n option * (int * int * bits_n * bits_n * bits_n) option * int)) fmap) (d_Prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) (d_Fresh : (int, bool) fmap) (d_H : (int, bool) fmap) : bool =
   forall (ctr : int),
     let state = d_State.[ctr] in
          !(state = None)
@@ -163,34 +163,34 @@ op Domino_honest_kmac (d_State : (int, (int * bool * int * int * bool option * b
                                 /\ (   !(kmac = None)
                                     => !(d_Prf.[(kid, (d_U, d_V, oget ni, oget nr, false))] = None)).
 
-op Domino_kmac_before_k (d_Prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) : bool =
+op Helper_kmac_before_k (d_Prf : ((int * (int * int * bits_n * bits_n * bool)), bits_n) fmap) : bool =
   forall (kid : int) (d_U : int) (d_V : int) (ni : bits_n) (nr : bits_n),
        d_Prf.[(kid, (d_U, d_V, ni, nr, false))] = None
     => d_Prf.[(kid, (d_U, d_V, ni, nr, true))] = None.
 
-op Domino_invariant (l : Real_Hybrid3_state) (r : Ideal_Hybrid3_state) : bool =
+op StateRelation_invariant (l : Real_Hybrid3_state) (r : Ideal_Hybrid3_state) : bool =
      0 <= l.`l_pkg_KX.`KX_NoPrf_ctr_
   /\ l.`l_pkg_Prf.`PRF_kid_ = r.`r_pkg_Prf.`PRF_kid_
   /\ l.`l_pkg_KX.`KX_NoPrf_ctr_ = r.`r_pkg_KX.`KX_NoPrf_ctr_
   /\ l.`l_pkg_Prf.`PRF_d_LTK = r.`r_pkg_Prf.`PRF_d_LTK
-  /\ Domino_eq_prf l.`l_pkg_Prf.`PRF_d_PRF r.`r_pkg_Prf.`PRF_d_PRF l.`l_pkg_Prf.`PRF_d_H
+  /\ Helper_eq_prf l.`l_pkg_Prf.`PRF_d_PRF r.`r_pkg_Prf.`PRF_d_PRF l.`l_pkg_Prf.`PRF_d_H
   /\ l.`l_pkg_Prf.`PRF_d_H = r.`r_pkg_Prf.`PRF_d_H
   /\ l.`l_pkg_KX.`KX_NoPrf_d_Fresh = r.`r_pkg_KX.`KX_NoPrf_d_Fresh
   /\ l.`l_pkg_KX.`KX_NoPrf_d_RevTested = r.`r_pkg_KX.`KX_NoPrf_d_RevTested
   /\ l.`l_pkg_KX.`KX_NoPrf_d_State = r.`r_pkg_KX.`KX_NoPrf_d_State
-  /\ Domino_no_overwriting_state l.`l_pkg_KX.`KX_NoPrf_ctr_ l.`l_pkg_KX.`KX_NoPrf_d_State
-  /\ Domino_kmac_requires_nonces l.`l_pkg_KX.`KX_NoPrf_d_State
-  /\ Domino_kmac_is_wellformed l.`l_pkg_KX.`KX_NoPrf_d_State l.`l_pkg_KX.`KX_NoPrf_d_Fresh l.`l_pkg_Prf.`PRF_d_LTK l.`l_pkg_Prf.`PRF_d_PRF
-  /\ Domino_no_kmac_in_send1 l.`l_pkg_KX.`KX_NoPrf_d_State
-  /\ Domino_sid_requires_nonces l.`l_pkg_KX.`KX_NoPrf_d_State
-  /\ Domino_sid_is_wellformed l.`l_pkg_KX.`KX_NoPrf_d_State l.`l_pkg_Prf.`PRF_d_H l.`l_pkg_Prf.`PRF_d_LTK l.`l_pkg_Prf.`PRF_d_PRF
-  /\ Domino_no_sid_in_send1 l.`l_pkg_KX.`KX_NoPrf_d_State
-  /\ Domino_kmac_before_sid l.`l_pkg_KX.`KX_NoPrf_d_State
-  /\ Domino_kmac_before_k l.`l_pkg_Prf.`PRF_d_PRF
-  /\ Domino_kmac_before_k r.`r_pkg_Prf.`PRF_d_PRF
-  /\ Domino_referenced_kid_exist l.`l_pkg_KX.`KX_NoPrf_d_State l.`l_pkg_Prf.`PRF_d_PRF l.`l_pkg_Prf.`PRF_d_LTK
-  /\ Domino_k_prf_implies_rev_tested_sid l.`l_pkg_Prf.`PRF_d_PRF l.`l_pkg_KX.`KX_NoPrf_d_RevTested
-  /\ Domino_honest_kmac l.`l_pkg_KX.`KX_NoPrf_d_State l.`l_pkg_Prf.`PRF_d_PRF l.`l_pkg_KX.`KX_NoPrf_d_Fresh l.`l_pkg_Prf.`PRF_d_H.
+  /\ Helper_no_overwriting_state l.`l_pkg_KX.`KX_NoPrf_ctr_ l.`l_pkg_KX.`KX_NoPrf_d_State
+  /\ Helper_kmac_requires_nonces l.`l_pkg_KX.`KX_NoPrf_d_State
+  /\ Helper_kmac_is_wellformed l.`l_pkg_KX.`KX_NoPrf_d_State l.`l_pkg_KX.`KX_NoPrf_d_Fresh l.`l_pkg_Prf.`PRF_d_LTK l.`l_pkg_Prf.`PRF_d_PRF
+  /\ Helper_no_kmac_in_send1 l.`l_pkg_KX.`KX_NoPrf_d_State
+  /\ Helper_sid_requires_nonces l.`l_pkg_KX.`KX_NoPrf_d_State
+  /\ Helper_sid_is_wellformed l.`l_pkg_KX.`KX_NoPrf_d_State l.`l_pkg_Prf.`PRF_d_H l.`l_pkg_Prf.`PRF_d_LTK l.`l_pkg_Prf.`PRF_d_PRF
+  /\ Helper_no_sid_in_send1 l.`l_pkg_KX.`KX_NoPrf_d_State
+  /\ Helper_kmac_before_sid l.`l_pkg_KX.`KX_NoPrf_d_State
+  /\ Helper_kmac_before_k l.`l_pkg_Prf.`PRF_d_PRF
+  /\ Helper_kmac_before_k r.`r_pkg_Prf.`PRF_d_PRF
+  /\ Helper_referenced_kid_exist l.`l_pkg_KX.`KX_NoPrf_d_State l.`l_pkg_Prf.`PRF_d_PRF l.`l_pkg_Prf.`PRF_d_LTK
+  /\ Helper_k_prf_implies_rev_tested_sid l.`l_pkg_Prf.`PRF_d_PRF l.`l_pkg_KX.`KX_NoPrf_d_RevTested
+  /\ Helper_honest_kmac l.`l_pkg_KX.`KX_NoPrf_d_State l.`l_pkg_Prf.`PRF_d_PRF l.`l_pkg_KX.`KX_NoPrf_d_Fresh l.`l_pkg_Prf.`PRF_d_H.
 
 (* skipped `define-fun randomness-mapping-Test` (randomness mapping, not translated) *)
 
@@ -234,7 +234,7 @@ op inv (l : Real_Hybrid3_state) (r : Ideal_Hybrid3_state) : bool =
      params_inv l r
   /\ l.`l_abort_flag = r.`r_abort_flag
   /\ (   !l.`l_abort_flag
-      =>    Domino_invariant l r
+      =>    StateRelation_invariant l r
          /\ PkgInv_l_Prf l
          /\ GameInv_Real_Hybrid3 l
          /\ PkgInv_r_Prf r
