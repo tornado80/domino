@@ -48,7 +48,9 @@ use crate::debug::driver::{
     equivalence_of, part_blocks, shared_base_frame, sites_view, ClaimInfo, DebugError, GoalBlock, SiteView,
     StopReason, Unreachability, Verdict,
 };
-use crate::debug::layout::{Layout, ALL_CLAIMS_DIR, DOMINO_DEBUG_DIR};
+use crate::debug::layout::{self, Layout, ALL_CLAIMS_DIR, DOMINO_DEBUG_DIR};
+use crate::debug::index;
+use crate::debug::sweep::{SweepEntry, Target};
 use crate::debug::exec::TerminalPath;
 use crate::debug::ir::{count_terminals, inline_oracle, FrameSpan, Label, LineInfo};
 use crate::debug::lockstep::{
@@ -716,9 +718,8 @@ where
 
 /// Run lockstep execution on the **Domino** listing — `domino debug --lockstep`. The claims are
 /// the oracle's obligation set, each with its own declared dependencies, narrowed to `claim`
-/// when given. Writes the lockstep artifacts under `out` (default
-/// `_build/debug/<theorem>/<left>-<right>/<oracle>/<claim>/`, `!all-claims!` in place of
-/// `<claim>` without one).
+/// when given. Writes the lockstep artifacts and the result record under `out` (default
+/// [`layout::run_dir`] under `_build/debug`, `!all-claims!` in place of `<claim>` without one).
 #[allow(clippy::too_many_arguments)]
 pub fn run_lockstep_domino<P, B>(
     project: &P,
@@ -872,6 +873,13 @@ where
         admitted: false,
     });
 
+    let target = Target {
+        theorem: eq.theorem_name().to_string(),
+        proofstep: req_proofstep,
+        left: eq.left_name().to_string(),
+        right: eq.right_name().to_string(),
+        oracle: oracle.to_string(),
+    };
     let out_dir = out.unwrap_or_else(|| {
         let mut path = project.get_root_dir();
         match listing {
@@ -881,15 +889,11 @@ where
                 path.push("!debug!");
             }
             ListingKind::Domino => {
-                path.push(DOMINO_DEBUG_DIR);
-                path.push(eq.theorem_name());
+                return layout::run_dir(&path.join(DOMINO_DEBUG_DIR), &target, &claim_label);
             }
         }
         path.push(format!("{}-{}", eq.left_name(), eq.right_name()));
         path.push(oracle);
-        if listing == ListingKind::Domino {
-            path.push(&claim_label);
-        }
         path
     });
     std::fs::create_dir_all(layout.path(&out_dir, "models"))?;
@@ -1046,12 +1050,16 @@ where
             stop_reason: outcome.stop_reason,
         });
 
-    Ok(LockstepRun {
+    let run = LockstepRun {
         meta,
         outcome,
         summary,
         elapsed: started.elapsed(),
-    })
+    };
+    if listing == ListingKind::Domino {
+        index::write_result(&SweepEntry::from_lockstep(target, &run))?;
+    }
+    Ok(run)
 }
 
 #[cfg(all(test, feature = "cvc5-lib"))]
@@ -1555,6 +1563,14 @@ mod tests {
         .unwrap();
         assert_eq!(run.outcome.stop_reason, StopReason::Interrupted);
         assert!(run.outcome.pairs.is_empty());
+        // Story 22: the result record is written after an interrupt too.
+        let record: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(Path::new(&run.meta.out_dir).join("lockstep_result.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record["stop_reason"], "interrupted");
+        assert_eq!(record["strategy"], "lockstep");
     }
 
     /// Records the calls the engine makes to a `LockstepObserver`.

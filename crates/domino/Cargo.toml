@@ -22,3 +22,6 @@ sspverif = { workspace = true }
 clap = { version = "4.0", features = ["derive"] }
 clap_complete = "*"
 shadow-rs = "1.7"
+
+[dev-dependencies]
+tempfile = "3"

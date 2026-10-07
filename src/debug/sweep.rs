@@ -4,14 +4,16 @@
 //!
 //! `--proof`, `--proofstep`, `--oracle` and `--claim` are all optional: omitted means *all*,
 //! given means *only that*, exactly as in `domino prove`. [`plan`] turns the filters into the
-//! list of oracles to run; the caller runs each one and hands its [`SweepEntry`] to
-//! [`write_index`], which links every run and lists what failed.
+//! list of oracles to run; each run turns its outcome into a [`SweepEntry`], which it writes as
+//! its result record (`crate::debug::index`).
 
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::debug::driver::{equivalence_of, ClaimSummary, DebugError, DebugRun, StopReason};
+use crate::debug::driver::{
+    equivalence_of, ClaimSummary, ClaimVerdict, DebugError, DebugRun, StopReason,
+};
 use crate::debug::layout::Layout;
 use crate::debug::lockstep::PairRecord;
 use crate::debug::lockstep_run::LockstepRun;
@@ -149,10 +151,12 @@ pub struct ClaimLine {
     pub inconclusive: usize,
 }
 
-/// One pair (or joint path) a claim failed on.
+/// One pair (or joint path) a check failed on: a claim, or a part of a claim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
-    pub claim: String,
+    pub check: String,
+    /// The claim this check is a part of (`invariant` for `state-relation rel_ctr`).
+    pub part_of: Option<String>,
     pub pair: String,
     pub verdict: &'static str,
 }
@@ -161,6 +165,8 @@ pub struct Failure {
 #[derive(Debug, Clone)]
 pub struct SweepEntry {
     pub target: Target,
+    /// The claim of the run, or `!all-claims!`.
+    pub claim: String,
     /// `sequential` or `lockstep`.
     pub strategy: &'static str,
     /// `domino` or `easycrypt`.
@@ -177,6 +183,8 @@ pub struct SweepEntry {
     pub ok: bool,
     pub stop_reason: StopReason,
     pub elapsed: Duration,
+    /// When the run finished, as `YYYY-MM-DDTHH:MM:SSZ`.
+    pub finished_at: String,
 }
 
 impl SweepEntry {
@@ -198,22 +206,18 @@ impl SweepEntry {
             for rp in &lp.right_paths {
                 if rp.claims.is_empty() && rp.verdict.is_failure() {
                     failures.push(Failure {
-                        claim: run.claim.clone(),
+                        check: run.claim.clone(),
+                        part_of: None,
                         pair: format!("#{}", rp.id),
                         verdict: rp.verdict.slug(),
                     });
                 }
-                for c in rp.claims.iter().filter(|c| c.verdict.is_failure()) {
-                    failures.push(Failure {
-                        claim: c.claim.clone(),
-                        pair: format!("#{}", rp.id),
-                        verdict: c.verdict.slug(),
-                    });
-                }
+                failures.extend(claim_failures(&rp.claims, &format!("#{}", rp.id)));
             }
         }
         Self {
             target,
+            claim: run.claim.clone(),
             strategy: run.strategy,
             listing: "domino",
             out_dir: PathBuf::from(&run.out_dir),
@@ -225,6 +229,7 @@ impl SweepEntry {
             ok: run.is_ok(),
             stop_reason: run.stop_reason,
             elapsed: run.elapsed,
+            finished_at: crate::debug::index::now_utc(),
         }
     }
 
@@ -247,6 +252,7 @@ impl SweepEntry {
         }
         Self {
             target,
+            claim: run.meta.claim.clone(),
             strategy: run.meta.mode,
             listing: run.meta.listing,
             out_dir: PathBuf::from(&run.meta.out_dir),
@@ -258,11 +264,12 @@ impl SweepEntry {
             ok: run.is_ok(),
             stop_reason: run.outcome.stop_reason,
             elapsed: run.elapsed,
+            finished_at: crate::debug::index::now_utc(),
         }
     }
 
     /// `theorem / proofstep 0 (Left == Right) / oracle`.
-    fn label(&self) -> String {
+    pub(crate) fn label(&self) -> String {
         let t = &self.target;
         format!(
             "{} proofstep {} ({} == {}) {}",
@@ -323,15 +330,29 @@ fn claim_line_of(c: &ClaimSummary) -> ClaimLine {
 }
 
 fn failures_of(pair: &PairRecord) -> Vec<Failure> {
-    pair.claims
-        .iter()
-        .filter(|c| c.verdict.is_failure())
-        .map(|c| Failure {
-            claim: c.claim.clone(),
-            pair: pair.id.clone(),
+    claim_failures(&pair.claims, &pair.id)
+}
+
+/// Each failing claim on `pair`, each followed by its failing parts.
+fn claim_failures(claims: &[ClaimVerdict], pair: &str) -> Vec<Failure> {
+    let mut failures = Vec::new();
+    for c in claims.iter().filter(|c| c.verdict.is_failure()) {
+        failures.push(Failure {
+            check: c.claim.clone(),
+            part_of: None,
+            pair: pair.to_string(),
             verdict: c.verdict.slug(),
-        })
-        .collect()
+        });
+        for part in c.parts.iter().filter(|p| p.verdict.is_failure()) {
+            failures.push(Failure {
+                check: part.name.clone(),
+                part_of: Some(c.claim.clone()),
+                pair: pair.to_string(),
+                verdict: part.verdict.slug(),
+            });
+        }
+    }
+    failures
 }
 
 /// A run that stopped on `Ctrl-C` stops the sweep with it.
@@ -349,7 +370,7 @@ pub fn failure_table(entries: &[SweepEntry]) -> String {
             let pairs: Vec<&str> = entry
                 .failures
                 .iter()
-                .filter(|f| f.claim == c.claim)
+                .filter(|f| f.check == c.claim)
                 .map(|f| f.pair.as_str())
                 .collect();
             let more = pairs.len().saturating_sub(SHOWN);
@@ -382,99 +403,13 @@ pub fn failure_table(entries: &[SweepEntry]) -> String {
     format!("failures\n{rows}")
 }
 
-/// Write `index.html` and `summary.txt` into `root` (`_build/debug`), linking every run
-/// of this sweep. Returns the paths written.
-pub fn write_index(root: &Path, entries: &[SweepEntry]) -> std::io::Result<(PathBuf, PathBuf)> {
-    std::fs::create_dir_all(root)?;
-    let href = |entry: &SweepEntry| -> String {
-        let dir = entry
-            .out_dir
-            .strip_prefix(root)
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|_| entry.out_dir.clone());
-        format!("{}/{}", dir.display(), entry.viewer)
-    };
-
-    let mut text = String::new();
-    let _ = writeln!(text, "domino debug — every run");
-    let _ = writeln!(text, "========================\n");
-    for entry in entries {
-        let _ = writeln!(text, "{}", entry.one_line());
-        let _ = writeln!(
-            text,
-            "    {} strategy, {} listing: {}",
-            entry.strategy,
-            entry.listing,
-            href(entry)
-        );
-    }
-    let table = failure_table(entries);
-    if !table.is_empty() {
-        let _ = writeln!(text, "\n{table}");
-    }
-    let summary = root.join("summary.txt");
-    std::fs::write(&summary, text)?;
-
-    let mut html = String::from(
-        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n\
-         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>domino debug — every run</title>\n<style>\n\
-         :root{--bg:#fff;--fg:#1b1f24;--dim:#59636e;--ok:#1a7f37;--bad:#cf222e;--line:#d0d7de}\n\
-         @media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--dim:#8d96a0;--ok:#3fb950;--bad:#f85149;--line:#30363d}}\n\
-         body{background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,sans-serif;margin:0 auto;max-width:72rem;padding:1rem 16px}\n\
-         table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid var(--line);padding:.35rem .6rem;text-align:left;vertical-align:top}\n\
-         .ok{color:var(--ok)}.bad{color:var(--bad)}.dim{color:var(--dim)}a{color:inherit}\n\
-         .scroll{overflow-x:auto}\n</style></head><body>\n<h1>domino debug — every run</h1>\n",
-    );
-    html.push_str(
-        "<div class=\"scroll\"><table><thead><tr><th>theorem</th><th>proofstep</th><th>oracle</th>\
-         <th>strategy</th><th>result</th><th>claims that failed</th><th>time</th></tr></thead><tbody>\n",
-    );
-    for entry in entries {
-        let t = &entry.target;
-        let failing: Vec<String> = entry
-            .failing_claims()
-            .map(|c| format!("{} ({} fail, {} inconclusive)", esc(&c.claim), c.goal_fails, c.inconclusive))
-            .collect();
-        let _ = writeln!(
-            html,
-            "<tr><td>{}</td><td>{} <span class=\"dim\">{} == {}</span></td><td><a href=\"{}\">{}</a></td>\
-             <td>{} <span class=\"dim\">({} listing)</span></td><td class=\"{}\">{} {}, {}</td><td>{}</td><td>{}</td></tr>",
-            esc(&t.theorem),
-            t.proofstep,
-            esc(&t.left),
-            esc(&t.right),
-            esc(&href_attr(&href(entry))),
-            esc(&t.oracle),
-            entry.strategy,
-            entry.listing,
-            if entry.ok { "ok" } else { "bad" },
-            entry.units,
-            entry.unit,
-            if entry.ok {
-                "ok".to_string()
-            } else if entry.stop_reason.is_partial() {
-                format!("stopped early ({})", esc(&entry.stop_reason.phrase()))
-            } else {
-                "FAILS".to_string()
-            },
-            failing.join("<br>"),
-            format_elapsed(entry.elapsed),
-        );
-    }
-    html.push_str("</tbody></table></div>\n</body></html>\n");
-    let index = root.join("index.html");
-    std::fs::write(&index, html)?;
-    Ok((index, summary))
-}
-
 /// Percent-encode what a relative `href` cannot hold: `!` and spaces appear in run names
 /// (`!all-claims!`) and stay legal, but `#` and `?` would cut the path short.
-fn href_attr(path: &str) -> String {
+pub(crate) fn href_attr(path: &str) -> String {
     path.replace('#', "%23").replace('?', "%3F").replace(' ', "%20")
 }
 
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
@@ -491,6 +426,7 @@ mod tests {
                 right: "R".into(),
                 oracle: "O".into(),
             },
+            claim: "!all-claims!".into(),
             strategy: "sequential",
             listing: "domino",
             out_dir: PathBuf::from("/r/T/L-R/O/!all-claims!"),
@@ -502,6 +438,7 @@ mod tests {
             ok,
             stop_reason: StopReason::Completed,
             elapsed: Duration::from_millis(1200),
+            finished_at: "2026-10-07T12:00:00Z".into(),
         }
     }
 
@@ -525,8 +462,8 @@ mod tests {
             false,
             vec![line("same-output", 0), line("invariant", 2)],
             vec![
-                Failure { claim: "invariant".into(), pair: "#1.2".into(), verdict: "goal-fails" },
-                Failure { claim: "invariant".into(), pair: "#3.1".into(), verdict: "goal-fails" },
+                Failure { check: "invariant".into(), part_of: None, pair: "#1.2".into(), verdict: "goal-fails" },
+                Failure { check: "invariant".into(), part_of: None, pair: "#3.1".into(), verdict: "goal-fails" },
             ],
         );
         let table = failure_table(&[e]);
@@ -534,20 +471,5 @@ mod tests {
         assert!(table.contains("invariant: 2 GOAL FAILS"), "{table}");
         assert!(table.contains("#1.2, #3.1"), "{table}");
         assert!(!table.contains("same-output"), "{table}");
-    }
-
-    #[test]
-    fn the_index_links_each_run_relative_to_its_root() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut e = entry(true, vec![line("same-output", 0)], vec![]);
-        e.out_dir = dir.path().join("T/L-R/O/!all-claims!");
-        let (index, summary) = write_index(dir.path(), &[e]).unwrap();
-        let html = std::fs::read_to_string(index).unwrap();
-        assert!(
-            html.contains("href=\"T/L-R/O/!all-claims!/sequential_viewer.html\""),
-            "{html}"
-        );
-        let text = std::fs::read_to_string(summary).unwrap();
-        assert!(text.contains("T proofstep 0 (L == R) O: 4 pairs, ok"), "{text}");
     }
 }

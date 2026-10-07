@@ -150,7 +150,7 @@ pub(crate) struct Debug {
     #[clap(long)] pub(crate) timeout: Option<u64>,
     /// Give up after this many explored paths (left paths + right paths per left path).
     #[clap(long, default_value_t = 1000)] pub(crate) max_paths: usize,
-    /// Output directory. Defaults to `_build/debug/<theorem>/<left>-<right>/<oracle>/<claim>/`.
+    /// Root of the debug output. Defaults to `_build/debug` (story 22).
     #[clap(long)] pub(crate) out: Option<std::path::PathBuf>,
 }
 ```
@@ -240,7 +240,8 @@ otherwise, and that is exactly the bug you want to catch.
 
 ### 4.4 Artifacts
 
-Under `_build/debug/<theorem>/<left>-<right>/<oracle>/<claim>/` (or `--out`):
+Under `<root>/<theorem>/<left>-<right>/<oracle>/<claim>/`, where `<root>` is `_build/debug` or the
+root of the debug output that `--out` gives (story 22):
 
 - `transcript.smt2` — every command sent, in order, including `(push 1)` / `(pop 1)` /
   `(check-sat)` / `(get-model)`. This is story 01's transcript writer, unmodified.

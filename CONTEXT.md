@@ -128,6 +128,10 @@ theorem, or the project. It shows what is on disk, not what the last run did, so
 updates its rows and never removes the others. An index exists only at a level the user has run
 the debugger at. _Avoid_: sweep index, global index.
 
+**Result record** — the small file (`<strategy>_result.json`) that one debugger run writes next to
+its viewer: what a row of a debug index needs, and nothing more. A run artifact. A debug index
+reads only result records. _Avoid_: run summary (that is `summary.txt`), trace.
+
 **Unreachable** — a verdict meaning a claim was not refuted because the situation it was checked in
 cannot arise *under the assumptions in force*. Either the path pair itself is infeasible, or the
 pair happens but this one claim's dependency is false on it. It is never a synonym for *verified*:

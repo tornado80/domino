@@ -454,6 +454,7 @@ dependencies = [
  "miette",
  "shadow-rs",
  "sspverif",
+ "tempfile",
  "thiserror 1.0.69",
 ]
 

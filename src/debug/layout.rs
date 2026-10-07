@@ -20,11 +20,25 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::debug::sweep::Target;
+
 /// The directory a Domino all-claim run writes to, in place of `<claim>`.
 pub const ALL_CLAIMS_DIR: &str = "!all-claims!";
 
 /// The `_build` subdirectory debug runs go under.
 pub const DOMINO_DEBUG_DIR: &str = "_build/debug";
+
+/// The directory of one Domino-listing run: `<root>/<theorem>/<left>-<right>/<oracle>/<claim>/`.
+pub fn run_dir(root: &Path, target: &Target, claim_label: &str) -> PathBuf {
+    proofstep_dir(root, &target.theorem, &target.left, &target.right)
+        .join(&target.oracle)
+        .join(claim_label)
+}
+
+/// The directory of one equivalence proofstep: `<root>/<theorem>/<left>-<right>/`.
+pub fn proofstep_dir(root: &Path, theorem: &str, left: &str, right: &str) -> PathBuf {
+    root.join(theorem).join(format!("{left}-{right}"))
+}
 
 /// How the artifact names of one run are spelled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +64,14 @@ impl Layout {
         match self {
             Layout::Plain => "trace.json".to_string(),
             Layout::Strategy(s) => format!("{s}_trace.json"),
+        }
+    }
+
+    /// The result record (story 22): what a row of a debug index needs.
+    pub fn result(self) -> String {
+        match self {
+            Layout::Plain => "result.json".to_string(),
+            Layout::Strategy(s) => format!("{s}_result.json"),
         }
     }
 
@@ -81,6 +103,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_run_directory_is_below_its_theorem_proofstep_and_oracle() {
+        let target = Target {
+            theorem: "T".into(),
+            proofstep: 3,
+            left: "L".into(),
+            right: "R".into(),
+            oracle: "O".into(),
+        };
+        assert_eq!(
+            run_dir(Path::new("/x"), &target, ALL_CLAIMS_DIR),
+            Path::new("/x/T/L-R/O/!all-claims!")
+        );
+    }
+
+    #[test]
     fn plain_keeps_the_names_the_easycrypt_directory_has_always_had() {
         let l = Layout::Plain;
         assert_eq!(l.viewer(), "index.html");
@@ -95,6 +132,7 @@ mod tests {
         assert_eq!(l.viewer(), "lockstep_viewer.html");
         assert_eq!(l.trace(), "lockstep_trace.json");
         assert_eq!(l.summary(), "lockstep_summary.txt");
+        assert_eq!(l.result(), "lockstep_result.json");
         assert_eq!(l.rel("smt"), "lockstep/smt");
         assert_eq!(
             l.path(Path::new("/o"), "transcript.smt2"),

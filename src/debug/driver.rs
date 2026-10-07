@@ -69,7 +69,9 @@ use crate::debug::exec::{
 use crate::debug::ir::{
     count_terminals, inline_oracle, InlineError, InlinedOracle, Label, Listing, SiteInfo, SiteKind,
 };
-use crate::debug::layout::{Layout, ALL_CLAIMS_DIR, DOMINO_DEBUG_DIR};
+use crate::debug::layout::{self, Layout, ALL_CLAIMS_DIR, DOMINO_DEBUG_DIR};
+use crate::debug::index;
+use crate::debug::sweep::{SweepEntry, Target};
 use crate::debug::progress::{DebugEvent, DebugObserver, SharedObserver};
 use crate::debug::render;
 use crate::debug::report;
@@ -642,9 +644,9 @@ pub const SEQUENTIAL: &str = "sequential";
 /// to one claim, whose dependencies stay in the base frame; without it the whole obligation set
 /// is checked on one exploration — an **all-claim run** (story 19).
 ///
-/// Writes the sequential artifacts under `out` (defaulting to
-/// `_build/debug/<theorem>/<left>-<right>/<oracle>/<claim>/`, `!all-claims!` in place of
-/// `<claim>` for an all-claim run).
+/// Writes the sequential artifacts and the result record under `out` (defaulting to
+/// [`layout::run_dir`] under `_build/debug`, `!all-claims!` in place of `<claim>` for an
+/// all-claim run).
 #[allow(clippy::too_many_arguments)]
 pub fn run_debug_command<P, B>(
     project: &P,
@@ -785,14 +787,15 @@ where
     }
     let observer: SharedObserver = RefCell::new(observer);
 
+    let target = Target {
+        theorem: eq.theorem_name().to_string(),
+        proofstep: req_proofstep,
+        left: eq.left_name().to_string(),
+        right: eq.right_name().to_string(),
+        oracle: oracle.to_string(),
+    };
     let out_dir = out.unwrap_or_else(|| {
-        let mut path = project.get_root_dir();
-        path.push(DOMINO_DEBUG_DIR);
-        path.push(eq.theorem_name());
-        path.push(format!("{}-{}", eq.left_name(), eq.right_name()));
-        path.push(oracle);
-        path.push(claim_label);
-        path
+        layout::run_dir(&project.get_root_dir().join(DOMINO_DEBUG_DIR), &target, claim_label)
     });
     std::fs::create_dir_all(&out_dir)?;
     std::fs::create_dir_all(layout.path(&out_dir, "models"))?;
@@ -895,6 +898,7 @@ where
     )?;
     run.elapsed = started.elapsed();
     report::flush(&run, &out_dir)?;
+    index::write_result(&SweepEntry::from_sequential(target, &run))?;
 
     observer.borrow_mut().on_event(&DebugEvent::Finished {
         summary: run.summary,
@@ -3024,6 +3028,14 @@ mod tests {
         assert!(std::path::Path::new(&run.out_dir).join("sequential_viewer.html").exists());
         let summary_txt = std::path::Path::new(&run.out_dir).join("sequential_summary.txt");
         assert!(summary_txt.exists());
+        // Story 22: the result record is written after an interrupt too.
+        let record: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(std::path::Path::new(&run.out_dir).join("sequential_result.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record["stop_reason"], "interrupted");
+        assert_eq!(record["ok"], false);
         assert!(!std::fs::read_to_string(&summary_txt).unwrap().is_empty());
     }
 

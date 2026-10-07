@@ -73,14 +73,6 @@ pub struct TacticsNeedCvc5Lib;
 pub struct EcDebugNeedCvc5Lib;
 
 #[derive(Error, Diagnostic, Debug)]
-#[error("`--out` names one output directory, but this run covers {0} oracles")]
-#[diagnostic(help(
-    "name one oracle with `--proof`, `--proofstep` and `--oracle`, or drop `--out` to write \
-     each run under `_build/debug/`"
-))]
-pub struct OutNeedsOneOracle(pub usize);
-
-#[derive(Error, Diagnostic, Debug)]
 #[error("io error writing the debug artifacts")]
 pub struct DebugIo(#[source] pub std::io::Error);
 
@@ -137,9 +129,6 @@ enum Error {
     #[error(transparent)]
     #[diagnostic(transparent)]
     EcDebugNeedCvc5Lib(#[from] EcDebugNeedCvc5Lib),
-    #[error(transparent)]
-    #[diagnostic(transparent)]
-    OutNeedsOneOracle(#[from] OutNeedsOneOracle),
     #[error(transparent)]
     #[diagnostic(transparent)]
     DebugIo(#[from] DebugIo),
@@ -275,7 +264,8 @@ fn stage_line(mode: ProgressMode, line: &str) {
 #[cfg(feature = "cvc5-lib")]
 fn debug(d: &Debug) -> Result<(), Error> {
     use sspverif::debug::driver::{run_debug_command, DebugError, DebugOptions};
-    use sspverif::debug::layout::DOMINO_DEBUG_DIR;
+    use sspverif::debug::index::{self, Level};
+    use sspverif::debug::layout::{self, ALL_CLAIMS_DIR, DOMINO_DEBUG_DIR};
     use sspverif::debug::lockstep_report::render_summary as render_lockstep_summary;
     use sspverif::debug::lockstep_run::{run_lockstep_domino, LockstepDebugOptions};
     use sspverif::debug::smtout::SmtOut;
@@ -308,9 +298,11 @@ fn debug(d: &Debug) -> Result<(), Error> {
         eprintln!("debug: the project has no equivalence proofstep to debug");
         return Ok(());
     }
-    if plan.targets.len() > 1 && d.out.is_some() {
-        return Err(OutNeedsOneOracle(plan.targets.len()).into());
-    }
+    let root = d
+        .out
+        .clone()
+        .unwrap_or_else(|| project_root.join(DOMINO_DEBUG_DIR));
+    let claim_label = d.claim.as_deref().unwrap_or(ALL_CLAIMS_DIR);
     // One oracle: today's concise report on stdout. Several: one line per oracle as it
     // finishes, then the failures of the whole project.
     let single = plan.targets.len() == 1;
@@ -366,7 +358,7 @@ fn debug(d: &Debug) -> Result<(), Error> {
                 d.claim.as_deref(),
                 &lockstep_opts,
                 &backend,
-                d.out.clone(),
+                Some(layout::run_dir(&root, target, claim_label)),
                 observer.as_mut(),
                 Some(&stop),
             ) {
@@ -391,7 +383,7 @@ fn debug(d: &Debug) -> Result<(), Error> {
                 d.claim.as_deref(),
                 &opts,
                 &backend,
-                d.out.clone(),
+                Some(layout::run_dir(&root, target, claim_label)),
                 observer.as_mut(),
                 Some(&stop),
             ) {
@@ -436,13 +428,27 @@ fn debug(d: &Debug) -> Result<(), Error> {
         if !table.is_empty() {
             println!("\n{table}");
         }
-        let root = project_root.join(DOMINO_DEBUG_DIR);
-        let (index, summary) = sweep::write_index(&root, &entries).map_err(DebugIo)?;
-        println!(
-            "\nindex    {}\nsummary  {}",
-            index.display(),
-            summary.display()
+    }
+    if !entries.is_empty() {
+        let first = &plan.targets[0];
+        let level = Level::of_filters(
+            d.proof.as_deref(),
+            d.proofstep.map(|_| (first.left.as_str(), first.right.as_str())),
         );
+        // A run of one oracle writes no index of its own; it keeps the ones above it current.
+        let written = if d.oracle.is_some() && d.proofstep.is_some() {
+            index::update_indexes(&root, &level)
+        } else {
+            index::refresh_indexes(&root, &level)
+        }
+        .map_err(DebugIo)?;
+        if !written.is_empty() {
+            println!();
+        }
+        for w in written {
+            let updated = if w.updated { "      (updated)" } else { "" };
+            println!("index    {}{updated}", w.path.display());
+        }
     }
 
     if entries.iter().any(|entry| !entry.ok) {

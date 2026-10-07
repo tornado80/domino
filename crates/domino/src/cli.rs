@@ -340,10 +340,9 @@ pub(crate) struct Debug {
     /// (large; for debugging `domino debug` itself).
     #[clap(long)]
     pub(crate) transcript: bool,
-    /// Output directory. Only for a run of one oracle. Defaults to
-    /// `_build/debug/<theorem>/<left>-<right>/<oracle>/<claim>/`, with `!all-claims!`
-    /// in place of `<claim>` for an all-claim run. Both strategies write there, each naming its
-    /// files after itself.
+    /// Root of the debug output. Defaults to `_build/debug`. Each run writes to
+    /// `<root>/<theorem>/<left>-<right>/<oracle>/<claim>/` (`!all-claims!` for an all-claim
+    /// run). Indexes are written at the level the run selects.
     #[clap(long)]
     pub(crate) out: Option<std::path::PathBuf>,
 }

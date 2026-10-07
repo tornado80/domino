@@ -10,6 +10,7 @@ pub mod claims;
 pub mod driver;
 pub mod effect;
 pub mod exec;
+pub mod index;
 pub mod ir;
 pub mod layout;
 pub mod lockstep;
