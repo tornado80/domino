@@ -162,7 +162,7 @@ pub struct MissingReturnError {
     #[source_code]
     pub source_code: miette::NamedSource<String>,
 
-    #[label("this identifier here")]
+    #[label("this oracle here")]
     pub at: SourceSpan,
 
     pub oracle_name: String,
@@ -711,6 +711,31 @@ pub struct AssumptionExportsNotSufficientError {
 
     #[label(
         "but in the construction game, oracle `{oracle_name}` can be called on this package instance"
+    )]
+    pub construction_at: SourceSpan,
+
+    pub assumption_pkg_inst_name: String,
+    pub construction_pkg_inst_name: String,
+
+    pub oracle_name: String,
+}
+
+#[derive(Debug, Diagnostic, Error, Clone)]
+#[error("The construction game exports oracle `{oracle_name}` of package instance `{construction_pkg_inst_name}` to the adversary, but the assumption game doesn't export it for the mapped package instance `{assumption_pkg_inst_name}`")]
+#[diagnostic(code(
+    domino::code::theorem::reduction::mapping::assumption_adversary_exports_insufficient
+))]
+pub struct AssumptionAdversaryExportsNotSufficientError {
+    #[source_code]
+    pub source_code: miette::NamedSource<String>,
+
+    #[label(
+        "in the assumption game, access to the `{oracle_name}` is not exported for this package instance"
+    )]
+    pub assumption_at: SourceSpan,
+
+    #[label(
+        "but in the construction game, the adversary can call oracle `{oracle_name}` on this package instance"
     )]
     pub construction_at: SourceSpan,
 

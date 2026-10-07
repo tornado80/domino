@@ -588,23 +588,23 @@ impl<'a> EquivalenceContext<'a> {
             .exports
             .iter()
             .find(|export| export.name() == oracle_name)
-            .unwrap_or_else(|| panic!("could not find left export {oracle_name}"));
+            .unwrap_or_else(|| unreachable!("oracle resolution should have caught this: could not find left export {oracle_name}"));
         let right_export = self
             .right_game_inst_ctx()
             .game()
             .exports
             .iter()
             .find(|export| export.name() == oracle_name)
-            .unwrap_or_else(|| panic!("could not find right export {oracle_name}"));
+            .unwrap_or_else(|| unreachable!("oracle resolution should have caught this: could not find right export {oracle_name}"));
 
         let left_offsets = self
             .max_offsets_left()
             .get(left_export)
-            .unwrap_or_else(|| panic!("could not find max offsets for left export {oracle_name}"));
+            .unwrap_or_else(|| unreachable!("sample_max_counter_extractor should have filled this: could not find max offsets for left export {oracle_name}"));
         let right_offsets = self
             .max_offsets_right()
             .get(right_export)
-            .unwrap_or_else(|| panic!("could not find max offsets for right export {oracle_name}"));
+            .unwrap_or_else(|| unreachable!("sample_max_counter_extractor should have filled this: could not find max offsets for right export {oracle_name}"));
 
         let mut left_entries: Vec<_> = left_offsets
             .iter()
@@ -781,7 +781,7 @@ impl<'a> EquivalenceContext<'a> {
 
         base_declarations.extend(hacks::MaybeDeclaration);
         base_declarations.push(hacks::ReturnValueDeclaration.into());
-        base_declarations.extend(hacks::TuplesDeclaration(1..32));
+        base_declarations.extend(hacks::TuplesDeclaration(0..32));
         base_declarations.extend(hacks::EmptyDeclaration);
         base_declarations.push(hacks::SampleIdDeclaration.into());
 
@@ -1265,8 +1265,10 @@ impl<'a> EquivalenceContext<'a> {
         for (decl_ctr, assert_ctr, assert_zero_ctr) in build_rands(self.sample_info_left(), left) {
             out.push(decl_ctr);
             out.push(assert_ctr);
-            // it is important for randomness mapping to assert that old counter is zero
-            // otherwise offset is needed
+            // For offset-based randomness mapping, we treat the user-provided
+            // counters as actual randomness counters instead of adding them to
+            // the old counters (base counters). This requires asserting that
+            // old counters are zero and makes the SMT code simpler.
             out.push(assert_zero_ctr);
         }
 
@@ -1274,8 +1276,10 @@ impl<'a> EquivalenceContext<'a> {
         {
             out.push(decl_ctr);
             out.push(assert_ctr);
-            // it is important for randomness mapping to assert that old counter is zero
-            // otherwise offset is needed
+            // For offset-based randomness mapping, we treat the user-provided
+            // counters as actual randomness counters instead of adding them to
+            // the old counters (base counters). This requires asserting that
+            // old counters are zero and makes the SMT code simpler.
             out.push(assert_zero_ctr);
         }
 

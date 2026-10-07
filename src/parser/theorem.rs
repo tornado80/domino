@@ -42,8 +42,8 @@ use super::{
     ast::GameInstanceName,
     common::{self, HandleTypeError},
     error::{
-        AssumptionExportsNotSufficientError, AssumptionMappingMissesPackageInstanceError,
-        AssumptionMappingParameterMismatchError,
+        AssumptionAdversaryExportsNotSufficientError, AssumptionExportsNotSufficientError,
+        AssumptionMappingMissesPackageInstanceError, AssumptionMappingParameterMismatchError,
         AssumptionMappingRightGameInstanceIsFromAssumption, DuplicateGameInstanceDefinitionError,
         DuplicateGameParameterDefinitionError, InvalidGameInstanceInReductionError,
         MissingGameParameterDefinitionError, NoSuchGameParameterError, ParserScopeError,
@@ -139,6 +139,8 @@ impl<'a> ParseTheoremContext<'a> {
             .into());
         }
         let offset = self.instances.len();
+        self.declare(game_inst.name(), Declaration::GameInstance)
+            .unwrap();
         self.instances.push(game_inst.clone());
         self.instances_table
             .insert(game_inst.name().to_string(), (offset, game_inst, span));
@@ -260,6 +262,10 @@ pub enum ParseTheoremError {
     #[diagnostic(transparent)]
     #[error(transparent)]
     AssumptionExportsNotSufficient(#[from] AssumptionExportsNotSufficientError),
+
+    #[diagnostic(transparent)]
+    #[error(transparent)]
+    AssumptionAdversaryExportsNotSufficient(#[from] AssumptionAdversaryExportsNotSufficientError),
 
     #[diagnostic(transparent)]
     #[error(transparent)]

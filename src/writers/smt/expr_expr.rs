@@ -169,6 +169,7 @@ impl From<&Expression> for SmtExpr {
                 table.into(),
                 (&**index).into(),
             ]),
+            ExpressionKind::Tuple(exprs) if exprs.is_empty() => SmtExpr::Atom("mk-tuple0".into()),
             ExpressionKind::Tuple(exprs) => {
                 let mut l = vec![SmtExpr::Atom(format!("mk-tuple{}", exprs.len()))];
 
