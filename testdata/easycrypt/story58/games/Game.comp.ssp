@@ -1,0 +1,12 @@
+composition Game {
+    invariant: [ ./games/Game.smt2 ]
+
+    instance C = Ctr {
+    }
+
+    compose {
+        adversary: {
+            Inc: C,
+        },
+    }
+}

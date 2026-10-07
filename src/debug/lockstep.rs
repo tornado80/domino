@@ -106,6 +106,10 @@ pub struct LockstepTerms {
     pub claims: Vec<ClaimQuery>,
     /// One entry per state relation the invariant conjoins, in file order.
     pub relations: Vec<RelationGoal>,
+    /// One entry per one-sided invariant claim (`package-invariant!…!`, `game-invariant!…!`,
+    /// story 58), each a sub-verdict of `invariant` on every pair, in the same list as the
+    /// relations. Empty on the Domino listing, where these are claims of their own.
+    pub side_invariants: Vec<RelationGoal>,
     /// Every pairing the randomness mapping could make.
     pub pairings: Vec<Pairing>,
 }
@@ -1236,15 +1240,12 @@ impl<'a, S: SmtSolver> Engine<'_, 'a, S> {
                 && !matches!(verdict, Verdict::Verified | Verdict::Unreachable { .. })
             {
                 for relation in &terms.relations {
-                    let verdict = self.check_goal(
-                        &relation.negated,
-                        id,
-                        &format!("relation-{}", relation.name),
-                    )?;
-                    relations.push(RelationVerdict {
-                        name: relation.name.clone(),
-                        verdict,
-                    });
+                    relations.push(self.check_relation(relation, id)?);
+                }
+            }
+            if claim.name == "invariant" {
+                for side in &terms.side_invariants {
+                    relations.push(self.check_relation(side, id)?);
                 }
             }
             checked.push(ClaimVerdict {
@@ -1254,6 +1255,15 @@ impl<'a, S: SmtSolver> Engine<'_, 'a, S> {
             });
         }
         Ok(checked)
+    }
+
+    /// The sub-verdict of one relation goal on the pair `id`.
+    fn check_relation(&mut self, relation: &RelationGoal, id: &str) -> Result<RelationVerdict, DebugError> {
+        let verdict = self.check_goal(&relation.negated, id, &format!("relation-{}", relation.name))?;
+        Ok(RelationVerdict {
+            name: relation.name.clone(),
+            verdict,
+        })
     }
 
     /// Assert one negated goal and classify the answer. A model of a failing

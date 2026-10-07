@@ -1,0 +1,11 @@
+composition TwoGame {
+
+    instance T = Two {
+    }
+
+    compose {
+        adversary: {
+            Inc: T,
+        },
+    }
+}

@@ -30,6 +30,7 @@ mod pkg_inst;
 // }
 
 pub use equivalence::EquivalenceContext;
+pub(crate) use equivalence::{game_invariant_claim_name, package_invariant_claim_name};
 pub use game_inst::GameInstanceContext;
 pub use oracle::OracleContext;
 pub use pkg_inst::PackageInstanceContext;

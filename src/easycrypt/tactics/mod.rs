@@ -65,7 +65,7 @@ use crate::transforms::theorem_transforms::EasyCryptTransform;
 use crate::transforms::TheoremTransform;
 use crate::util::smtsolver::SmtSolverBackend;
 use crate::writers::easycrypt::export::{EquivalenceReport, ExportedTheorem};
-use crate::writers::easycrypt::invariant::relation_op_name;
+use crate::writers::easycrypt::invariant::{invariant_ops, side_invariant_ops};
 use crate::writers::easycrypt::lower::inline_oracle_ec;
 
 use super::check::{
@@ -1645,7 +1645,12 @@ where
     let resume = resume_from.as_ref().map(|from| {
         Resume::new(&tree, from.mode, from.closed.clone(), &from.in_flight)
     });
-    let unfold_ops = unfold_ops(&walked.relations);
+    let unfold_ops: Vec<String> =
+        invariant_ops(setup.left_inst, setup.right_inst, &walked.relations)
+            .into_iter()
+            .map(|op| op.name)
+            .collect();
+    let side_ops = side_invariant_ops(setup.left_inst, setup.right_inst);
     let left_ir = inline_oracle_ec(setup.left_inst, oracle)?;
     let right_ir = inline_oracle_ec(setup.right_inst, oracle)?;
     let began = Instant::now();
@@ -1690,6 +1695,7 @@ where
         tree: &tree,
         hints: &options.smt_hints,
         unfold_ops: &unfold_ops,
+        side_ops: &side_ops,
         quick_close: options.quick_close,
         oracle,
         leaf_budget: options.leaf_budget,
@@ -1929,15 +1935,6 @@ impl TheoremTactics {
         let _ = writeln!(out, "elapsed: {}", secs(self.elapsed));
         out
     }
-}
-
-/// The ops that `rewrite /… in hpre` unfolds to expose the invariant: `inv`, `params_inv`, and
-/// each relation by the name the writer gave it. `relations` holds the raw SMT names.
-fn unfold_ops(relations: &[String]) -> Vec<String> {
-    ["inv".to_string(), "params_inv".to_string()]
-        .into_iter()
-        .chain(relations.iter().map(|r| relation_op_name(r)))
-        .collect()
 }
 
 #[cfg(test)]

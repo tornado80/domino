@@ -1,0 +1,11 @@
+composition HelperGame {
+
+    instance H = Helper {
+    }
+
+    compose {
+        adversary: {
+            Inc: H,
+        },
+    }
+}

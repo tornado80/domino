@@ -416,32 +416,26 @@ impl<'a> EquivalenceContext<'a> {
 
         for pkg in &gctx_left.game().pkgs {
             if !pkg.pkg.invariants.is_empty() {
-                dependencies_code.push(build_left_invariant_old_call(&format!(
-                    "package-invariant!{}-{}!",
-                    game_inst_name_left,
-                    pkg.name()
-                )));
+                dependencies_code.push(build_left_invariant_old_call(
+                    &package_invariant_claim_name(game_inst_name_left, pkg.name()),
+                ));
             }
         }
         for pkg in &gctx_right.game().pkgs {
             if !pkg.pkg.invariants.is_empty() {
-                dependencies_code.push(build_right_invariant_old_call(&format!(
-                    "package-invariant!{}-{}!",
-                    game_inst_name_right,
-                    pkg.name()
-                )));
+                dependencies_code.push(build_right_invariant_old_call(
+                    &package_invariant_claim_name(game_inst_name_right, pkg.name()),
+                ));
             }
         }
 
         if !gctx_left.game().invariants.is_empty() {
-            dependencies_code.push(build_left_invariant_old_call(&format!(
-                "game-invariant!{}!",
+            dependencies_code.push(build_left_invariant_old_call(&game_invariant_claim_name(
                 game_inst_name_left,
             )));
         }
         if !gctx_right.game().invariants.is_empty() {
-            dependencies_code.push(build_right_invariant_old_call(&format!(
-                "game-invariant!{}!",
+            dependencies_code.push(build_right_invariant_old_call(&game_invariant_claim_name(
                 game_inst_name_right,
             )));
         }
@@ -532,10 +526,9 @@ impl<'a> EquivalenceContext<'a> {
                             admitted: false,
                             dependencies: vec!["no-abort".to_string()],
                             ty: claim_type,
-                            name: format!(
-                                "package-invariant!{}-{}!",
+                            name: package_invariant_claim_name(
                                 gctx.game_inst_name(),
-                                pkg.name()
+                                pkg.name(),
                             ),
                         })
                     }
@@ -554,7 +547,7 @@ impl<'a> EquivalenceContext<'a> {
                     admitted: false,
                     dependencies: vec!["no-abort".to_string()],
                     ty: claim_type,
-                    name: format!("game-invariant!{}!", gctx.game_inst_name()),
+                    name: game_invariant_claim_name(gctx.game_inst_name()),
                 })
             }
         }
@@ -1688,6 +1681,18 @@ fn build_rands(
             (decl_randctr, constrain_randctr, zero_constrain_randctr)
         })
         .collect()
+}
+
+/// The claim of the package invariant of instance `pkg_inst` in game instance `game_inst`:
+/// `package-invariant!<GameInst>-<Inst>!`. The one owner of this name.
+pub(crate) fn package_invariant_claim_name(game_inst: &str, pkg_inst: &str) -> String {
+    format!("package-invariant!{game_inst}-{pkg_inst}!")
+}
+
+/// The claim of the game invariant of game instance `game_inst`: `game-invariant!<GameInst>!`.
+/// The one owner of this name.
+pub(crate) fn game_invariant_claim_name(game_inst: &str) -> String {
+    format!("game-invariant!{game_inst}!")
 }
 
 #[cfg(test)]

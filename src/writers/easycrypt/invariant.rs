@@ -40,6 +40,9 @@ use super::package;
 use super::types::{func_op_name, translate_type};
 use super::EcExportError;
 
+mod side;
+pub use side::SideInvariantError;
+
 /// Errors specific to invariant translation. Folds into [`EcExportError`]
 /// via `#[from]` (`mod.rs`), matching [`NameError`]'s own
 /// `#[error(transparent)]`-but-not-`#[diagnostic(transparent)]` treatment:
@@ -136,6 +139,11 @@ pub enum InvariantError {
     #[error("two fields of the invariant file's record types are both named `{field}`")]
     FieldCollision { field: String },
 
+    /// A one-sided invariant file (a package or composition invariant) that is not one
+    /// invariant form of its kind, or such a form in an equivalence's file (story 58).
+    #[error(transparent)]
+    Side(#[from] SideInvariantError),
+
     #[error(transparent)]
     Name(#[from] NameError),
 }
@@ -177,8 +185,7 @@ pub struct InvariantFile {
     pub left_state_type: String,
     pub right_state_type: String,
     /// Human-readable descriptions of every skipped form
-    /// (`define-lemma`, `define-game-invariant`, `define-package-invariant`,
-    /// a `randomness-mapping-*` `define-fun`), file order — for the CLI's
+    /// (`define-lemma`, a `randomness-mapping-*` `define-fun`), file order — for the CLI's
     /// stdout report, mirroring `export::ExportedTheorem::skipped`
     /// (story 05).
     pub skipped: Vec<String>,
@@ -271,6 +278,18 @@ pub fn build_invariant_file(
 
     let params_inv_expr = build_params_inv(&left_side, &right_side)?;
 
+    let side_ops = side::build(
+        &side::SideInput {
+            left: left_game_inst,
+            right: right_game_inst,
+            left_record_ty: left_record_ty.clone(),
+            right_record_ty: right_record_ty.clone(),
+            theorem_consts: &theorem.consts,
+            project,
+        },
+        &mut state.ops,
+    )?;
+
     let mut items: Vec<EcItem> = pkg_state_types
         .into_iter()
         .map(|t| EcItem::Record {
@@ -287,6 +306,7 @@ pub fn build_invariant_file(
         fields: right_side.fields.clone(),
     });
     items.extend(state.items);
+    items.extend(side_ops.items);
 
     items.push(EcItem::OpDef {
         name: "params_inv".to_string(),
@@ -309,7 +329,12 @@ pub fn build_invariant_file(
             op: EcUnop::Not,
             arg: Box::new(field_expr("l", &left_side.abort_field)),
         }),
-        rhs: Box::new(invariant_app),
+        rhs: Box::new(fold_and(
+            std::iter::once(invariant_app)
+                .chain(side_ops.left)
+                .chain(side_ops.right)
+                .collect(),
+        )),
     };
 
     let inv_body = fold_and(vec![
@@ -380,6 +405,22 @@ impl From<crate::util::smtparser::Error> for InvariantError {
 /// side of the equivalence, and declared only in the invariant file.
 pub(super) fn pkg_state_type_name(package: &str) -> String {
     format!("{package}_pkgstate")
+}
+
+/// The template operator of a package invariant: `PkgInv_<Pkg>`, over `<Pkg>_pkgstate`.
+pub(crate) fn pkg_inv_template_name(package: &str) -> String {
+    format!("PkgInv_{package}")
+}
+
+/// The wrapper operator of one instance's package invariant on one side:
+/// `PkgInv_<l|r>_<Inst>`, over the side's game record. `side` is `l` or `r`.
+pub(crate) fn pkg_inv_op_name(side: &str, instance: &str) -> String {
+    format!("PkgInv_{side}_{instance}")
+}
+
+/// The operator of a game instance's game invariant: `GameInv_<GameInst>`, over its game record.
+pub(crate) fn game_inv_op_name(game_inst: &str) -> String {
+    format!("GameInv_{game_inst}")
 }
 
 /// A field of [`pkg_state_type_name`]: `<Pkg>_<mangled state field>`.
@@ -498,13 +539,7 @@ fn build_side_record<'a>(
         let inst: &PackageInstance = &game_inst.game().pkgs[idx];
         let package = inst.pkg.name.as_str();
         let mut names = Names::new();
-
-        let mut state_fields = Vec::with_capacity(inst.pkg.state.len());
-        for (name, ty, span) in &inst.pkg.state {
-            let mangled = names.mangle(NameKind::Var, name)?;
-            let ec_ty = translate_type(ty, *span)?;
-            state_fields.push((name, pkg_state_field_name(package, &mangled), ec_ty));
-        }
+        let state_fields = pkg_state_fields(inst, &mut names)?;
 
         let state = if state_fields.is_empty() {
             None
@@ -577,6 +612,23 @@ fn build_side_record<'a>(
     })
 }
 
+/// The state fields of `inst`'s package, in declaration order: the raw name, the
+/// `<Pkg>_<mangled>` record field and its type. The names are mangled through `names`, before
+/// any parameter of the instance.
+fn pkg_state_fields(
+    inst: &PackageInstance,
+    names: &mut Names,
+) -> Result<Vec<(String, String, EcType)>, EcExportError> {
+    let package = inst.pkg.name.as_str();
+    let mut fields = Vec::with_capacity(inst.pkg.state.len());
+    for (name, ty, span) in &inst.pkg.state {
+        let mangled = names.mangle(NameKind::Var, name)?;
+        let ec_ty = translate_type(ty, *span)?;
+        fields.push((name.clone(), pkg_state_field_name(package, &mangled), ec_ty));
+    }
+    Ok(fields)
+}
+
 /// Checks that no two fields of the file's record types (every
 /// `<Pkg>_pkgstate`, then both game records) share a name, as EasyCrypt
 /// record fields are global.
@@ -621,7 +673,7 @@ fn check_unique_fields(
 /// mangling in this crate.
 fn mangle_local_binder(names: &mut Names, raw: &str) -> Result<String, NameError> {
     let mangled = names.mangle(NameKind::Var, raw)?;
-    if mangled == "l" || mangled == "r" {
+    if matches!(mangled.as_str(), "l" | "r" | "s" | "g") {
         return names.mangle(NameKind::Var, &format!("q_{raw}"));
     }
     Ok(mangled)
@@ -856,6 +908,25 @@ impl OpRegistry {
         Ok(mangled)
     }
 
+    /// Registers an operator name that no SMT definition gives (a `PkgInv_`/`GameInv_`
+    /// operator, story 58). `what` says what the operator is, for the collision error. The
+    /// name cannot be called from an SMT body.
+    fn define_named(&mut self, name: &str, what: &str) -> Result<(), InvariantError> {
+        match self.seen_mangled.get(name) {
+            Some(existing) if existing == what => Ok(()),
+            Some(existing) => Err(SideInvariantError::OpNameCollision {
+                name: name.to_string(),
+                a: existing.clone(),
+                b: what.to_string(),
+            }
+            .into()),
+            None => {
+                self.seen_mangled.insert(name.to_string(), what.to_string());
+                Ok(())
+            }
+        }
+    }
+
     fn lookup(&self, raw: &str) -> Option<&(String, EcType)> {
         self.by_raw.get(raw)
     }
@@ -866,6 +937,69 @@ impl OpRegistry {
 /// the relations, so the writer and the tactics run cannot disagree.
 pub(crate) fn relation_op_name(raw: &str) -> String {
     format!("Domino_{}", mangle_smt_def_name(raw))
+}
+
+/// One operator of the invariant file that the tactics run unfolds (story 58 §3.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvariantOp {
+    /// The EasyCrypt operator, e.g. `PkgInv_r_Prf`.
+    pub name: String,
+    /// The one Domino claim it stands for: `package-invariant!Hybrid2-Prf!` for a wrapper,
+    /// `game-invariant!Hybrid2!` for a `GameInv_` operator. `None` for `inv`, `params_inv`,
+    /// the `Domino_` operators and the `PkgInv_<Pkg>` templates.
+    pub claim: Option<String>,
+}
+
+impl InvariantOp {
+    fn plain(name: String) -> Self {
+        InvariantOp { name, claim: None }
+    }
+}
+
+/// The operators of the invariant file of `left ~ right`, in the order `rewrite /… in` unfolds
+/// them: `inv`, `params_inv`, `Domino_<r>` for each of `relations` (the raw names of the state
+/// relations), then [`side_invariant_ops`]. Reads no file.
+pub fn invariant_ops(
+    left: &GameInstance,
+    right: &GameInstance,
+    relations: &[String],
+) -> Vec<InvariantOp> {
+    ["inv".to_string(), "params_inv".to_string()]
+        .into_iter()
+        .chain(relations.iter().map(|r| relation_op_name(r)))
+        .map(InvariantOp::plain)
+        .chain(side_invariant_ops(left, right))
+        .collect()
+}
+
+/// The one-sided invariant operators of `left ~ right`: the `PkgInv_<l|r>_<Inst>` wrappers,
+/// then the `PkgInv_<Pkg>` templates, then the `GameInv_<GameInst>` operators. The wrappers
+/// come before the templates, so one `rewrite /… in` unfolds both.
+pub fn side_invariant_ops(left: &GameInstance, right: &GameInstance) -> Vec<InvariantOp> {
+    use crate::writers::smt::contexts::{game_invariant_claim_name, package_invariant_claim_name};
+    let sides = [("l", left), ("r", right)];
+    let mut wrappers = Vec::new();
+    let mut templates: Vec<InvariantOp> = Vec::new();
+    let mut games = Vec::new();
+    for (letter, game_inst) in sides {
+        for inst in side::invariant_instances(game_inst) {
+            wrappers.push(InvariantOp {
+                name: pkg_inv_op_name(letter, inst.name()),
+                claim: Some(package_invariant_claim_name(game_inst.name(), inst.name())),
+            });
+            let template = pkg_inv_template_name(&inst.pkg.name);
+            if !templates.iter().any(|t| t.name == template) {
+                templates.push(InvariantOp::plain(template));
+            }
+        }
+        if !game_inst.game().invariants.is_empty() {
+            games.push(InvariantOp {
+                name: game_inv_op_name(game_inst.name()),
+                claim: Some(game_invariant_claim_name(game_inst.name())),
+            });
+        }
+    }
+    wrappers.into_iter().chain(templates).chain(games).collect()
 }
 
 /// Mangles an SMT-LIB definition name into a legal (partial) EasyCrypt
@@ -1940,21 +2074,19 @@ impl SmtParser<InvariantError> for InvariantParserState<'_> {
     }
 
     fn handle_define_game_invariant(&mut self, _body: Sexp) -> Result<Sexp, InvariantError> {
-        self.items.push(EcItem::Comment(
-            "skipped `define-game-invariant` (not translated)".to_string(),
-        ));
-        self.skipped
-            .push("define-game-invariant".to_string());
-        Ok(Sexp::Atom(String::new()))
+        Err(SideInvariantError::InEquivalenceFile {
+            file: self.file.clone(),
+            form: side::Kind::Game.form(),
+        }
+        .into())
     }
 
     fn handle_define_package_invariant(&mut self, _body: Sexp) -> Result<Sexp, InvariantError> {
-        self.items.push(EcItem::Comment(
-            "skipped `define-package-invariant` (not translated)".to_string(),
-        ));
-        self.skipped
-            .push("define-package-invariant".to_string());
-        Ok(Sexp::Atom(String::new()))
+        Err(SideInvariantError::InEquivalenceFile {
+            file: self.file.clone(),
+            form: side::Kind::Package.form(),
+        }
+        .into())
     }
 }
 
@@ -2267,7 +2399,7 @@ mod tests {
         (theorem, project)
     }
 
-    fn find_equivalence<'a>(
+    pub(super) fn find_equivalence<'a>(
         theorem: &'a crate::theorem::Theorem<'_>,
         left: &str,
         right: &str,
@@ -2617,7 +2749,7 @@ mod tests {
     // C2`, both of composition `Clash`, where instance `T_b1` (with state)
     // and parameter `b1` of instance `T` both name the field `l_pkg_T_b1`.
 
-    fn load_project(dir: &str, theorem_name: &str) -> (
+    pub(super) fn load_project(dir: &str, theorem_name: &str) -> (
         crate::theorem::Theorem<'static>,
         &'static crate::project::DirectoryProject<'static>,
     ) {
@@ -2650,7 +2782,7 @@ mod tests {
 
     /// The text of one top-level item of a rendered file, from its first
     /// line (`op <name> `, `type <name> `) to its closing `.`.
-    fn item_text<'a>(rendered: &'a str, head: &str) -> &'a str {
+    pub(super) fn item_text<'a>(rendered: &'a str, head: &str) -> &'a str {
         let start = rendered
             .find(&format!("\n{head} "))
             .unwrap_or_else(|| panic!("no `{head}` in:\n{rendered}"))

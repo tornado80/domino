@@ -512,11 +512,14 @@ impl ClaimSet {
     }
 }
 
-/// The engine's solver vocabulary for `oracle`, from the equivalence context.
+/// The engine's solver vocabulary for `oracle`, from the equivalence context. On the EasyCrypt
+/// listing (`claim_set` is [`ClaimSet::NoDependencies`]), the one-sided invariant claims are
+/// sub-verdicts of `invariant`.
 fn lockstep_terms(
     eqctx: &EquivalenceContext<'_>,
     oracle: &str,
     claims: Vec<ClaimQuery>,
+    claim_set: &ClaimSet,
 ) -> LockstepTerms {
     let negated_relation = |name: &str| {
         eqctx.emit_claim_goal_negated(&no_dependency_claim(name, ClaimType::Invariant), oracle)
@@ -532,6 +535,10 @@ fn lockstep_terms(
                 name,
             })
             .collect(),
+        side_invariants: match claim_set {
+            ClaimSet::NoDependencies => side_invariant_goals(eqctx, oracle),
+            ClaimSet::Obligations { .. } => Vec::new(),
+        },
         pairings: eqctx
             .randomness_mapping_candidates(oracle)
             .iter()
@@ -544,6 +551,35 @@ fn lockstep_terms(
             })
             .collect(),
     }
+}
+
+/// The negated goal of each one-sided invariant claim on the new states, without dependencies.
+fn side_invariant_goals(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<RelationGoal> {
+    eqctx
+        .generate_game_or_package_invariant_claims()
+        .into_iter()
+        .map(|claim| RelationGoal {
+            negated: eqctx
+                .emit_claim_goal_negated(&no_dependency_claim(claim.name(), claim.ty), oracle),
+            name: claim.name().to_string(),
+        })
+        .collect()
+}
+
+/// The names of the claims and sub-verdicts that lockstep execution on the EasyCrypt listing
+/// checks for an oracle: `equal-output`, `invariant`, the state relations, then the one-sided
+/// invariant claims.
+pub(crate) fn easycrypt_check_names(eqctx: &EquivalenceContext<'_>) -> Vec<String> {
+    [EQUAL_OUTPUT.to_string(), "invariant".to_string()]
+        .into_iter()
+        .chain(eqctx.state_relation_names())
+        .chain(
+            eqctx
+                .generate_game_or_package_invariant_claims()
+                .iter()
+                .map(|c| c.name().to_string()),
+        )
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -879,7 +915,7 @@ where
         .collect::<Vec<_>>()
         .join("\n");
 
-    let terms = lockstep_terms(&eqctx, oracle, claim_queries);
+    let terms = lockstep_terms(&eqctx, oracle, claim_queries, &claim_set);
     let goals_view = GoalsView {
         claims: goal_blocks
             .iter()
@@ -892,6 +928,7 @@ where
         relations: terms
             .relations
             .iter()
+            .chain(&terms.side_invariants)
             .map(|r| RelationGoalView {
                 name: r.name.clone(),
                 smt: r.negated.to_string(),
@@ -1321,6 +1358,49 @@ mod tests {
         assert_eq!(run.summary.relation_failures["invariant"], 1);
     }
 
+    /// Story 58: on the EasyCrypt listing, every pair has a sub-verdict of `invariant` for each
+    /// one-sided invariant claim, also when `invariant` itself is verified.
+    #[test]
+    fn every_pair_has_a_sub_verdict_for_each_one_sided_invariant_claim() {
+        let dir = "testdata/easycrypt/story58";
+        let files = DirectoryFiles::load(Path::new(dir)).unwrap();
+        let project = DirectoryProject::load(PathBuf::from(dir), &files).unwrap();
+        let opts = LockstepDebugOptions::default();
+        let run = run_lockstep_on(
+            ListingKind::EasyCrypt,
+            ClaimSet::NoDependencies,
+            &project,
+            "OneSided",
+            0,
+            "Inc",
+            &opts,
+            &Cvc5LibBackend::new(true, opts.timeout_ms),
+            Some(tempfile::tempdir().unwrap().keep()),
+            &mut NopObserver,
+            None,
+        )
+        .unwrap();
+        assert!(!run.outcome.pairs.is_empty());
+        for pair in &run.outcome.pairs {
+            let subs: Vec<_> = pair
+                .relations()
+                .iter()
+                .map(|r| (r.name.as_str(), rank(&r.verdict)))
+                .collect();
+            assert_eq!(
+                subs,
+                [
+                    ("package-invariant!L-C!", 0),
+                    ("package-invariant!R-C!", 0),
+                    ("game-invariant!L!", 0),
+                    ("game-invariant!R!", 0),
+                ],
+                "{}",
+                pair.id
+            );
+        }
+    }
+
     #[test]
     fn a_relation_breakdown_is_only_made_for_a_failing_invariant() {
         let run = run_rules("Synced");
@@ -1550,6 +1630,7 @@ mod tests {
                 .resolve(&eqctx, eq, "StuckOrder")
                 .unwrap()
                 .queries,
+            &ClaimSet::NoDependencies,
         );
         let mut solver = Cvc5LibBackend::new(true, None).new_smtsolver().unwrap();
         for e in &base {

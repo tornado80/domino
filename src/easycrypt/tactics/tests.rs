@@ -1031,6 +1031,7 @@ mod live {
             tree: &tree,
             hints: &[],
             unfold_ops: &["inv".to_string(), "params_inv".to_string()],
+            side_ops: &[],
             timeouts: Timeouts {
                 general: Duration::from_secs(60),
                 quick_close: Duration::from_secs(2),
@@ -2384,6 +2385,30 @@ wait $ec
         );
     }
 
+    /// Story 58: a tree saved before the `claims` part existed is stale, and it is still used.
+    #[test]
+    fn a_tree_saved_without_the_claims_part_is_stale_and_still_used() {
+        let Some((first_run, out)) = stopped_mid_oracle() else {
+            return;
+        };
+        let tree = out
+            .path()
+            .join(saved_tree_name(&first_run.equivalences[0].proof_file, "Branch"));
+        edit_json(&tree, |t| {
+            t["fingerprint"] = "0".into();
+            t["fingerprint_parts"].as_object_mut().unwrap().remove("claims");
+        });
+        walk_events();
+        let result = run_again_on(TWO_BRANCHES, out.path(), &resume_with(ResumeMode::Trust));
+        assert!(!walk_events().contains(&"lockstep Branch".to_string()));
+        let at = the_oracle(&result).resumed_at.clone().expect("resumed");
+        assert_eq!(at.stale, vec!["claims"]);
+        assert_eq!(
+            crate::debug::lockstep_fingerprint::describe_part("claims"),
+            "the claims checked"
+        );
+    }
+
     #[test]
     fn a_closed_node_whose_replay_is_rejected_is_proved_again() {
         let Some((first_run, out)) = stopped_mid_oracle() else {
@@ -2484,15 +2509,6 @@ fn the_leaf_budget_is_off_by_default() {
     assert_eq!(TacticsOptions::default().leaf_budget, None);
 }
 
-#[test]
-fn unfold_ops_use_the_writers_op_names() {
-    let ops = unfold_ops(&["relation-a-b".to_string(), "state=".to_string()]);
-    assert_eq!(
-        ops,
-        ["inv", "params_inv", "Domino_relation_a_b", "Domino_state_eq"]
-    );
-}
-
 /// Story 56: each sentence's record says why the driver sent it. A fake EasyCrypt refuses every
 /// closing tactic, so the walk goes through every role: N0 (unreachable) through its quick close
 /// to an admit, N1 (a leaf) through its leaf fallbacks, the reduction to a formula, the split
@@ -2579,6 +2595,7 @@ done
         tree: &tree,
         hints: &[],
         unfold_ops: &["inv".to_string()],
+        side_ops: &[],
         timeouts: Timeouts {
             general: Duration::from_secs(10),
             quick_close: Duration::from_secs(10),
@@ -2641,4 +2658,39 @@ done
         "N1 admit admit.".to_string(),
     ];
     assert_eq!(said, expected);
+}
+
+/// Story 58: each one-sided invariant part has the view of its own claim only.
+#[test]
+fn a_one_sided_invariant_part_has_the_view_of_its_own_claim() {
+    let part = |op: &str, claim: &str| Part::SideInvariant {
+        op: op.into(),
+        claim: claim.into(),
+    };
+    let left = part("PkgInv_l_Prf", "package-invariant!Real_Hybrid3-Prf!");
+    let right = part("PkgInv_r_Prf", "package-invariant!Ideal_Hybrid3-Prf!");
+    let p = pair(
+        Verdict::Verified,
+        Verdict::Verified,
+        &[
+            ("package-invariant!Real_Hybrid3-Prf!", fails()),
+            ("package-invariant!Ideal_Hybrid3-Prf!", Verdict::Verified),
+        ],
+        false,
+    );
+    assert_eq!(pair_view_for_tests(&p, &left), "fails");
+    assert_eq!(pair_view_for_tests(&p, &right), "verified");
+
+    // a pair where a side aborts: a failure counts as inconclusive
+    let aborting = pair(
+        Verdict::Verified,
+        Verdict::Verified,
+        &[("package-invariant!Real_Hybrid3-Prf!", fails())],
+        true,
+    );
+    assert_eq!(pair_view_for_tests(&aborting, &left), "inconclusive");
+
+    // a sub-verdict that is not there (a tree saved before story 58)
+    let old = pair(Verdict::Verified, fails(), &[], false);
+    assert_eq!(pair_view_for_tests(&old, &left), "inconclusive");
 }

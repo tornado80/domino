@@ -5,13 +5,15 @@
 //! it. Source positions are left out, so moving code around or reformatting it changes
 //! nothing; the Domino version is left out too.
 //!
-//! It has four parts, each hashed on its own so a stale tree can say what changed:
+//! It has five parts, each hashed on its own so a stale tree can say what changed:
 //!
 //! - `code`: both sides' inlined EasyCrypt listings of the oracle (what lockstep walks: the
 //!   code of every package instance the oracle reaches), with the oracle's signature.
 //! - `constants`: both game instances' types and constants.
 //! - `randomness`: the oracle's randomness mapping: its kind and the SMT of its conditions.
 //! - `invariants`: the SMT of every loaded state relation, invariant and lemma.
+//! - `claims`: the names of the claims and sub-verdicts that lockstep execution on the
+//!   EasyCrypt listing checks for the oracle (story 58). A tree saved without this part is stale.
 //!
 //! The hash is FNV-1a over 128 bits: stable across runs and platforms, and no dependency.
 
@@ -28,7 +30,7 @@ use crate::writers::smt::contexts::EquivalenceContext;
 use crate::writers::smt::exprs::SmtExpr;
 
 /// The parts, in the order they are hashed and named.
-pub const PARTS: [&str; 4] = ["code", "constants", "randomness", "invariants"];
+pub const PARTS: [&str; 5] = ["code", "constants", "randomness", "invariants", "claims"];
 
 /// What part `part` of [`PARTS`] is, in words (the stale-tree warning).
 pub fn describe_part(part: &str) -> &str {
@@ -37,6 +39,7 @@ pub fn describe_part(part: &str) -> &str {
         "constants" => "the game constants",
         "randomness" => "the randomness mapping",
         "invariants" => "the invariants",
+        "claims" => "the claims checked",
         other => other,
     }
 }
@@ -93,14 +96,15 @@ impl Fingerprint {
             smt(&eqctx.emit_auto_randomness(oracle))
         );
         let invariants = smt(&eqctx.emit_invariant());
+        let claims = crate::debug::lockstep_run::easycrypt_check_names(&eqctx).join("\n");
 
         Ok(Fingerprint::from_parts([
-            code, constants, randomness, invariants,
+            code, constants, randomness, invariants, claims,
         ]))
     }
 
     /// The fingerprint of the parts' texts, in the order of [`PARTS`].
-    fn from_parts(texts: [String; 4]) -> Fingerprint {
+    fn from_parts(texts: [String; 5]) -> Fingerprint {
         let parts: BTreeMap<String, String> = PARTS
             .iter()
             .zip(&texts)
@@ -223,10 +227,10 @@ mod tests {
         assert_eq!(a, fingerprint(Path::new(PROJECT)));
         // the same in every process and build profile: no hash seed, no pointer, no `HashMap`
         // order (a change to the project or to what is hashed changes it, and that is all)
-        assert_eq!(a.hex, "1c8055a95da69bf920232ed2fcce4a22");
+        assert_eq!(a.hex, "9fc87caae096bf14a1d0314f8bf9452f");
         assert_eq!(
             a.parts.keys().collect::<Vec<_>>(),
-            ["code", "constants", "invariants", "randomness"]
+            ["claims", "code", "constants", "invariants", "randomness"]
         );
         // moved down two lines and re-indented: no source position is hashed
         let moved = edited("packages/Rand.pkg.ssp", |t| {

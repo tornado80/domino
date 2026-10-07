@@ -1,0 +1,11 @@
+composition NoStateGame {
+
+    instance N = NoState {
+    }
+
+    compose {
+        adversary: {
+            Inc: N,
+        },
+    }
+}

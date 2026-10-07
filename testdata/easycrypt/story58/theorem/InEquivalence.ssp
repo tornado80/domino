@@ -1,0 +1,22 @@
+theorem InEquivalence {
+    instance L = Game {
+    }
+
+    instance R = Game {
+    }
+
+    gamehops {
+        equivalence L R {
+            invariant: [ ./theorem/invariant-with-package-invariant.smt2 ]
+            Inc: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+        }
+    }
+}

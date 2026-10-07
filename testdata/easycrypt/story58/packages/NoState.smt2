@@ -1,0 +1,2 @@
+(define-package-invariant
+  true)

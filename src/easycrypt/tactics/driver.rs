@@ -32,6 +32,7 @@ use super::live::{Closing, LiveHandle};
 use super::ResumeMode;
 use super::script::{Mark, Script};
 use crate::easycrypt::job::{AdmitRecord, ClosedNode};
+use crate::writers::easycrypt::invariant::InvariantOp;
 
 type R<T> = Result<T, SessionError>;
 
@@ -274,6 +275,9 @@ pub(super) enum Part {
     Invariant,
     /// A state relation, by the name of its `define-state-relation`.
     Relation(String),
+    /// A one-sided invariant (story 58): a `PkgInv_<l|r>_<Inst>` wrapper or a `GameInv_`
+    /// operator, with the one Domino claim it stands for.
+    SideInvariant { op: String, claim: String },
 }
 
 impl Part {
@@ -283,6 +287,7 @@ impl Part {
             Part::EqualOutput => "equal-output".into(),
             Part::Invariant => "invariant".into(),
             Part::Relation(name) => format!("invariant/Domino_{name}"),
+            Part::SideInvariant { op, .. } => format!("invariant/{op}"),
         }
     }
 }
@@ -324,10 +329,33 @@ pub(super) fn pair_view(pair: &PairRecord, part: &Part) -> DominoView {
             .iter()
             .find(|r| &r.name == name)
             .map_or_else(|| invariant(claim("invariant")), |r| invariant(&r.verdict)),
+        Part::SideInvariant { claim: side_claim, .. } => {
+            side_invariant_view(pair, side_claim, claim("invariant")).map_or(
+                DominoView::Inconclusive,
+                &invariant,
+            )
+        }
         Part::Whole => {
             view_of_verdict(claim(EQUAL_OUTPUT)).worst(invariant(claim("invariant")))
         }
     }
+}
+
+/// The sub-verdict of the one-sided invariant claim `claim` on `pair`. A pair that cannot
+/// happen has no sub-verdicts: its `invariant` verdict stands for them. `None` when the
+/// sub-verdict is not there (a tree saved before story 58).
+fn side_invariant_view<'p>(
+    pair: &'p PairRecord,
+    claim: &str,
+    invariant: &'p Verdict,
+) -> Option<&'p Verdict> {
+    if matches!(invariant, Verdict::Unreachable { .. }) {
+        return Some(invariant);
+    }
+    pair.relations()
+        .iter()
+        .find(|r| r.name == claim)
+        .map(|r| &r.verdict)
 }
 
 /// The lemmas every `smt(…)` of the last fallbacks is given (§3.5 step 5); the project's own come
@@ -434,6 +462,12 @@ pub(super) struct Prover<'a> {
     /// The operators of the invariant file, `inv`, `params_inv` and `Domino_<rel>`, in the order
     /// `rewrite /… in` unfolds them.
     pub unfold_ops: &'a [String],
+    /// The one-sided invariant operators ([`side_invariant_ops`]): a wrapper or `GameInv_`
+    /// operator in a goal starts a [`Part::SideInvariant`]; a template is unfolded in the part
+    /// it is in.
+    ///
+    /// [`side_invariant_ops`]: crate::writers::easycrypt::invariant::side_invariant_ops
+    pub side_ops: &'a [InvariantOp],
     pub timeouts: Timeouts,
     /// The quick close (`auto => /#.` on every program goal) is on unless a test turns it off to
     /// exercise the walk.
@@ -1569,6 +1603,14 @@ impl Prover<'_> {
                         Step::Unfold("inv".into())
                     } else if let Some(rel) = op.strip_prefix("Domino_") {
                         now = Part::Relation(rel.to_string());
+                        Step::Unfold(op.to_string())
+                    } else if let Some(side) = self.side_ops.iter().find(|o| o.name == op) {
+                        if let Some(claim) = &side.claim {
+                            now = Part::SideInvariant {
+                                op: side.name.clone(),
+                                claim: claim.clone(),
+                            };
+                        }
                         Step::Unfold(op.to_string())
                     } else {
                         Step::Atom

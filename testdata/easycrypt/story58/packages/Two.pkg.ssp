@@ -1,0 +1,11 @@
+package Two {
+    invariant: [ ./packages/Two-a.smt2, ./packages/Two-b.smt2 ]
+    state {
+        ctr: Integer,
+    }
+
+    oracle Inc() -> Integer {
+        ctr <- (ctr + 1);
+        return ctr;
+    }
+}

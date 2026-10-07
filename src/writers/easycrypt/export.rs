@@ -695,6 +695,13 @@ mod tests {
         assert_tree_compiles(&exported, "simple4whs");
     }
 
+    // Story 58: package and game invariants on both sides, base case included.
+    #[test]
+    fn story58_one_sided_full_tree_compiles_in_dependency_order() {
+        let exported = export("testdata/easycrypt/story58", "OneSided").unwrap();
+        assert_tree_compiles(&exported, "story58");
+    }
+
     #[test]
     fn kem_dem_cca_ssp_full_tree_compiles_in_dependency_order() {
         let exported = export(

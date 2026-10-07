@@ -1,0 +1,8 @@
+package NoState {
+    invariant: [ ./packages/NoState.smt2 ]
+
+
+    oracle Inc() -> Integer {
+        return 1;
+    }
+}
