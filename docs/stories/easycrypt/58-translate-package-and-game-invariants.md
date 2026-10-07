@@ -231,6 +231,12 @@ failure counts as inconclusive.
 The Domino listing (`domino debug`, all-claim runs) already checks these claims and does not
 change.
 
+> **Changed later by symbolic-execution story 21 §3.3 (owner decision, 2026-10-07).** After story
+> 21, every part of `invariant`, these sub-verdicts included, is checked only on a pair where
+> `invariant` is goal-fails or inconclusive. The `invariant` goal on the EasyCrypt listing then holds
+> the whole guarded conjunction, so a verified `invariant` means that each part is verified, and
+> `pair_view` gives the part that verdict. Implement §3.7 as written here. Story 21 changes it.
+
 #### 3.8 The tactics driver
 
 - `tactics/mod.rs`: build the unfold list from `invariant_ops(...)`. Remove its own

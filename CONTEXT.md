@@ -52,6 +52,14 @@ obligations are discharged per exported oracle.
 **Claim** — one obligation of an equivalence for one oracle: `invariant`, `same-output` or
 `equal-aborts`, each with its dependencies.
 
+**Dependency** — a fact a claim is proved *under*: it is assumed, together with the shared
+assumptions, before the claim's negated goal is checked. A dependency is a built-in fact
+(`no-abort`, `left-no-abort`, `right-no-abort`, `equal-aborts`), another claim, or a project lemma.
+
+**Project lemma** — a lemma hand-written in the project's SMT-LIB file and named in a proofstep's
+`lemmas` block. It is never translated to EasyCrypt. _Distinguish_: the built-in facts above, which
+the code also types as lemmas.
+
 **State relation** — a predicate over the left and right game states, hand-written in SMT-LIB, that
 an equivalence maintains. One set of state relations per equivalence.
 
@@ -98,12 +106,27 @@ obligation set — its proof tree plus the generated package and game invariant 
 shared exploration.
 _Avoid_: claim-free run, full-obligation run.
 
+**Core claim set** — the claims a debugger run checks when project lemmas are left out:
+`equal-aborts`, `same-output`, `invariant`, and the package and game invariant claims, each under
+its built-in dependencies only. It is close to what an EasyCrypt proof can use, since EasyCrypt has
+no project lemmas. _Distinguish_: the **obligation set** (every claim, every dependency) and the
+EasyCrypt listing's two checks, `equal-output` and `invariant`, with no dependencies at all.
+
 **Check** — one question the debugger asks the solver at one terminal pair, with its own verdict:
 the negated goal of one claim, or of one state relation other than the invariant. Every claim of
 the obligation set is a check; so is every state relation except `invariant`, because the
-`invariant` claim already is that check. On the Domino listing a state relation's check is called
-`state-relation <name>`; the `Domino_` names belong to the EasyCrypt listing only.
-_Avoid_: query (a check may take several solver queries), `Domino_<name>` on the Domino listing.
+`invariant` claim already is that check. A state relation is checked only at a pair where the
+`invariant` check is neither verified nor unreachable, and on the invariant's own dependencies: it
+says *which part* of a failing invariant fails. On the Domino listing a state relation's check is
+called `state-relation <name>`; the EasyCrypt operator names (`StateRelation_<name>`) belong to
+the EasyCrypt listing only.
+_Avoid_: query (a check may take several solver queries), EasyCrypt operator names on the Domino
+listing.
+
+**Debug index** — a page that lists every debugger run on disk below one level: a proofstep, a
+theorem, or the project. It shows what is on disk, not what the last run did, so a narrower rerun
+updates its rows and never removes the others. An index exists only at a level the user has run
+the debugger at. _Avoid_: sweep index, global index.
 
 **Unreachable** — a verdict meaning a claim was not refuted because the situation it was checked in
 cannot arise *under the assumptions in force*. Either the path pair itself is infeasible, or the
@@ -197,9 +220,14 @@ package), then one field per package parameter that becomes a module variable, t
 (ADR 0007). It exists solely so that invariant operators take a single argument per side; no
 router or package ever uses it.
 
-**`Domino_` operator** — an EasyCrypt operator translated from a hand-written SMT-LIB state relation
-or helper function, named after its SMT original. Package and game invariants become `PkgInv_`
-and `GameInv_` operators, not `Domino_` operators.
+**`StateRelation_` operator** — an EasyCrypt operator translated from a hand-written SMT-LIB state
+relation, named after its SMT original; the invariant becomes `StateRelation_invariant`. Only these
+are read as state-relation parts of a leaf. _Avoid_: `Domino_` operator (the old name, which also
+covered helpers).
+
+**`Helper_` operator** — an EasyCrypt operator translated from a hand-written SMT-LIB helper
+function: a function of the invariant file that is not a state relation. Package and game
+invariants become `PkgInv_` and `GameInv_` operators, neither `StateRelation_` nor `Helper_`.
 
 **Translation** — producing the export tree from a Domino theorem: the package variants, games,
 types, invariants and one proof skeleton per equivalence. Translation proves nothing and talks to

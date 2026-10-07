@@ -187,6 +187,8 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 55 | Each answer says where EasyCrypt spent its time | `55-answers-say-where-easycrypt-spent-its-time.md` | 54 |
 | 56 | Each transcript record says why its sentence was sent, and the transcript accounts for all the time | `56-transcript-says-why-and-where-time-went.md` | 27, 52 |
 | 57 | The tactics report shows time by role | `57-report-shows-time-by-role.md` | 55, 56 |
+| 58 | Translate package and game invariants (ADR 0010) | `58-translate-package-and-game-invariants.md` | 06, 23, 42, 47, 53 |
+| 59 | `StateRelation_` and `Helper_` operators replace `Domino_` | `59-state-relation-and-helper-operators.md` | 58, symbolic-execution 21 |
 
 Stories 48–52 come from the owner's review of the debug and progress pages. They are UI-only:
 translation does not change, and the export tree is byte-identical before and after each one. 48

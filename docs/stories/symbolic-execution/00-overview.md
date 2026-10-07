@@ -121,6 +121,9 @@ left path #3:
 | 17 | Concise report on stdout, path tree in `summary.txt` | `17-stdout-summary-swap.md` | 06, 09, 12 |
 | 18 | Symbolic return value and new state of each returning path | `18-symbolic-effect-of-a-path.md` | 02, 05, 06, 07, 13 |
 | 20 | The sequential report uses the debug viewer's grid | `20-sequential-report-in-the-grid.md` | 07, 16, EasyCrypt 48 |
+| 21 | Each check has its own verdict, and a failing invariant is broken down | `21-checks-and-the-state-relation-breakdown.md` | 19, 20, EasyCrypt 58 |
+| 22 | Debug indexes at each level, and `--out` for every run (ADR 0011) | `22-debug-indexes-and-out.md` | 19, 21 |
+| 23 | The core claim set: debug without project lemmas | `23-core-claim-set.md` | 19, 21 |
 
 Stories 01, 02 and 04 are independent and may be done in any order (or in parallel). Stories 08
 and 09 are independent of each other; whichever lands second wires a one-way hook (see `09` §3.6).
