@@ -59,7 +59,8 @@ use std::time::{Duration, Instant};
 use serde_derive::{Deserialize, Serialize};
 
 use crate::debug::claims::{
-    aggregate, check_claim, check_claims, obligations, ClaimGoalView, ClaimQuery, PairAborts,
+    aggregate, check_claim, check_claims, ClaimGoalView, ClaimQuery, ClaimSet, PairAborts,
+    ResolvedClaims,
 };
 use crate::debug::effect::PathEffect;
 use crate::debug::exec::{
@@ -69,7 +70,7 @@ use crate::debug::exec::{
 use crate::debug::ir::{
     count_terminals, inline_oracle, InlineError, InlinedOracle, Label, Listing, SiteInfo, SiteKind,
 };
-use crate::debug::layout::{self, Layout, ALL_CLAIMS_DIR, DOMINO_DEBUG_DIR};
+use crate::debug::layout::{self, Layout, DOMINO_DEBUG_DIR};
 use crate::debug::index;
 use crate::debug::sweep::{SweepEntry, Target};
 use crate::debug::progress::{DebugEvent, DebugObserver, SharedObserver};
@@ -147,10 +148,12 @@ pub enum DebugError {
     #[error("oracle `{oracle}` is not exported by game instance `{game_inst}`")]
     OracleNotExported { oracle: String, game_inst: String },
 
-    #[error("no claim named `{claim}` for this oracle (available: {})", available.join(", "))]
+    #[error("{}", claim_not_found(claim, available, *core))]
     ClaimNotFound {
         claim: String,
         available: Vec<String>,
+        /// The claim was looked for in the core claim set.
+        core: bool,
     },
 
     #[diagnostic(transparent)]
@@ -231,6 +234,9 @@ pub struct DebugRun {
     pub oracle: String,
     /// The claim asked about, or `!all-claims!` for an all-claim run.
     pub claim: String,
+    /// The claims come from the core claim set (story 23), not the obligation set.
+    #[serde(default)]
+    pub core: bool,
     /// No `--claim`: the whole obligation set of the oracle was checked on one exploration.
     pub all_claims: bool,
     /// The claims of the run, in the order they are checked. One entry for a single-claim
@@ -636,24 +642,33 @@ impl DebugRun {
 // Entry point
 // ---------------------------------------------------------------------------
 
+fn claim_not_found(claim: &str, available: &[String], core: bool) -> String {
+    let available = available.join(", ");
+    if core {
+        format!("claim `{claim}` is not in the core claim set (core claims: {available})")
+    } else {
+        format!("no claim named `{claim}` for this oracle (available: {available})")
+    }
+}
+
 /// The strategy name of [`run_debug_command`], in [`DebugRun::strategy`] and in every artifact
 /// name.
 pub const SEQUENTIAL: &str = "sequential";
 
-/// Run `domino debug` for one oracle and return the (serialisable) run: `claim_name` narrows it
-/// to one claim, whose dependencies stay in the base frame; without it the whole obligation set
-/// is checked on one exploration — an **all-claim run** (story 19).
+/// Run `domino debug` for one oracle and return the (serialisable) run. `claim_set`
+/// ([`ClaimSet::Obligations`] or [`ClaimSet::Core`]) names the claims; narrowed to one claim, its
+/// dependencies stay in the base frame; otherwise the whole set is checked on one exploration —
+/// an **all-claim run** (story 19).
 ///
 /// Writes the sequential artifacts and the result record under `out` (defaulting to
-/// [`layout::run_dir`] under `_build/debug`, `!all-claims!` in place of `<claim>` for an
-/// all-claim run).
+/// [`layout::run_dir`] under `_build/debug`, in the directory [`ClaimSet::dir`] names).
 #[allow(clippy::too_many_arguments)]
 pub fn run_debug_command<P, B>(
     project: &P,
     req_proof: &str,
     req_proofstep: usize,
     oracle: &str,
-    claim_name: Option<&str>,
+    claim_set: ClaimSet,
     opts: &DebugOptions,
     backend: &B,
     out: Option<PathBuf>,
@@ -732,23 +747,14 @@ where
         });
     }
 
-    // Resolve the claims: the oracle's whole obligation set (the user-written proof tree plus
-    // the generated package/game invariant claims — the same set `prove` checks), narrowed to
-    // one claim when asked.
-    let all_obligations = obligations(&eqctx, eq, oracle);
-    let claims: Vec<Claim> = match claim_name {
-        Some(name) => vec![all_obligations
-            .iter()
-            .find(|claim| claim.name() == name)
-            .cloned()
-            .ok_or_else(|| DebugError::ClaimNotFound {
-                claim: name.to_string(),
-                available: all_obligations.iter().map(|c| c.name().to_string()).collect(),
-            })?],
-        None => all_obligations,
-    };
-    let all_claims = claim_name.is_none();
-    let claim_label = claim_name.unwrap_or(ALL_CLAIMS_DIR);
+    let ResolvedClaims {
+        claims,
+        infos: claim_infos,
+        all: all_claims,
+        label: claim_label,
+        ..
+    } = claim_set.resolve(&eqctx, eq, oracle)?;
+    let claim_label = claim_label.as_str();
     let admitted = claims.iter().all(Claim::is_admitted);
 
     observer.on_event(&DebugEvent::Started {
@@ -809,15 +815,9 @@ where
         right_game: eq.right_name().to_string(),
         oracle: oracle.to_string(),
         claim: claim_label.to_string(),
+        core: claim_set.is_core(),
         all_claims,
-        claims: claims
-            .iter()
-            .map(|c| ClaimInfo {
-                name: c.name().to_string(),
-                dependencies: c.dependencies().to_vec(),
-                admitted: c.is_admitted(),
-            })
-            .collect(),
+        claims: claim_infos,
         admitted,
         out_dir: out_dir.display().to_string(),
         elapsed: Duration::ZERO,
@@ -2200,7 +2200,7 @@ mod tests {
             let out = tempfile::tempdir().unwrap().keep();
             let backend = Cvc5LibBackend::new(true, opts.timeout_ms);
             run_debug_command(
-                proj, theorem, 0, oracle, Some(claim), &opts, &backend, Some(out), observer, stop,
+                proj, theorem, 0, oracle, ClaimSet::of(false, Some(claim)), &opts, &backend, Some(out), observer, stop,
             )
             .unwrap()
         })
@@ -3148,7 +3148,7 @@ mod story19_tests {
                 theorem,
                 step,
                 oracle,
-                claim,
+                ClaimSet::of(false, claim),
                 &opts,
                 &Cvc5LibBackend::new(true, opts.timeout_ms),
                 Some(out),
@@ -3343,12 +3343,12 @@ mod story19_tests {
         with_project(DEPS, |proj| {
             let out = tempfile::tempdir().unwrap().keep();
             let seq = run_debug_command(
-                proj, "T", 0, "Branch", None, &DebugOptions::default(),
+                proj, "T", 0, "Branch", ClaimSet::of(false, None), &DebugOptions::default(),
                 &Cvc5LibBackend::new(true, None), Some(out.clone()), &mut NopObserver, None,
             )
             .unwrap();
             let lock = run_lockstep_domino(
-                proj, "T", 0, "Branch", None, &LockstepDebugOptions::default(),
+                proj, "T", 0, "Branch", ClaimSet::of(false, None), &LockstepDebugOptions::default(),
                 &Cvc5LibBackend::new(true, None), Some(out.clone()), &mut NopObserver, None,
             )
             .unwrap();
@@ -3381,7 +3381,7 @@ mod story19_tests {
             // running the sequential one again leaves the lockstep files as they were
             let before = std::fs::read(out.join("lockstep_trace.json")).unwrap();
             run_debug_command(
-                proj, "T", 0, "Branch", None, &DebugOptions::default(),
+                proj, "T", 0, "Branch", ClaimSet::of(false, None), &DebugOptions::default(),
                 &Cvc5LibBackend::new(true, None), Some(out.clone()), &mut NopObserver, None,
             )
             .unwrap();
@@ -3457,7 +3457,7 @@ mod story19_tests {
                     let opts = DebugOptions::default();
                     let backend = Cvc5LibBackend::new(true, None);
                     let run = run_debug_command(
-                        proj, &target.theorem, target.proofstep, &target.oracle, None, &opts,
+                        proj, &target.theorem, target.proofstep, &target.oracle, ClaimSet::of(false, None), &opts,
                         &backend, Some(out), &mut NopObserver, None,
                     )
                     .unwrap();
@@ -3517,7 +3517,7 @@ pub(crate) mod story21_tests {
             "T",
             0,
             "Bump",
-            claim,
+            ClaimSet::of(false, claim),
             &opts,
             &Cvc5LibBackend::new(true, opts.timeout_ms),
             Some(out.clone()),

@@ -31,6 +31,18 @@ pub(crate) enum SmtOutArg {
     Deltas,
 }
 
+/// Which claims `domino debug` checks (story 23).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum ClaimSetArg {
+    /// Every claim of the proofstep, each under its declared dependencies, as `domino prove`
+    /// does (the default).
+    Obligations,
+    /// Only `equal-aborts`, `same-output`, `invariant` and the package and game invariants,
+    /// each under its built-in dependencies only. Project lemmas are neither checked nor
+    /// assumed, as in EasyCrypt.
+    Core,
+}
+
 /// What `domino easycrypt prove` keeps of EasyCrypt's answers in
 /// `progress/ec-transcript.jsonl` (story 31).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -295,6 +307,13 @@ pub(crate) struct Debug {
     /// dependencies stay in the base frame and prune, as before.
     #[clap(long)]
     pub(crate) claim: Option<String>,
+    /// Which claims to check. `obligations` (the default): every claim of the proofstep, each
+    /// under its declared dependencies, as `domino prove` does. `core`: only `equal-aborts`,
+    /// `same-output`, `invariant` and the package and game invariants, each under its built-in
+    /// dependencies only (`no-abort`, `equal-aborts`, …). Project lemmas are neither checked
+    /// nor assumed, as in EasyCrypt.
+    #[clap(long, value_enum, default_value_t = ClaimSetArg::Obligations)]
+    pub(crate) claim_set: ClaimSetArg,
     /// Advance both oracles together and resolve each decision jointly, as an
     /// EasyCrypt proof would, instead of exploring the left oracle and then the
     /// right one under each of its paths. Domino code either way — for the
@@ -342,7 +361,7 @@ pub(crate) struct Debug {
     pub(crate) transcript: bool,
     /// Root of the debug output. Defaults to `_build/debug`. Each run writes to
     /// `<root>/<theorem>/<left>-<right>/<oracle>/<claim>/` (`!all-claims!` for an all-claim
-    /// run). Indexes are written at the level the run selects.
+    /// run; `!core-claims!` and `<claim>!core!` with `--claim-set core`). Indexes are written at the level the run selects.
     #[clap(long)]
     pub(crate) out: Option<std::path::PathBuf>,
 }

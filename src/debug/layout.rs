@@ -25,6 +25,21 @@ use crate::debug::sweep::Target;
 /// The directory a Domino all-claim run writes to, in place of `<claim>`.
 pub const ALL_CLAIMS_DIR: &str = "!all-claims!";
 
+/// The directory a Domino all-claim run of the core claim set writes to.
+pub const CORE_CLAIMS_DIR: &str = "!core-claims!";
+
+/// The directory below the oracle of a Domino-listing run: `<claim>` or [`ALL_CLAIMS_DIR`] for
+/// the obligation set; `<claim>!core!` or [`CORE_CLAIMS_DIR`] for the core claim set, so that a
+/// core run never replaces an obligations run of the same oracle.
+pub fn claim_dir(claim: Option<&str>, core: bool) -> String {
+    match (claim, core) {
+        (None, false) => ALL_CLAIMS_DIR.to_string(),
+        (None, true) => CORE_CLAIMS_DIR.to_string(),
+        (Some(claim), false) => claim.to_string(),
+        (Some(claim), true) => format!("{claim}!core!"),
+    }
+}
+
 /// The `_build` subdirectory debug runs go under.
 pub const DOMINO_DEBUG_DIR: &str = "_build/debug";
 

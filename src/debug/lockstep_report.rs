@@ -345,7 +345,8 @@ fn listing_name(meta: &LockstepMeta) -> &'static str {
     }
 }
 
-/// `equal-output, invariant`, or `all 5 claims of the oracle`.
+/// `equal-output, invariant`, `all 5 claims of the oracle`, or `all 5 claims of the core claim
+/// set`.
 fn claim_names(meta: &LockstepMeta) -> String {
     let checked: Vec<&str> = meta
         .claims
@@ -355,14 +356,7 @@ fn claim_names(meta: &LockstepMeta) -> String {
         .collect();
     let admitted = meta.claims.len() - checked.len();
     if meta.all_claims && meta.listing == "domino" {
-        if admitted == 0 {
-            format!("all {} claims of the oracle", checked.len())
-        } else {
-            format!(
-                "all {} claims of the oracle ({admitted} admitted, not checked)",
-                checked.len()
-            )
-        }
+        crate::debug::report::all_claims_line(checked.len(), admitted, meta.core)
     } else {
         checked.join(", ")
     }

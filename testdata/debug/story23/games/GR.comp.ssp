@@ -1,0 +1,10 @@
+composition GR {
+    instance p = B {
+    }
+
+    compose {
+        adversary: {
+            O: p,
+        },
+    }
+}

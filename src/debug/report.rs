@@ -326,18 +326,27 @@ fn failing_pairs(run: &DebugRun) -> (Vec<PairRow>, Vec<PairRow>) {
     (goal_fails, inconclusive)
 }
 
-/// `same-output`, or `all 5 claims of the oracle`.
+/// `same-output`, `all 5 claims of the oracle`, or `all 5 claims of the core claim set`.
 fn claim_line(run: &DebugRun) -> String {
     if run.all_claims {
         let checked = run.claims.iter().filter(|c| !c.admitted).count();
-        let admitted = run.claims.len() - checked;
-        if admitted == 0 {
-            format!("all {checked} claims of the oracle")
-        } else {
-            format!("all {checked} claims of the oracle ({admitted} admitted, not checked)")
-        }
+        all_claims_line(checked, run.claims.len() - checked, run.core)
+    } else if run.core {
+        let name = run.claims.first().map_or(run.claim.as_str(), |c| c.name.as_str());
+        format!("{name} (core claim set)")
     } else {
         run.claim.clone()
+    }
+}
+
+/// `all <checked> claims of the oracle` (or `of the core claim set`), with the admitted count
+/// when there is one. Both strategies' summaries say this.
+pub(crate) fn all_claims_line(checked: usize, admitted: usize, core: bool) -> String {
+    let set = if core { "the core claim set" } else { "the oracle" };
+    if admitted == 0 {
+        format!("all {checked} claims of {set}")
+    } else {
+        format!("all {checked} claims of {set} ({admitted} admitted, not checked)")
     }
 }
 
@@ -1888,6 +1897,7 @@ mod tests {
             schema: TRACE_SCHEMA,
             strategy: "sequential",
             all_claims: false,
+            core: false,
             claims: vec![],
             claim_summaries: vec![],
             queries: Default::default(),

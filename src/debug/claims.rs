@@ -18,9 +18,9 @@ use std::path::Path;
 use serde_derive::Serialize;
 
 use crate::debug::driver::{
-    write_model, ClaimVerdict, DebugError, PartVerdict, Unreachability, Verdict,
+    write_model, ClaimInfo, ClaimVerdict, DebugError, PartVerdict, Unreachability, Verdict,
 };
-use crate::debug::layout::Layout;
+use crate::debug::layout::{self, Layout};
 use crate::gamehops::equivalence::Equivalence;
 use crate::theorem::{Claim, ClaimType};
 use crate::util::smtsolver::{SmtSolver, SmtSolverResponse};
@@ -171,6 +171,159 @@ pub(crate) fn obligations(
     );
     ranked.sort_by_key(|(rank, _)| *rank);
     ranked.into_iter().map(|(_, claim)| claim).collect()
+}
+
+/// Which claims a run checks on every terminal pair. The only place that knows which claims a
+/// set holds and which dependencies each keeps; both strategies resolve their claims here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaimSet {
+    /// The EasyCrypt claim set: `equal-output` (the conjunction of the `equal-aborts` and
+    /// `same-output` goals) and `invariant`, none with a dependency. EasyCrypt has neither
+    /// `no-abort` nor project lemmas, and `prove` is built on exactly this set. Lockstep only.
+    NoDependencies,
+    /// The oracle's obligation set, each claim with its own declared dependencies, narrowed to
+    /// one claim by name.
+    Obligations { only: Option<String> },
+    /// The core claim set: `equal-aborts`, `same-output`, `invariant`, and the generated package
+    /// and game invariant claims, each under its built-in dependencies only. Project lemmas and
+    /// other declared claims are neither checked nor assumed. Narrowed to one claim by name.
+    Core { only: Option<String> },
+}
+
+/// The claims of a run: what the engine checks, and what the reports say about them.
+pub(crate) struct ResolvedClaims {
+    /// The declared claims the set holds, with the dependencies they keep. Empty for
+    /// [`ClaimSet::NoDependencies`], whose checks are not declared claims.
+    pub claims: Vec<Claim>,
+    pub queries: Vec<ClaimQuery>,
+    pub infos: Vec<ClaimInfo>,
+    /// No claim was named: the whole set is checked.
+    pub all: bool,
+    /// The directory below the oracle, and the claim the progress line names.
+    pub label: String,
+}
+
+impl ClaimSet {
+    /// The claim set of the `--claim-set` choice, narrowed to `only`.
+    pub fn of(core: bool, only: Option<&str>) -> Self {
+        let only = only.map(str::to_string);
+        if core {
+            ClaimSet::Core { only }
+        } else {
+            ClaimSet::Obligations { only }
+        }
+    }
+
+    /// The claim this set is narrowed to, if any.
+    pub fn only(&self) -> Option<&str> {
+        match self {
+            ClaimSet::NoDependencies => None,
+            ClaimSet::Obligations { only } | ClaimSet::Core { only } => only.as_deref(),
+        }
+    }
+
+    /// `true` for the core claim set.
+    pub fn is_core(&self) -> bool {
+        matches!(self, ClaimSet::Core { .. })
+    }
+
+    /// The directory below the oracle that a Domino-listing run of this set writes to.
+    pub fn dir(&self) -> String {
+        layout::claim_dir(self.only(), self.is_core())
+    }
+
+    pub(crate) fn resolve(
+        &self,
+        eqctx: &EquivalenceContext<'_>,
+        eq: &Equivalence,
+        oracle: &str,
+    ) -> Result<ResolvedClaims, DebugError> {
+        let declared = match self {
+            ClaimSet::NoDependencies => {
+                let queries = crate::debug::lockstep_run::easycrypt_queries(eqctx, oracle);
+                return Ok(ResolvedClaims {
+                    claims: Vec::new(),
+                    infos: queries
+                        .iter()
+                        .map(|q| ClaimInfo {
+                            name: q.name.clone(),
+                            dependencies: Vec::new(),
+                            admitted: false,
+                        })
+                        .collect(),
+                    queries,
+                    all: true,
+                    label: "equal-output, invariant".to_string(),
+                });
+            }
+            ClaimSet::Obligations { .. } => obligations(eqctx, eq, oracle),
+            ClaimSet::Core { .. } => {
+                let generated: Vec<String> = eqctx
+                    .generate_game_or_package_invariant_claims()
+                    .iter()
+                    .map(|c| c.name().to_string())
+                    .collect();
+                core_claims(obligations(eqctx, eq, oracle), &generated)
+            }
+        };
+        let claims = narrow(declared, self.only(), self.is_core())?;
+        Ok(ResolvedClaims {
+            infos: claims
+                .iter()
+                .map(|c| ClaimInfo {
+                    name: c.name().to_string(),
+                    dependencies: c.dependencies().to_vec(),
+                    admitted: c.is_admitted(),
+                })
+                .collect(),
+            queries: claims
+                .iter()
+                .filter(|c| !c.is_admitted())
+                .map(|c| ClaimQuery::of(eqctx, c, oracle))
+                .collect(),
+            claims,
+            all: self.only().is_none(),
+            label: self.dir(),
+        })
+    }
+}
+
+/// The core claim set of `obligations`: `equal-aborts`, `same-output`, `invariant` and the
+/// claims named in `generated`, each keeping only the dependencies [`false_by_terminals`] knows.
+pub(crate) fn core_claims(obligations: Vec<Claim>, generated: &[String]) -> Vec<Claim> {
+    const CORE: [&str; 3] = ["equal-aborts", "same-output", "invariant"];
+    obligations
+        .into_iter()
+        .filter(|c| CORE.contains(&c.name()) || generated.iter().any(|g| g == c.name()))
+        .map(|mut c| {
+            c.dependencies.retain(|d| is_built_in_dependency(d));
+            c
+        })
+        .collect()
+}
+
+/// `claims` narrowed to the one called `only`, if given.
+fn narrow(claims: Vec<Claim>, only: Option<&str>, core: bool) -> Result<Vec<Claim>, DebugError> {
+    let Some(name) = only else {
+        return Ok(claims);
+    };
+    match claims.iter().find(|c| c.name() == name) {
+        Some(claim) => Ok(vec![claim.clone()]),
+        None => Err(DebugError::ClaimNotFound {
+            claim: name.to_string(),
+            available: claims.iter().map(|c| c.name().to_string()).collect(),
+            core,
+        }),
+    }
+}
+
+/// A built-in dependency: one that [`false_by_terminals`] reads off the terminals.
+fn is_built_in_dependency(name: &str) -> bool {
+    let aborts = PairAborts {
+        left: false,
+        right: false,
+    };
+    false_by_terminals(name, aborts).is_some()
 }
 
 /// Which side(s) of a terminal pair abort. The driver knows this syntactically.
@@ -409,6 +562,66 @@ mod tests {
 
     fn aborts(left: bool, right: bool) -> PairAborts {
         PairAborts { left, right }
+    }
+
+    fn declared(name: &str, deps: &[&str]) -> Claim {
+        Claim {
+            name: name.to_string(),
+            ty: ClaimType::guess_from_name(name),
+            dependencies: deps.iter().map(|d| d.to_string()).collect(),
+            admitted: false,
+        }
+    }
+
+    fn names_and_dependencies(claims: &[Claim]) -> Vec<(String, Vec<String>)> {
+        claims
+            .iter()
+            .map(|c| (c.name().to_string(), c.dependencies().to_vec()))
+            .collect()
+    }
+
+    #[test]
+    fn the_core_set_keeps_the_core_claims_with_their_built_in_dependencies_only() {
+        let obligations = vec![
+            declared("equal-aborts", &[]),
+            declared("same-output", &["no-abort", "my-lemma"]),
+            declared("invariant", &["my-lemma", "no-abort"]),
+            declared("my-lemma", &[]),
+            declared("relation-r", &["left-no-abort"]),
+            declared("pkg-inv", &["no-abort"]),
+        ];
+        let core = core_claims(obligations, &["pkg-inv".to_string()]);
+        let s = |v: &str| v.to_string();
+        assert_eq!(
+            names_and_dependencies(&core),
+            vec![
+                (s("equal-aborts"), vec![]),
+                (s("same-output"), vec![s("no-abort")]),
+                (s("invariant"), vec![s("no-abort")]),
+                (s("pkg-inv"), vec![s("no-abort")]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_outside_the_core_set_is_not_found_in_it() {
+        let core = vec![declared("equal-aborts", &[]), declared("invariant", &[])];
+        let err = narrow(core.clone(), Some("my-lemma"), true).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "claim `my-lemma` is not in the core claim set (core claims: equal-aborts, invariant)"
+        );
+        let err = narrow(core.clone(), Some("my-lemma"), false).unwrap_err();
+        assert!(err.to_string().starts_with("no claim named `my-lemma` for this oracle"));
+        assert_eq!(narrow(core, Some("invariant"), true).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_set_names_its_directory() {
+        assert_eq!(ClaimSet::of(false, None).dir(), "!all-claims!");
+        assert_eq!(ClaimSet::of(true, None).dir(), "!core-claims!");
+        assert_eq!(ClaimSet::of(false, Some("invariant")).dir(), "invariant");
+        assert_eq!(ClaimSet::of(true, Some("invariant")).dir(), "invariant!core!");
     }
 
     #[test]

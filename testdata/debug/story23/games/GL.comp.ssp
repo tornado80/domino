@@ -1,0 +1,12 @@
+composition GL {
+    invariant: [ ./games/GL.smt2 ]
+
+    instance p = A {
+    }
+
+    compose {
+        adversary: {
+            O: p,
+        },
+    }
+}

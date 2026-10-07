@@ -1,0 +1,22 @@
+theorem Eq {
+    instance gl = GL {
+    }
+
+    instance gr = GR {
+    }
+
+    gamehops {
+        equivalence gl gr {
+            invariant: [./theorem/invariant.smt2, ./theorem/lemmas.smt2]
+            O: {
+                randomness: simple
+                lemmas {
+                    equal-aborts: []
+                    my-lemma:     []
+                    invariant:    [no-abort, my-lemma]
+                    same-output:  [no-abort, my-lemma]
+                }
+            }
+        }
+    }
+}

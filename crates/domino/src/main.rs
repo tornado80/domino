@@ -265,7 +265,8 @@ fn stage_line(mode: ProgressMode, line: &str) {
 fn debug(d: &Debug) -> Result<(), Error> {
     use sspverif::debug::driver::{run_debug_command, DebugError, DebugOptions};
     use sspverif::debug::index::{self, Level};
-    use sspverif::debug::layout::{self, ALL_CLAIMS_DIR, DOMINO_DEBUG_DIR};
+    use sspverif::debug::claims::ClaimSet;
+    use sspverif::debug::layout::{self, DOMINO_DEBUG_DIR};
     use sspverif::debug::lockstep_report::render_summary as render_lockstep_summary;
     use sspverif::debug::lockstep_run::{run_lockstep_domino, LockstepDebugOptions};
     use sspverif::debug::smtout::SmtOut;
@@ -302,7 +303,8 @@ fn debug(d: &Debug) -> Result<(), Error> {
         .out
         .clone()
         .unwrap_or_else(|| project_root.join(DOMINO_DEBUG_DIR));
-    let claim_label = d.claim.as_deref().unwrap_or(ALL_CLAIMS_DIR);
+    let claim_set = ClaimSet::of(d.claim_set == ClaimSetArg::Core, d.claim.as_deref());
+    let claim_label = claim_set.dir();
     // One oracle: today's concise report on stdout. Several: one line per oracle as it
     // finishes, then the failures of the whole project.
     let single = plan.targets.len() == 1;
@@ -355,10 +357,10 @@ fn debug(d: &Debug) -> Result<(), Error> {
                 &target.theorem,
                 target.proofstep,
                 &target.oracle,
-                d.claim.as_deref(),
+                claim_set.clone(),
                 &lockstep_opts,
                 &backend,
-                Some(layout::run_dir(&root, target, claim_label)),
+                Some(layout::run_dir(&root, target, &claim_label)),
                 observer.as_mut(),
                 Some(&stop),
             ) {
@@ -380,10 +382,10 @@ fn debug(d: &Debug) -> Result<(), Error> {
                 &target.theorem,
                 target.proofstep,
                 &target.oracle,
-                d.claim.as_deref(),
+                claim_set.clone(),
                 &opts,
                 &backend,
-                Some(layout::run_dir(&root, target, claim_label)),
+                Some(layout::run_dir(&root, target, &claim_label)),
                 observer.as_mut(),
                 Some(&stop),
             ) {

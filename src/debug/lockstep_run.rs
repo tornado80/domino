@@ -41,14 +41,15 @@ use std::time::{Duration, Instant};
 
 use serde_derive::{Deserialize, Serialize};
 
+pub use crate::debug::claims::ClaimSet;
 use crate::debug::claims::{
-    no_dependency_claim, obligations, state_relation_parts, ClaimGoalView, ClaimQuery,
+    no_dependency_claim, state_relation_parts, ClaimGoalView, ClaimQuery, ResolvedClaims,
 };
 use crate::debug::driver::{
     equivalence_of, part_blocks, shared_base_frame, sites_view, ClaimInfo, DebugError, GoalBlock, SiteView,
     StopReason, Unreachability, Verdict,
 };
-use crate::debug::layout::{self, Layout, ALL_CLAIMS_DIR, DOMINO_DEBUG_DIR};
+use crate::debug::layout::{self, Layout, DOMINO_DEBUG_DIR};
 use crate::debug::index;
 use crate::debug::sweep::{SweepEntry, Target};
 use crate::debug::exec::TerminalPath;
@@ -184,6 +185,9 @@ pub struct LockstepMeta {
     pub oracle: String,
     /// `!all-claims!` when the run checks the oracle's whole obligation set.
     pub claim: String,
+    /// The claims come from the core claim set (story 23), not the obligation set.
+    #[serde(default)]
+    pub core: bool,
     pub all_claims: bool,
     /// The claims of the run, in the order they are checked. An admitted claim is listed and
     /// never checked.
@@ -392,99 +396,20 @@ pub(crate) fn rank(v: &Verdict) -> usize {
 // Terms
 // ---------------------------------------------------------------------------
 
-/// Which claims a lockstep run checks on every joint path.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ClaimSet {
-    /// The EasyCrypt claim set: `equal-output` (the conjunction of the `equal-aborts` and
-    /// `same-output` goals) and `invariant`, none with a dependency. EasyCrypt has neither
-    /// `no-abort` nor project lemmas, and `prove` is built on exactly this set.
-    NoDependencies,
-    /// The oracle's obligation set, each claim with its own declared dependencies, narrowed to
-    /// one claim by name.
-    Obligations { only: Option<String> },
-}
-
-/// The claims of the run: what the engine checks, and what the reports say about them.
-struct ResolvedClaims {
-    queries: Vec<ClaimQuery>,
-    infos: Vec<ClaimInfo>,
-    all: bool,
-}
-
-impl ClaimSet {
-    fn resolve(
-        &self,
-        eqctx: &EquivalenceContext<'_>,
-        eq: &crate::gamehops::equivalence::Equivalence,
-        oracle: &str,
-    ) -> Result<ResolvedClaims, DebugError> {
-        match self {
-            ClaimSet::NoDependencies => {
-                let goal_of = |name: &str| {
-                    eqctx
-                        .claim_assumptions_and_goal(
-                            &no_dependency_claim(name, ClaimType::Lemma),
-                            oracle,
-                        )
-                        .1
-                };
-                let equal_output: SmtExpr =
-                    SmtAnd(vec![goal_of("equal-aborts"), goal_of("same-output")]).into();
-                let queries = vec![
-                    ClaimQuery::without_dependencies(
-                        EQUAL_OUTPUT,
-                        SmtAssert(SmtNot(equal_output)).into(),
-                    ),
-                    easycrypt_invariant_query(eqctx, oracle),
-                ];
-                Ok(ResolvedClaims {
-                    infos: queries
-                        .iter()
-                        .map(|q| ClaimInfo {
-                            name: q.name.clone(),
-                            dependencies: Vec::new(),
-                            admitted: false,
-                        })
-                        .collect(),
-                    queries,
-                    all: true,
-                })
-            }
-            ClaimSet::Obligations { only } => {
-                let all_obligations = obligations(eqctx, eq, oracle);
-                let claims: Vec<Claim> = match only {
-                    Some(name) => vec![all_obligations
-                        .iter()
-                        .find(|claim| claim.name() == name)
-                        .cloned()
-                        .ok_or_else(|| DebugError::ClaimNotFound {
-                            claim: name.clone(),
-                            available: all_obligations
-                                .iter()
-                                .map(|c| c.name().to_string())
-                                .collect(),
-                        })?],
-                    None => all_obligations,
-                };
-                Ok(ResolvedClaims {
-                    infos: claims
-                        .iter()
-                        .map(|c| ClaimInfo {
-                            name: c.name().to_string(),
-                            dependencies: c.dependencies().to_vec(),
-                            admitted: c.is_admitted(),
-                        })
-                        .collect(),
-                    queries: claims
-                        .iter()
-                        .filter(|c| !c.is_admitted())
-                        .map(|c| ClaimQuery::of(eqctx, c, oracle))
-                        .collect(),
-                    all: only.is_none(),
-                })
-            }
-        }
-    }
+/// The checks of lockstep execution on the EasyCrypt listing ([`ClaimSet::NoDependencies`]):
+/// `equal-output`, the conjunction of the `equal-aborts` and `same-output` goals, and
+/// `invariant`, both with no dependency.
+pub(crate) fn easycrypt_queries(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<ClaimQuery> {
+    let goal_of = |name: &str| {
+        eqctx
+            .claim_assumptions_and_goal(&no_dependency_claim(name, ClaimType::Lemma), oracle)
+            .1
+    };
+    let equal_output: SmtExpr = SmtAnd(vec![goal_of("equal-aborts"), goal_of("same-output")]).into();
+    vec![
+        ClaimQuery::without_dependencies(EQUAL_OUTPUT, SmtAssert(SmtNot(equal_output)).into()),
+        easycrypt_invariant_query(eqctx, oracle),
+    ]
 }
 
 /// The engine's solver vocabulary for `oracle`, from the equivalence context.
@@ -514,7 +439,7 @@ fn lockstep_terms(
 /// verified `invariant` means every part is verified. Its parts are the conjuncts of `inv` as
 /// [`invariant_ops`] names them: each state relation but `invariant`, then the one-sided
 /// invariant operators.
-fn easycrypt_invariant_query(eqctx: &EquivalenceContext<'_>, oracle: &str) -> ClaimQuery {
+pub(crate) fn easycrypt_invariant_query(eqctx: &EquivalenceContext<'_>, oracle: &str) -> ClaimQuery {
     let goal = |claim: &Claim| eqctx.claim_assumptions_and_goal(claim, oracle).1;
     let side_claims = eqctx.generate_game_or_package_invariant_claims();
     let side_goal = |claim: &Claim| goal(&no_dependency_claim(claim.name(), claim.ty));
@@ -717,16 +642,16 @@ where
 }
 
 /// Run lockstep execution on the **Domino** listing — `domino debug --lockstep`. The claims are
-/// the oracle's obligation set, each with its own declared dependencies, narrowed to `claim`
-/// when given. Writes the lockstep artifacts and the result record under `out` (default
-/// [`layout::run_dir`] under `_build/debug`, `!all-claims!` in place of `<claim>` without one).
+/// those of `claim_set` ([`ClaimSet::Obligations`] or [`ClaimSet::Core`]). Writes the lockstep
+/// artifacts and the result record under `out` (default [`layout::run_dir`] under
+/// `_build/debug`, in the directory [`ClaimSet::dir`] names).
 #[allow(clippy::too_many_arguments)]
 pub fn run_lockstep_domino<P, B>(
     project: &P,
     req_proof: &str,
     req_proofstep: usize,
     oracle: &str,
-    claim: Option<&str>,
+    claim_set: ClaimSet,
     opts: &LockstepDebugOptions,
     backend: &B,
     out: Option<PathBuf>,
@@ -739,9 +664,7 @@ where
 {
     run_lockstep_on(
         ListingKind::Domino,
-        ClaimSet::Obligations {
-            only: claim.map(str::to_string),
-        },
+        claim_set,
         project,
         req_proof,
         req_proofstep,
@@ -847,12 +770,9 @@ where
         queries: claim_queries,
         infos: claim_infos,
         all: all_claims,
+        label: claim_label,
+        ..
     } = claim_set.resolve(&eqctx, eq, oracle)?;
-    let claim_label = match (&claim_set, all_claims) {
-        (ClaimSet::NoDependencies, _) => "equal-output, invariant".to_string(),
-        (ClaimSet::Obligations { .. }, true) => ALL_CLAIMS_DIR.to_string(),
-        (ClaimSet::Obligations { only }, false) => only.clone().unwrap_or_default(),
-    };
     let goal_blocks: Vec<GoalBlock> = claim_queries
         .iter()
         .map(|claim| GoalBlock {
@@ -923,6 +843,7 @@ where
         right_game: eq.right_name().to_string(),
         oracle: oracle.to_string(),
         claim: claim_label.clone(),
+        core: claim_set.is_core(),
         all_claims,
         claims: claim_infos,
         out_dir: out_dir.display().to_string(),
@@ -1983,7 +1904,7 @@ mod tests {
             theorem,
             0,
             oracle,
-            Some(claim),
+            ClaimSet::of(false, Some(claim)),
             &crate::debug::driver::DebugOptions::default(),
             &Cvc5LibBackend::new(true, None),
             Some(tempfile::tempdir().unwrap().keep()),
@@ -2263,7 +2184,7 @@ mod tests {
             "T",
             0,
             oracle,
-            claim,
+            ClaimSet::of(false, claim),
             &LockstepDebugOptions::default(),
             &Cvc5LibBackend::new(true, None),
             Some(out.to_path_buf()),
@@ -2336,7 +2257,7 @@ mod tests {
                 "T",
                 0,
                 oracle,
-                None,
+                ClaimSet::of(false, None),
                 &crate::debug::driver::DebugOptions::default(),
                 &Cvc5LibBackend::new(true, None),
                 Some(tempfile::tempdir().unwrap().keep()),
@@ -2417,6 +2338,142 @@ mod tests {
             Some(none.path().to_path_buf()),
         );
         assert!(!none.path().join("lockstep/smt").exists());
+    }
+
+    // -- Story 23: the core claim set --------------------------------------------------------
+
+    const MY_LEMMA: &str = "relation-my-lemma";
+
+    fn story23_project() -> DirectoryProject<'static> {
+        // the files are leaked: the project borrows them for the length of the test binary
+        let dir = PathBuf::from("testdata/debug/story23");
+        let files: &'static DirectoryFiles =
+            Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
+        DirectoryProject::load(dir, files).unwrap()
+    }
+
+    fn story23_lockstep(listing: ListingKind, claim_set: ClaimSet, out: &Path) -> LockstepRun {
+        run_lockstep_on(
+            listing,
+            claim_set,
+            &story23_project(),
+            "Eq",
+            0,
+            "O",
+            &LockstepDebugOptions::default(),
+            &Cvc5LibBackend::new(true, None),
+            Some(out.to_path_buf()),
+            &mut NopObserver,
+            None,
+        )
+        .unwrap()
+    }
+
+    fn story23_sequential(claim_set: ClaimSet, out: &Path) -> crate::debug::driver::DebugRun {
+        crate::debug::driver::run_debug_command(
+            &story23_project(),
+            "Eq",
+            0,
+            "O",
+            claim_set,
+            &crate::debug::driver::DebugOptions::default(),
+            &Cvc5LibBackend::new(true, None),
+            Some(out.to_path_buf()),
+            &mut NopObserver,
+            None,
+        )
+        .unwrap()
+    }
+
+    /// The lemma's `define-fun` comes with the theorem's files; no line may assert it.
+    fn asserts_my_lemma(smt: &str) -> bool {
+        smt.lines()
+            .filter(|line| line.contains(MY_LEMMA))
+            .any(|line| !line.trim_start().starts_with("(define-fun"))
+    }
+
+    const CORE: [&str; 5] = [
+        "equal-aborts",
+        "same-output",
+        "invariant",
+        "package-invariant!gl-p!",
+        "game-invariant!gl!",
+    ];
+
+    #[test]
+    fn the_easycrypt_listing_assumes_no_project_lemma() {
+        let out = tempfile::tempdir().unwrap();
+        let run = story23_lockstep(ListingKind::EasyCrypt, ClaimSet::NoDependencies, out.path());
+        assert!(run.meta.base_frame_smt.contains(MY_LEMMA), "the lemma is defined");
+        assert!(!asserts_my_lemma(&run.meta.base_frame_smt));
+        let goals = serde_json::to_string(&run.meta.goals).unwrap();
+        assert!(!goals.contains(MY_LEMMA), "{goals}");
+    }
+
+    #[test]
+    fn a_lockstep_core_run_checks_the_core_claims_without_the_project_lemma() {
+        let out = tempfile::tempdir().unwrap();
+        let run = story23_lockstep(ListingKind::Domino, ClaimSet::of(true, None), out.path());
+        let names: Vec<_> = run.summary.claims.iter().map(|c| c.claim.as_str()).collect();
+        assert_eq!(names, CORE);
+        assert!(run.meta.core && run.meta.all_claims);
+        assert_eq!(run.meta.claim, "!core-claims!");
+        assert!(!asserts_my_lemma(&run.meta.base_frame_smt));
+        let goals = serde_json::to_string(&run.meta.goals).unwrap();
+        assert!(!goals.contains(MY_LEMMA), "{goals}");
+        assert_eq!(run.summary.claims[2].counts.goal_fails, 1, "invariant fails without it");
+        let summary = lockstep_report::render_summary(&run);
+        assert!(summary.contains("all 5 claims of the core claim set"), "{summary}");
+    }
+
+    #[test]
+    fn with_the_obligation_set_invariant_holds_under_the_project_lemma() {
+        let out = tempfile::tempdir().unwrap();
+        let run = story23_lockstep(ListingKind::Domino, ClaimSet::of(false, None), out.path());
+        let invariant = run.summary.claims.iter().find(|c| c.claim == "invariant").unwrap();
+        assert_eq!((invariant.counts.goal_fails, invariant.counts.inconclusive), (0, 0));
+        assert!(run.summary.claims.iter().any(|c| c.claim == "my-lemma"));
+    }
+
+    #[test]
+    fn a_sequential_core_run_checks_the_core_claims_without_the_project_lemma() {
+        let out = tempfile::tempdir().unwrap();
+        let run = story23_sequential(ClaimSet::of(true, None), out.path());
+        let names: Vec<_> = run.claims.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, CORE);
+        assert!(run.claims.iter().all(|c| !c.dependencies.contains(&"my-lemma".to_string())));
+        assert!(!asserts_my_lemma(&run.base_frame_smt));
+        let invariant = run.claim_summaries.iter().find(|c| c.claim == "invariant").unwrap();
+        assert_eq!(invariant.goal_fails, 1);
+
+        let out = tempfile::tempdir().unwrap();
+        let run = story23_sequential(ClaimSet::of(false, None), out.path());
+        let invariant = run.claim_summaries.iter().find(|c| c.claim == "invariant").unwrap();
+        assert_eq!((invariant.goal_fails, invariant.inconclusive), (0, 0));
+    }
+
+    #[test]
+    fn a_project_lemma_is_not_in_the_core_claim_set() {
+        let out = tempfile::tempdir().unwrap();
+        let err = run_lockstep_on(
+            ListingKind::Domino,
+            ClaimSet::of(true, Some("my-lemma")),
+            &story23_project(),
+            "Eq",
+            0,
+            "O",
+            &LockstepDebugOptions::default(),
+            &Cvc5LibBackend::new(true, None),
+            Some(out.path().to_path_buf()),
+            &mut NopObserver,
+            None,
+        )
+        .err()
+        .unwrap();
+        assert!(
+            err.to_string().starts_with("claim `my-lemma` is not in the core claim set"),
+            "{err}"
+        );
     }
 }
 

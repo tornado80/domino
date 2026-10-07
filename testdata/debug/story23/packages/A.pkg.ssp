@@ -1,0 +1,13 @@
+package A {
+    invariant: [ ./packages/A.smt2 ]
+    state {
+        ctr: Integer,
+        k: Integer,
+    }
+
+    /* the left side always stores its argument */
+    oracle O(x: Integer) -> Integer {
+        ctr <- x;
+        return 0;
+    }
+}

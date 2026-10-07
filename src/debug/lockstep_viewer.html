@@ -230,7 +230,7 @@ const reasonText = (v, pair) => {
 document.getElementById("h-title").textContent =
   `${T.theorem} · proofstep ${T.proofstep} · ${T.left_game} == ${T.right_game}`;
 document.getElementById("h-sub").textContent =
-  `oracle ${T.oracle} · ${T.all_claims && T.listing === "domino" ? "all claims" : "claims " + T.claims.filter(c => !c.admitted).map(c => c.name).join(", ")} · lockstep execution on the ${T.listing} listing`;
+  `oracle ${T.oracle} · ${T.all_claims && T.listing === "domino" ? (T.core ? "all claims of the core claim set" : "all claims") : "claims " + T.claims.filter(c => !c.admitted).map(c => c.name).join(", ")} · lockstep execution on the ${T.listing} listing`;
 {
   const o = T.options, chips = document.getElementById("h-opts");
   [["timeout", o.timeout_ms == null ? "off" : o.timeout_ms + "ms"],

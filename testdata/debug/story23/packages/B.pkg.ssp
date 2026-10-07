@@ -1,0 +1,14 @@
+package B {
+    state {
+        ctr: Integer,
+        k: Integer,
+    }
+
+    /* the right side stores its argument only when it is positive */
+    oracle O(x: Integer) -> Integer {
+        if (x > 0) {
+            ctr <- x;
+        }
+        return 0;
+    }
+}
