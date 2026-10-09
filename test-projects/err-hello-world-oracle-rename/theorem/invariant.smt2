@@ -18,12 +18,6 @@
     ; ctr are equal
     (= ctr-0 ctr-1)))
 
-(define-fun general-relation!trivial!AnotherUsefulOracle! 
-  ( (state-0  <GameState_MediumComposition_<$<!n!>$>>)
-    (state-1  <GameState_SmallComposition_<$<!n!>$>>)
-    (output-0 <OracleReturn_MediumComposition_<$<!n!>$>_Rand_<$<!n!>$>_UsefulOracle>)
-    (output-1 <OracleReturn_SmallComposition_<$<!n!>$>_Rand_<$<!n!>$>_UsefulOracle>)  
-  )
-Bool
-true
-)
+(define-lemma trivial AnotherUsefulOracle
+  (state-0 state-1 output-0 output-1)
+  true)

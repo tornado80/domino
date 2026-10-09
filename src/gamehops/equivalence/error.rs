@@ -88,6 +88,14 @@ pub enum Error {
         lemma_name: String,
         oracle_name: String,
     },
+    #[error("claim \"{claim_name}\" of oracle \"{oracle_name}\" is not defined")]
+    #[diagnostic(help(
+        "define it in the equivalence's invariant file with `define-state-relation` or `define-lemma`"
+    ))]
+    UnknownClaim {
+        claim_name: String,
+        oracle_name: String,
+    },
     #[error("{equivalence}: Expected symbol name for argument but got {argument}")]
     IncorrectArgument {
         argument: String,

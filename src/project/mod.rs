@@ -151,7 +151,7 @@ pub trait Project {
 
                         let mut eqctx = EquivalenceContext::new(eq, &theorem, &auxs);
                         eqctx.load_invariants(self)?;
-                        eqctx.resolve_claims();
+                        eqctx.resolve_claims()?;
 
                         let mut driver = EquivalenceSmtDriver::new(&eqctx, self, config);
                         driver.verify(ui)?;
@@ -161,7 +161,7 @@ pub trait Project {
 
                         let mut eqctx = EquivalenceContext::new(hyb.equivalence(), &theorem, &auxs);
                         eqctx.load_invariants(self)?;
-                        eqctx.resolve_claims();
+                        eqctx.resolve_claims()?;
 
                         let mut driver = EquivalenceSmtDriver::new(&eqctx, self, config);
                         driver.verify(ui)?;

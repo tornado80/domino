@@ -29,11 +29,13 @@ pub enum ClaimType {
 }
 
 impl ClaimType {
-    pub fn guess_from_name(name: &str) -> ClaimType {
-        if name.starts_with("relation") || name == "invariant" {
-            ClaimType::Relation
-        } else {
-            ClaimType::Lemma
+    /// Claims that the prover provides itself, so they need no SMT definition. `invariant`
+    /// is always called as a state relation, even when it is written as a plain `define-fun`.
+    fn builtin(name: &str) -> Option<ClaimType> {
+        match name {
+            "invariant" => Some(ClaimType::Relation),
+            "equal-aborts" | "no-abort" | "same-output" => Some(ClaimType::Lemma),
+            _ => None,
         }
     }
 
@@ -344,9 +346,19 @@ impl<'a> EquivalenceContext<'a> {
         Ok(())
     }
 
-    pub(crate) fn resolve_claims(&mut self) {
-        let claims = &self.equivalence().trees;
-        let claims = claims
+    fn resolve_claim_type(&self, oracle_name: &str, claim_name: &str) -> Result<ClaimType> {
+        ClaimType::read_from_smt(claim_name, self.invariants().iter())
+            .or_else(|| ClaimType::builtin(claim_name))
+            .ok_or_else(|| Error::UnknownClaim {
+                claim_name: claim_name.to_string(),
+                oracle_name: oracle_name.to_string(),
+            })
+    }
+
+    pub(crate) fn resolve_claims(&mut self) -> Result<()> {
+        let claims = self
+            .equivalence()
+            .trees
             .iter()
             .map(|(oracle, claims)| {
                 let claims = claims
@@ -358,31 +370,30 @@ impl<'a> EquivalenceContext<'a> {
                             admitted,
                         } = claim.clone();
 
-                        let ty = ClaimType::read_from_smt(&name, self.invariants().iter())
-                            .unwrap_or_else(|| ClaimType::guess_from_name(&name));
+                        let ty = self.resolve_claim_type(oracle, &name)?;
 
                         let dependencies = dependencies
                             .into_iter()
                             .map(|name| {
-                                let ty = ClaimType::read_from_smt(&name, self.invariants().iter())
-                                    .unwrap_or_else(|| ClaimType::guess_from_name(&name));
-                                ResolvedDependency { name, ty }
+                                let ty = self.resolve_claim_type(oracle, &name)?;
+                                Ok(ResolvedDependency { name, ty })
                             })
-                            .collect();
+                            .collect::<Result<_>>()?;
 
-                        ResolvedClaim {
+                        Ok(ResolvedClaim {
                             name,
                             ty,
                             dependencies,
                             admitted,
-                        }
+                        })
                     })
-                    .collect();
+                    .collect::<Result<_>>()?;
 
-                (oracle.clone(), claims)
+                Ok((oracle.clone(), claims))
             })
-            .collect();
+            .collect::<Result<_>>()?;
         self.append_claims(claims);
+        Ok(())
     }
 
     fn generate_game_or_package_invariant_claims(&self) -> Vec<ResolvedClaim> {
