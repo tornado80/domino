@@ -144,6 +144,11 @@ pub enum InvariantError {
     #[error(transparent)]
     Side(#[from] SideInvariantError),
 
+    /// The SMT definitions of the invariant files call each other in a cycle, so they have
+    /// no call order (story 62). SMT-LIB cannot give this; the error is a guard.
+    #[error("the invariant definitions {} call each other in a cycle", names.join(", "))]
+    CallCycle { names: Vec<String> },
+
     #[error(transparent)]
     Name(#[from] NameError),
 }
@@ -189,11 +194,13 @@ pub struct InvariantFile {
     /// stdout report, mirroring `export::ExportedTheorem::skipped`
     /// (story 05).
     pub skipped: Vec<String>,
-    /// The SMT names of every translated `define-state-relation`, file order, `invariant`
-    /// too. The tactics run gives these to [`invariant_ops`].
+    /// The SMT names of every translated `define-state-relation`, `invariant` too, in call
+    /// order: a relation comes before every relation that its body calls (story 62). The
+    /// tactics run gives these to [`invariant_ops`].
     pub state_relations: Vec<String>,
-    /// The SMT names of every translated helper `define-fun`, file order. The tactics run
-    /// gives these to [`invariant_ops`] too.
+    /// The SMT names of every translated helper `define-fun`, in call order. The tactics run
+    /// gives these to [`invariant_ops`] too. A helper cannot take a state, so it never calls
+    /// a state relation: the relations, then the helpers, is a call order of all of them.
     pub helpers: Vec<String>,
 }
 
@@ -262,6 +269,7 @@ pub fn build_invariant_file(
         state_relations: Vec::new(),
         relation_names: Vec::new(),
         helper_names: Vec::new(),
+        calls: HashMap::new(),
         skipped: Vec::new(),
     };
 
@@ -394,9 +402,60 @@ pub fn build_invariant_file(
         left_state_type: left_side.record_type_name,
         right_state_type: right_side.record_type_name,
         skipped: state.skipped,
-        state_relations: state.relation_names,
-        helpers: state.helper_names,
+        state_relations: call_order(&state.relation_names, &state.calls)?,
+        helpers: call_order(&state.helper_names, &state.calls)?,
     })
+}
+
+/// `names` in call order: each name comes before every other of `names` that its body calls
+/// (`calls`, raw name to the raw names its body uses). Among names that are ready at the same
+/// time, the earlier one in `names` (translation order) comes first, so the order is
+/// deterministic. A cycle is [`InvariantError::CallCycle`], naming the definitions on it or
+/// behind it.
+fn call_order(
+    names: &[String],
+    calls: &HashMap<String, Vec<String>>,
+) -> Result<Vec<String>, InvariantError> {
+    let callees = |n: &String| -> Vec<usize> {
+        let called = calls.get(n).map(Vec::as_slice).unwrap_or_default();
+        (0..names.len())
+            .filter(|&j| names[j] != *n && called.contains(&names[j]))
+            .collect()
+    };
+    let edges: Vec<Vec<usize>> = names.iter().map(callees).collect();
+    let mut callers = vec![0usize; names.len()];
+    edges.iter().flatten().for_each(|&j| callers[j] += 1);
+    let mut done = vec![false; names.len()];
+    let mut order = Vec::with_capacity(names.len());
+    while order.len() < names.len() {
+        let Some(i) = (0..names.len()).find(|&i| !done[i] && callers[i] == 0) else {
+            let names = (0..names.len())
+                .filter(|&i| !done[i])
+                .map(|i| names[i].clone())
+                .collect();
+            return Err(InvariantError::CallCycle { names });
+        };
+        done[i] = true;
+        edges[i].iter().for_each(|&j| callers[j] -= 1);
+        order.push(names[i].clone());
+    }
+    Ok(order)
+}
+
+/// The raw names of the definitions in `ops` that `body` uses (story 62): every atom of
+/// `body` that names one. A local binder with the name of a definition gives an extra name;
+/// that can only move the definition later, never break the call order.
+fn called_defs(body: &Sexp, ops: &OpRegistry) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![body];
+    while let Some(s) = stack.pop() {
+        match s {
+            Sexp::Atom(a) if ops.lookup(a).is_some() && !out.contains(a) => out.push(a.clone()),
+            Sexp::Atom(_) => {}
+            Sexp::List(items) => stack.extend(items),
+        }
+    }
+    out
 }
 
 impl From<crate::util::smtparser::Error> for InvariantError {
@@ -1009,7 +1068,9 @@ impl InvariantOp {
 }
 
 /// The operators of the invariant file of `left ~ right`, in the order `rewrite /… in` unfolds
-/// them: `inv`, `params_inv`, then [`leaf_part_ops`]. Reads no file.
+/// them: `inv`, `params_inv`, then [`leaf_part_ops`]. Reads no file. `relations` and `helpers`
+/// must be in call order ([`InvariantFile::state_relations`]): `rewrite /a /b in h` does not
+/// unfold `b` when only the body of a later operator uses it (story 62).
 pub fn invariant_ops(
     left: &GameInstance,
     right: &GameInstance,
@@ -1976,6 +2037,9 @@ struct InvariantParserState<'a> {
     relation_names: Vec<String>,
     /// The SMT names of the translated `define-fun` helpers, file order.
     helper_names: Vec<String>,
+    /// For each translated definition (raw name), the raw names of the definitions its body
+    /// uses ([`called_defs`]).
+    calls: HashMap<String, Vec<String>>,
     skipped: Vec<String>,
 }
 
@@ -2060,6 +2124,8 @@ impl SmtParser<InvariantError> for InvariantParserState<'_> {
             tctx.translate(&body, &locals)?
         };
 
+        self.calls
+            .insert(funname.to_string(), called_defs(&body, &self.ops));
         let mangled_name = self
             .ops
             .define(&self.file, funname, DefKind::Helper, ret_ty.clone())?;
@@ -2125,6 +2191,8 @@ impl SmtParser<InvariantError> for InvariantParserState<'_> {
             tctx.translate(&body, &side_locals)?
         };
 
+        self.calls
+            .insert(funname.to_string(), called_defs(&body, &self.ops));
         let mangled_name =
             self.ops
                 .define(&self.file, funname, DefKind::StateRelation, EcType::Bool)?;
@@ -2649,7 +2717,8 @@ mod tests {
             items: Vec::new(),
             state_relations: Vec::new(),
             relation_names: Vec::new(),
-        helper_names: Vec::new(),
+            helper_names: Vec::new(),
+            calls: HashMap::new(),
             skipped: Vec::new(),
         }
     }
@@ -3303,6 +3372,59 @@ mod tests {
             file_path.to_str().unwrap(),
         );
         let _ = std::fs::remove_dir_all(&scratch_dir);
+    }
+
+    /// Story 62: the operators come in call order, each caller before its callees, so one
+    /// `rewrite /… in` unfolds all of them.
+    #[test]
+    fn invariant_ops_put_each_caller_before_its_callees() {
+        let (theorem, project) = load_project(PARAMS_PROJECT, "ParamsCallOrder");
+        let equivalence = find_equivalence(&theorem, "L", "R");
+        let result = build_invariant_file(&theorem, equivalence, project).unwrap();
+        let left = theorem.find_game_instance("L").unwrap();
+        let right = theorem.find_game_instance("R").unwrap();
+        let names: Vec<String> =
+            invariant_ops(left, right, &result.state_relations, &result.helpers)
+                .into_iter()
+                .map(|op| op.name)
+                .collect();
+        assert_eq!(
+            names[..7],
+            [
+                "inv",
+                "params_inv",
+                "StateRelation_invariant",
+                "StateRelation_plain_rel",
+                "StateRelation_bit_rel",
+                "Helper_outer_bit",
+                "Helper_inner_bit",
+            ]
+        );
+    }
+
+    #[test]
+    fn call_order_keeps_translation_order_between_unrelated_definitions() {
+        let names: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
+        let calls = HashMap::from([("c".to_string(), vec!["a".to_string()])]);
+        assert_eq!(call_order(&names, &calls).unwrap(), ["b", "c", "a"]);
+    }
+
+    #[test]
+    fn a_call_cycle_is_an_error_that_names_the_definitions() {
+        let names: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
+        let calls = HashMap::from([
+            ("a".to_string(), vec!["b".to_string()]),
+            ("b".to_string(), vec!["a".to_string()]),
+        ]);
+        let err = call_order(&names, &calls).unwrap_err();
+        assert!(
+            matches!(&err, InvariantError::CallCycle { names } if names == &["a", "b"]),
+            "{err}"
+        );
+        assert_eq!(
+            err.to_string(),
+            "the invariant definitions a, b call each other in a cycle"
+        );
     }
 
     /// Story 59: a `define-state-relation` is a `StateRelation_` operator, a `define-fun` a

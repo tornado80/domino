@@ -657,6 +657,8 @@ mod tests {
     }
 
     #[test]
+    /// Story 62: `relations` and `helpers` come in call order (the invariant file gives them
+    /// so); `invariant_ops` keeps that order.
     fn invariant_ops_name_the_operators_in_unfold_order_with_their_claims() {
         let (theorem, _) = load_project("example-projects/4WHS", "Simple4WHS");
         let left = theorem.find_game_instance("Real_Hybrid3").unwrap();
@@ -664,7 +666,7 @@ mod tests {
         let ops = invariant_ops(
             left,
             right,
-            &["relation-a-b".to_string(), "state=".to_string()],
+            &["invariant".to_string(), "relation-a-b".to_string(), "state=".to_string()],
             &["eq-prf".to_string()],
         );
         let rows: Vec<(&str, Option<&str>, Option<&str>)> = ops
@@ -676,6 +678,7 @@ mod tests {
             [
                 ("inv", None, None),
                 ("params_inv", None, None),
+                ("StateRelation_invariant", None, Some("invariant")),
                 ("StateRelation_relation_a_b", None, Some("relation-a-b")),
                 ("StateRelation_state_eq", None, Some("state=")),
                 ("Helper_eq_prf", None, None),
