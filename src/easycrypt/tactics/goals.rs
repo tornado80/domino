@@ -86,7 +86,8 @@ pub(super) fn as_implication(form: &Form) -> Option<(&Form, &Form)> {
     }
 }
 
-/// `A /\ B`.
+/// `A /\ B`. Only tests read it: a leaf is opened by `do split`, whatever the head.
+#[cfg(test)]
 pub(super) fn as_conjunction(form: &Form) -> Option<(&Form, &Form)> {
     if op_is(form, "/\\") && form.args.len() == 2 {
         Some((&form.args[0], &form.args[1]))

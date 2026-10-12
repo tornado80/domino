@@ -2614,8 +2614,8 @@ fn the_leaf_budget_is_off_by_default() {
 
 /// Story 56: each sentence's record says why the driver sent it. A fake EasyCrypt refuses every
 /// closing tactic, so the walk goes through every role: N0 (unreachable) through its quick close
-/// to an admit, N1 (a leaf) through its leaf fallbacks, the reduction to a formula, the split
-/// and the part fallbacks of each conjunct to an admit of each part.
+/// to an admit, N1 (a leaf) through the reduction to a formula, the split and the part fallbacks of
+/// each conjunct to an admit of each part.
 #[test]
 fn each_record_says_why_the_driver_sent_its_sentence() {
     use crate::debug::lockstep::JointTree;
@@ -2653,9 +2653,8 @@ while IFS= read -r line; do
   case "$line" in
     start.) g=two; ans;;
     admit.) case $g in two) g=prog;; prog) g=none;; two_atoms) g=one_atom;; *) g=none;; esac; ans;;
-    auto.) ans;;
-    "move => &1 &2 hpre.") g=conj; ans;;
-    split.) g=two_atoms; ans;;
+    "auto => &1 &2 hpre.") g=conj; ans;;
+    "do split.") case $g in conj) g=two_atoms; ans;; *) err;; esac;;
     *) err;;
   esac
 done
@@ -2744,17 +2743,14 @@ done
         "N0 quick-close auto => /#.".to_string(),
         "N0 structure exfalso; smt().".to_string(),
         "N0 admit admit.".to_string(),
-        "N1 leaf-fallback auto => /> &1 &2 *; smt(). #1".to_string(),
-        "N1 leaf-fallback sp. #2".to_string(),
-        format!("N1 leaf-fallback auto => /> &1 &2 *; {hints} #3"),
-        "N1 reduce sp.".to_string(),
-        "N1 reduce auto.".to_string(),
-        "N1 reduce move => &1 &2 hpre.".to_string(),
-        "N1 split split.".to_string(),
-        "N1 part-fallback smt(). #1 [equal-output]".to_string(),
-        "N1 part-fallback rewrite !get_set_neqE. #2 [equal-output]".to_string(),
-        format!("N1 part-fallback {hints} #3 [equal-output]"),
-        "N1 admit admit. [equal-output]".to_string(),
+        "N1 reduce auto => &1 &2 hpre.".to_string(),
+        "N1 split do split.".to_string(),
+        "N1 split do split.".to_string(),
+        "N1 part-fallback smt(). #1 [equal-output+invariant]".to_string(),
+        "N1 part-fallback rewrite !get_set_neqE. #2 [equal-output+invariant]".to_string(),
+        format!("N1 part-fallback {hints} #3 [equal-output+invariant]"),
+        "N1 admit admit.".to_string(),
+        "N1 split do split.".to_string(),
         "N1 part-fallback smt(). #1 [equal-output+invariant]".to_string(),
         "N1 part-fallback rewrite !get_set_neqE. #2 [equal-output+invariant]".to_string(),
         format!("N1 part-fallback {hints} #3 [equal-output+invariant]"),
@@ -2804,4 +2800,330 @@ fn a_part_on_a_pair_with_invariant_verified_is_verified() {
     assert_eq!(pair_view_for_tests(&p, &side), "verified");
     let unreachable = pair(Verdict::Verified, Verdict::pair_infeasible(), &[], false);
     assert_eq!(pair_view_for_tests(&unreachable, &side), "verified");
+}
+
+#[test]
+fn the_exit_decision_that_domino_predicts_comes_first() {
+    use super::driver::exit_decisions;
+    let tail = "ec_result = None<:int * bits_n>";
+    assert_eq!(exit_decisions(tail, Some(true)), ["rcondt", "rcondf"]);
+    assert_eq!(exit_decisions(tail, Some(false)), ["rcondf", "rcondt"]);
+    assert_eq!(exit_decisions(" (ec_result = None)", Some(true)), ["rcondt", "rcondf"]);
+    // a done-flag guard comes after the side's terminal: it does not hold
+    assert_eq!(exit_decisions("!ec_done", Some(true)), ["rcondf", "rcondt"]);
+    // no prediction: `rcondf` first
+    assert_eq!(exit_decisions("ec_r1 <> None", Some(true)), ["rcondf", "rcondt"]);
+    assert_eq!(exit_decisions(tail, None), ["rcondf", "rcondt"]);
+}
+
+/// A leaf proved against a fake EasyCrypt (story 64): what was sent, and what was admitted.
+struct LeafRun {
+    /// `<role> <sentence>`, and ` [part]` where the record has one.
+    said: Vec<String>,
+    admits: Vec<Admit>,
+}
+
+/// Proves joint node 0, a terminal pair, against a fake EasyCrypt. `goals` are the proof
+/// states by name (the JSON of `"proof"`); `start` is the state after `start.`; `arms` are the
+/// shell `case` arms that answer the sentences (`g=<name>; ans` accepts and moves to a state;
+/// anything else is refused). `undo k.` goes back to the state of answer `k`.
+fn run_leaf(
+    goals: &[(&str, String)],
+    start: &str,
+    arms: &str,
+    pairs: Vec<PairRecord>,
+    part_ops: &[crate::writers::easycrypt::invariant::InvariantOp],
+) -> LeafRun {
+    use crate::debug::lockstep::JointTree;
+    use crate::easycrypt::session::tests::TestSink;
+    use crate::easycrypt::session::Session;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let none = ("none", r#"{"front":null,"kinds":[]}"#.to_string());
+    for (name, proof) in goals.iter().chain([&none]) {
+        std::fs::write(dir.path().join(format!("{name}.json")), proof).unwrap();
+    }
+    let script = dir.path().join("fake-easycrypt");
+    std::fs::write(
+        &script,
+        format!(
+            r#"#!/bin/sh
+d='{}'; n=0; g=none
+ans() {{ n=$((n+1)); eval "g_$n=$g"; printf '{{"version":"domino-json/2","state":%s,"status":"ok","messages":[],"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
+err() {{ printf '{{"version":"domino-json/2","state":%s,"status":"error","messages":[],"error":{{"msg":"no"}},"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
+while IFS= read -r line; do
+  case "$line" in
+    start.) g={start}; ans;;
+    "undo "*) k=${{line#undo }}; k=${{k%.}}; eval "g=\$g_$k"; n=$((k-1)); ans;;
+{arms}
+    *) err;;
+  esac
+done
+"#,
+            dir.path().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let side = serde_json::json!({"head": {"kind": "return", "label": 1}, "consumed": []});
+    let tree: JointTree = serde_json::from_value(serde_json::json!({ "nodes": [
+        {"index": 0, "kind": "terminal-pair", "left": side, "right": side,
+         "answers": [], "children": []}
+    ]}))
+    .unwrap();
+    let outcome = crate::debug::lockstep::LockstepOutcome {
+        tree,
+        pairs,
+        stuck: vec![],
+        stop_reason: crate::debug::driver::StopReason::Completed,
+    };
+    let tree = super::driver::OracleTree::new(&outcome);
+    let mut session = Session::start_with(&script, dir.path()).unwrap();
+    let sink = TestSink::new(usize::MAX);
+    session.set_transcript_sink(
+        Box::new(sink.clone()),
+        &dir.path().join("ec-transcript.jsonl"),
+        EcTranscriptMode::Capped,
+        "Eq.ec",
+    );
+    assert_eq!(session.send("start.").unwrap().status, crate::easycrypt::json::Status::Ok);
+    let mut prover = super::driver::Prover {
+        session: &mut session,
+        script: Default::default(),
+        tree: &tree,
+        hints: &[],
+        unfold_ops: &["inv".to_string()],
+        part_ops,
+        timeouts: Timeouts {
+            general: Duration::from_secs(10),
+            quick_close: Duration::from_secs(10),
+        },
+        quick_close: true,
+        oracle: "O",
+        leaf_budget: None,
+        deadline: None,
+        stats: OracleStats::default(),
+        live: None,
+        checkpoint: None,
+        per_sentence: false,
+        node: None,
+        mismatches: vec![],
+        stopped: None,
+        resume: None,
+    };
+    prover.prove_node(0).unwrap();
+    assert_eq!(prover.count(), 0, "the leaf is closed");
+    let admits = prover.stats.admits.clone();
+    let said = sink
+        .text()
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|r| r["ctx"]["oracle"] == "O" && r.get("sentence").is_some())
+        .map(|r| {
+            let c = &r["ctx"];
+            let role = c["role"].as_str().unwrap();
+            let mut s = format!("{role} {}", r["sentence"].as_str().unwrap());
+            if let Some(part) = c.get("part") {
+                s += &format!(" [{}]", part.as_str().unwrap());
+            }
+            s
+        })
+        .collect();
+    LeafRun { said, admits }
+}
+
+/// A proof state whose front goal is `front` (goal JSON), with `open` goals of its kind.
+fn proof_of(front: &str, open: usize) -> String {
+    let kind = if front.contains(r#""kind":"equivS""#) {
+        "program"
+    } else {
+        "formula"
+    };
+    let kinds = vec![format!("\"{kind}\""); open].join(",");
+    format!(r#"{{"front":{front},"kinds":[{kinds}]}}"#)
+}
+
+/// A program goal whose sides hold `if`s with these conditions.
+fn program_with_ifs(left: &[&str], right: &[&str]) -> String {
+    let side = |conds: &[&str]| {
+        let stmt: Vec<String> = conds
+            .iter()
+            .map(|c| {
+                format!(r#"{{"kind":"if","pp":"if ({c}) {{}}","cond":{{"kind":"app","pp":"{c}"}}}}"#)
+            })
+            .collect();
+        format!(r#"{{"stmt":[{}]}}"#, stmt.join(","))
+    };
+    format!(
+        r#"{{"id":1,"concl":{{"kind":"equivS","pp":"p","left":{},"right":{}}},"text":"p"}}"#,
+        side(left),
+        side(right)
+    )
+}
+
+fn formula(concl: &str) -> String {
+    format!(r#"{{"id":1,"concl":{concl},"text":"f"}}"#)
+}
+
+fn leaf_pair(left_aborts: bool, invariant: Verdict, relations: &[(&str, Verdict)]) -> PairRecord {
+    let mut p = pair(Verdict::Verified, invariant, relations, left_aborts);
+    p.node = 0;
+    p
+}
+
+#[test]
+fn the_exit_path_tries_the_predicted_decision_first_then_the_other_one() {
+    let goals = [
+        ("start", proof_of(&program_with_ifs(&["ec_result = None"], &["!ec_done"]), 1)),
+        ("right_only", proof_of(&program_with_ifs(&[], &["!ec_done"]), 1)),
+        ("no_ifs", proof_of(&program_with_ifs(&[], &[]), 1)),
+    ];
+    let arms = r#"
+    "rcondt{1} ^if; 1: by auto.") g=right_only; ans;;
+    "rcondf{2} ^if; 1: by auto.") g=no_ifs; ans;;
+    "auto => &1 &2 hpre.") g=none; ans;;"#;
+    // side 1 does not abort: `rcondf` is predicted and refused, then `rcondt` is accepted
+    let run = run_leaf(&goals, "start", arms, vec![leaf_pair(false, Verdict::Verified, &[])], &[]);
+    assert_eq!(
+        run.said,
+        [
+            "exit-path rcondf{1} ^if; 1: by auto.",
+            "exit-path rcondt{1} ^if; 1: by auto.",
+            "exit-path rcondf{2} ^if; 1: by auto.",
+            "reduce auto => &1 &2 hpre.",
+        ]
+    );
+    assert!(run.admits.is_empty());
+
+    // side 1 aborts: `rcondt` on the router's tail is predicted, and accepted at once
+    let run = run_leaf(&goals, "start", arms, vec![leaf_pair(true, Verdict::Verified, &[])], &[]);
+    assert_eq!(run.said[0], "exit-path rcondt{1} ^if; 1: by auto.");
+    assert_eq!(run.said[1], "exit-path rcondf{2} ^if; 1: by auto.");
+}
+
+#[test]
+fn an_if_that_no_decision_takes_stops_the_exit_path_and_a_program_after_auto_is_a_whole_admit() {
+    let goals = [("start", proof_of(&program_with_ifs(&["c", "d"], &["e"]), 1))];
+    // `auto` is accepted but leaves the program goal: undone, and the leaf admitted whole
+    let arms = r#"
+    "auto => &1 &2 hpre.") ans;;
+    admit.) g=none; ans;;"#;
+    let run = run_leaf(&goals, "start", arms, vec![leaf_pair(false, fails(), &[])], &[]);
+    assert_eq!(
+        run.said,
+        [
+            "exit-path rcondf{1} ^if; 1: by auto.",
+            "exit-path rcondt{1} ^if; 1: by auto.",
+            "reduce auto => &1 &2 hpre.",
+            "undo undo 1.",
+            "admit admit.",
+        ]
+    );
+    let [admit] = run.admits.as_slice() else {
+        panic!("{:?}", run.admits)
+    };
+    assert_eq!(admit.claim, "equal-output+invariant");
+}
+
+fn relation_op(name: &str, relation: &str) -> crate::writers::easycrypt::invariant::InvariantOp {
+    crate::writers::easycrypt::invariant::InvariantOp {
+        name: name.into(),
+        claim: None,
+        relation: Some(relation.into()),
+    }
+}
+
+/// `forall x, a => StateRelation_r x`, opened: the binder, the premise, the claim operator,
+/// then `do split` into three goals that nothing opens. Each one is a part of the claim.
+#[test]
+fn the_leaf_is_opened_until_only_parts_are_left_and_no_split_is_sent() {
+    let atom = r#"{"kind":"app","pp":"a","op":"Top.a"}"#;
+    let rel = r#"{"kind":"app","pp":"","op":"Top.Eq_Invariants.StateRelation_r","args":[{"kind":"local","pp":"x"}]}"#;
+    let imp = format!(r#"{{"kind":"app","pp":"","op":"Top.Logic.=>","args":[{atom},{rel}]}}"#);
+    let binder = r#"{"name":"x","ident":{"name":"x","tag":1},"kind":"var","type":{"pp":"int"}}"#;
+    let all = format!(
+        r#"{{"kind":"quant","pp":"","quantifier":"forall","binders":[{binder}],"body":{imp}}}"#
+    );
+    let conj = format!(r#"{{"kind":"app","pp":"","op":"Top.Logic./\\","args":[{atom},{atom}]}}"#);
+    let goals = [
+        ("start", proof_of(&program_with_ifs(&[], &[]), 1)),
+        ("all", proof_of(&formula(&all), 1)),
+        ("imp", proof_of(&formula(&imp), 1)),
+        ("rel", proof_of(&formula(rel), 1)),
+        ("conj", proof_of(&formula(&conj), 1)),
+        ("three", proof_of(&formula(atom), 3)),
+        ("two", proof_of(&formula(atom), 2)),
+        ("one", proof_of(&formula(atom), 1)),
+    ];
+    let arms = r#"
+    "auto => &1 &2 hpre.") g=all; ans;;
+    "move => x /=.") g=imp; ans;;
+    "move => hpre /=.") g=rel; ans;;
+    "rewrite /StateRelation_r /=.") g=conj; ans;;
+    "do split.") case $g in conj) g=three; ans;; *) err;; esac;;
+    admit.) case $g in three) g=two;; two) g=one;; *) g=none;; esac; ans;;"#;
+    let ops = [relation_op("StateRelation_r", "r")];
+    let pair = leaf_pair(false, fails(), &[("StateRelation_r", Verdict::Verified)]);
+    let run = run_leaf(&goals, "start", arms, vec![pair], &ops);
+
+    let part = "invariant/StateRelation_r";
+    let mut expected: Vec<String> = [
+        "reduce auto => &1 &2 hpre.",
+        "split move => x /=.",
+        "split move => hpre /=.",
+        "split rewrite /StateRelation_r /=.",
+        "split do split.",
+    ]
+    .map(String::from)
+    .to_vec();
+    for _ in 0..3 {
+        expected.push("split do split.".into());
+        for f in ["smt().", "rewrite !get_set_neqE.", "smt(get_setE mem_set emptyE)."] {
+            expected.push(format!("part-fallback {f} [{part}]"));
+        }
+        expected.push(format!("admit admit. [{part}]"));
+    }
+    assert_eq!(run.said, expected);
+    assert!(!run.said.iter().any(|s| s.ends_with(" split.") && !s.ends_with("do split.")));
+    assert!(!run.said.iter().any(|s| s.starts_with("leaf-fallback")));
+    assert_eq!(run.admits.len(), 3);
+    for admit in &run.admits {
+        assert_eq!(admit.claim, part);
+        // the relation's own verdict, not the failing invariant's
+        assert_eq!(admit.domino, DominoView::Verified);
+    }
+}
+
+/// §3.6 for a claim: the part is admitted as soon as the loop sees its operator. A part with no
+/// claim operator has the whole leaf's verdict.
+#[test]
+fn a_claim_that_fails_in_domino_is_admitted_at_once_and_a_part_without_a_claim_is_the_leafs() {
+    let atom = r#"{"kind":"app","pp":"a","op":"Top.a"}"#;
+    let rel = r#"{"kind":"app","pp":"","op":"Top.Eq_Invariants.StateRelation_r","args":[]}"#;
+    let conj = format!(r#"{{"kind":"app","pp":"","op":"Top.Logic./\\","args":[{rel},{atom}]}}"#);
+    let goals = [
+        ("start", proof_of(&program_with_ifs(&[], &[]), 1)),
+        ("conj", proof_of(&formula(&conj), 1)),
+        ("rel_first", proof_of(&formula(rel), 2)),
+        ("atom_last", proof_of(&formula(atom), 1)),
+    ];
+    let arms = r#"
+    "auto => &1 &2 hpre.") g=conj; ans;;
+    "do split.") case $g in conj) g=rel_first; ans;; *) err;; esac;;
+    admit.) case $g in rel_first) g=atom_last;; *) g=none;; esac; ans;;"#;
+    let ops = [relation_op("StateRelation_r", "r")];
+    let pair = leaf_pair(false, fails(), &[("StateRelation_r", fails())]);
+    let run = run_leaf(&goals, "start", arms, vec![pair], &ops);
+    assert!(!run.said.iter().any(|s| s.contains("rewrite /StateRelation_r")), "{:?}", run.said);
+    assert_eq!(run.said[2], "admit admit. [invariant/StateRelation_r]");
+    let [rel_admit, whole] = run.admits.as_slice() else {
+        panic!("{:?}", run.admits)
+    };
+    assert_eq!(rel_admit.claim, "invariant/StateRelation_r");
+    assert_eq!(rel_admit.reason, AdmitReason::DominoFails);
+    assert_eq!(whole.claim, "equal-output+invariant");
+    // the worse of equal-output (verified) and invariant (fails)
+    assert_eq!(whole.domino, DominoView::Fails);
 }

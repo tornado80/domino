@@ -17,7 +17,7 @@ const ROLES: [&str; 10] = [
     "quick close",
     "structure",
     "side-goal fallback",
-    "leaf fallback",
+    "exit path",
     "reduce",
     "split",
     "part fallback",
@@ -246,7 +246,7 @@ fn row_of(role: &Role) -> usize {
         Role::QuickClose => 0,
         Role::Structure => 1,
         Role::SideGoalFallback(_) => 2,
-        Role::LeafFallback(_) => 3,
+        Role::ExitPath => 3,
         Role::Reduce => 4,
         Role::Split => 5,
         Role::PartFallback { .. } => 6,
@@ -297,7 +297,7 @@ mod tests {
         t.add_sentence(&sentence(&Role::QuickClose, 460_000, 1_200_000, true));
         t.add_sentence(&sentence(&Role::QuickClose, 0, 10, false));
         t.add_sentence(&sentence(&Role::Structure, 242_000, 900_000, false));
-        t.add_sentence(&sentence(&Role::LeafFallback(2), 1_875_000, 1_400_000, true));
+        t.add_sentence(&sentence(&Role::ExitPath, 1_875_000, 1_400_000, true));
         t.add_sentence(&sentence(&Role::Undo, 130_000, 850, false));
         t.add_event(Event::Interrupt { resends: 1 }, 270_000);
         t.add_event(Event::Between, 40_000);
@@ -314,7 +314,7 @@ mod tests {
             "    time by role           count      time   failed   largest answer\n\
              \x20     quick close             2    7m 40s        1           1.2 MB\n\
              \x20     structure               1    4m 02s        0           0.9 MB\n\
-             \x20     leaf fallback           1   31m 15s        1           1.4 MB\n\
+             \x20     exit path               1   31m 15s        1           1.4 MB\n\
              \x20     undo                    1    2m 10s        0            850 B\n\
              \x20     interrupts              1    4m 30s\n\
              \x20     respawns                0        0s\n\

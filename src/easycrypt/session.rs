@@ -1265,12 +1265,12 @@ done
         std::thread::sleep(Duration::from_millis(60));
         session.send("b.").unwrap();
         std::thread::sleep(Duration::from_millis(60));
-        session.set_context(at(Role::LeafFallback(2))).unwrap();
+        session.set_context(at(Role::ExitPath)).unwrap();
         session.send("c.").unwrap();
         session.undo_to(1).unwrap();
         assert_eq!(
             session.context(),
-            &at(Role::LeafFallback(2)),
+            &at(Role::ExitPath),
             "the role is back"
         );
         let records = records(&sink);
@@ -1283,8 +1283,7 @@ done
             .collect();
         assert_eq!(kinds, ["a.", "b.", "between", "c.", "undo 1."]);
         let between = &records[2];
-        assert_eq!(between["ctx"]["role"], "leaf-fallback");
-        assert_eq!(between["ctx"]["n"], 2);
+        assert_eq!(between["ctx"]["role"], "exit-path");
         assert!(between["ms"].as_u64().unwrap() >= 100, "{between}");
         assert_eq!(records[4]["ctx"]["role"], "undo");
         assert_eq!(records[4]["ctx"]["node"], 3);

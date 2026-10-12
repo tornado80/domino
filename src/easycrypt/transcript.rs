@@ -121,7 +121,7 @@ pub enum EcTranscriptMode {
 /// fallback or a part fallback depending on where the walk is.
 ///
 /// ```json
-/// {"oracle": "Send3", "node": 41, "kind": "leaf", "role": "leaf-fallback", "n": 2}
+/// {"oracle": "Send3", "node": 41, "kind": "leaf", "role": "exit-path"}
 /// ```
 ///
 /// `oracle` is always written: `null` for a sentence that belongs to no oracle (opening the
@@ -144,7 +144,8 @@ pub enum Role {
     #[default]
     Structure,
     SideGoalFallback(usize),
-    LeafFallback(usize),
+    /// Deciding a leaf's exit path (story 64).
+    ExitPath,
     Reduce,
     Split,
     PartFallback {
@@ -164,7 +165,7 @@ impl Role {
             Role::QuickClose => "quick-close",
             Role::Structure => "structure",
             Role::SideGoalFallback(_) => "side-goal-fallback",
-            Role::LeafFallback(_) => "leaf-fallback",
+            Role::ExitPath => "exit-path",
             Role::Reduce => "reduce",
             Role::Split => "split",
             Role::PartFallback { .. } => "part-fallback",
@@ -176,7 +177,7 @@ impl Role {
 
     fn n(&self) -> Option<usize> {
         match self {
-            Role::SideGoalFallback(n) | Role::LeafFallback(n) | Role::PartFallback { n, .. } => {
+            Role::SideGoalFallback(n) | Role::PartFallback { n, .. } => {
                 Some(*n)
             }
             _ => None,
@@ -551,7 +552,7 @@ pub(crate) mod tests {
             serde_json::json!({"oracle": "Send3", "node": 41, "kind": "leaf",
                                "role": "part-fallback", "n": 2, "part": part})
         );
-        assert_eq!(ctx(Role::LeafFallback(3))["n"], 3);
+        assert!(ctx(Role::ExitPath).get("n").is_none());
         assert_eq!(ctx(Role::SideGoalFallback(1))["n"], 1);
         assert_eq!(
             ctx(Role::Admit {

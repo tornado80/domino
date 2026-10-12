@@ -292,21 +292,21 @@ impl Part {
     }
 }
 
-/// One step of [`Prover::solve_ambient`] on an ambient goal.
+/// One step of [`Prover::open_part`] on an ambient goal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Step {
     /// The binders of a `forall`.
     Intro(String),
     /// The premise of an implication, named.
     Premise(String),
-    Split,
     Unfold(String),
-    Atom,
+    /// Nothing above applies: `do split`, and the goal is a leaf part if it gives one goal.
+    Split,
 }
 
 /// The next step on `goal`, and the part it belongs to. `inv` starts [`Part::Invariant`]; an
 /// operator of `part_ops` is unfolded and starts the part of [`part_of_op`], or stays in
-/// `part`; anything else is an atom of `part`.
+/// `part`; anything else is split, in `part`.
 pub(super) fn ambient_step(goal: &Goal, part: &Part, part_ops: &[InvariantOp]) -> (Step, Part) {
     let concl = &goal.concl;
     if let Some((names, _)) = goals::as_forall(concl) {
@@ -315,9 +315,6 @@ pub(super) fn ambient_step(goal: &Goal, part: &Part, part_ops: &[InvariantOp]) -
     if goals::as_implication(concl).is_some() {
         return (Step::Premise(goals::fresh_name(goal, "hpre")), part.clone());
     }
-    if goals::as_conjunction(concl).is_some() {
-        return (Step::Split, part.clone());
-    }
     match goals::app_op_leaf(concl) {
         Some("inv") => (Step::Unfold("inv".into()), Part::Invariant),
         Some(op) => match part_ops.iter().find(|o| o.name == op) {
@@ -325,9 +322,24 @@ pub(super) fn ambient_step(goal: &Goal, part: &Part, part_ops: &[InvariantOp]) -
                 Step::Unfold(op.to_string()),
                 part_of_op(listed).unwrap_or_else(|| part.clone()),
             ),
-            None => (Step::Atom, part.clone()),
+            None => (Step::Split, part.clone()),
         },
-        None => (Step::Atom, part.clone()),
+        None => (Step::Split, part.clone()),
+    }
+}
+
+/// The two decisions on an exit-path `if` whose condition reads `cond`, the one Domino predicts
+/// first (story 64 §3.1): `rcondf` on a done-flag guard (`!ec_done`), which comes after the
+/// side's terminal; on the router's tail `if (ec_result = None)`, `rcondt` when the side's
+/// terminal is an abort (`aborts`), else `rcondf`; on any other `if`, or with no terminal
+/// known, `rcondf` first.
+pub(super) fn exit_decisions(cond: &str, aborts: Option<bool>) -> [&'static str; 2] {
+    let cond = cond.trim().trim_start_matches('(').trim_start();
+    let router_tail = cond.starts_with("ec_result = None");
+    if router_tail && aborts == Some(true) {
+        ["rcondt", "rcondf"]
+    } else {
+        ["rcondf", "rcondt"]
     }
 }
 
@@ -1580,56 +1592,95 @@ impl Prover<'_> {
         self.leaf_of(idx, pair)
     }
 
+    /// The leaf procedure (story 64): decide the exit path, reduce the programs to a formula
+    /// with `auto`, then open that formula into its leaf parts. A leaf whose programs do not
+    /// reduce to a formula is admitted whole. The leaf budget runs from the formula on.
     fn leaf_of(&mut self, node: usize, pair: Option<&PairRecord>) -> R<()> {
-        let fails = |part: &Part| pair.is_some_and(|p| pair_view(p, part) == DominoView::Fails);
-        // a claim that fails in Domino: split at once, so the parts that can hold still get tried
-        if !fails(&Part::EqualOutput) && !fails(&Part::Invariant) {
-            let with_hints = format!("auto => /> &1 &2 *; {}", self.hint_sentence());
-            let fast = "auto => /> &1 &2 *; smt().";
-            // the fast path; then again after `sp.`, which also finishes the router's tail
-            // `if`; then with the project's hints
-            let attempts: [Vec<&str>; 3] =
-                [vec![fast], vec!["sp.", fast], vec![with_hints.as_str()]];
-            for (n, steps) in (1..).zip(&attempts) {
-                if self.as_role(Role::LeafFallback(n), |p| p.try_close(steps))? {
-                    return Ok(());
-                }
-            }
-        }
-        // Split by meaning, before `/>` reorders and substitutes: `sp.` also finishes the
-        // router's tail `if`, then `skip` leaves `forall &1 &2, pre => post` with `post`
-        // (`equal-output /\ inv …`) as the program wrote it. A tail that `sp` cannot decide is
-        // handled by `auto.` instead, whose wp turns it into an `if` inside the formula.
-        let premise = "hpre";
-        if !self.as_role(Role::Reduce, |p| p.reduce_leaf(premise))? {
+        self.as_role(Role::ExitPath, |p| p.decide_exit_path(pair))?;
+        let before = self.count();
+        if !self.as_role(Role::Reduce, |p| p.reduce_leaf("hpre"))? {
             return self.admit_ec_failed(node, &Part::Whole, "equal-output+invariant");
         }
+        if self.count() < before {
+            return Ok(());
+        }
         self.deadline = leaf_deadline(self.leaf_budget, std::time::Instant::now());
-        let result = self.as_role(Role::Split, |p| p.solve_ambient(node, pair, Part::Whole));
+        let result = self.as_role(Role::Split, |p| p.open_part(node, pair, Part::Whole));
         self.deadline = None;
         result
     }
 
-    /// Turns the leaf's program goal into `forall &1 &2, pre => post`, the premise introduced as
-    /// `premise` and the invariant unfolded in it: whether it did.
+    /// The side (1 or 2) of the first `if` left in the front goal's programs, side 1 first,
+    /// and that `if`'s condition.
+    fn first_exit_if(&self) -> Option<(u8, String)> {
+        let (l, r) = self.front().and_then(goals::sides)?;
+        let first = |side: &crate::easycrypt::json::Side| {
+            side.stmt.iter().find(|i| i.kind == "if").map(|i| match &i.cond {
+                Some(c) if !c.pp.is_empty() => c.pp.clone(),
+                _ => i.pp.trim_start_matches("if").to_string(),
+            })
+        };
+        first(l).map(|c| (1, c)).or_else(|| first(r).map(|c| (2, c)))
+    }
+
+    /// Decides the `if`s left in the front goal's programs, one at a time: the first `if` of
+    /// side 1, else of side 2, by `rcondt{i} ^if; 1: by auto.` or `rcondf`, the decision of
+    /// [`exit_decisions`] first. Stops at the first `if` that neither decision takes (`auto`'s
+    /// wp then takes it into the formula), and after as many decisions as the goal had `if`s.
+    fn decide_exit_path(&mut self, pair: Option<&PairRecord>) -> R<()> {
+        let bound = self.front().and_then(goals::sides).map_or(0, |(l, r)| {
+            l.stmt.iter().chain(&r.stmt).filter(|i| i.kind == "if").count()
+        });
+        for _ in 0..bound {
+            let Some((side, cond)) = self.first_exit_if() else {
+                return Ok(());
+            };
+            let aborts = pair.map(|p| match side {
+                1 => p.left.terminal.is_abort,
+                _ => p.right.terminal.is_abort,
+            });
+            if !self.decide_if(side, &cond, aborts)? {
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    /// The first `if` of `side`, decided by the predicted decision, else by the other one:
+    /// whether either was accepted with its side goal closed.
+    fn decide_if(&mut self, side: u8, cond: &str, aborts: Option<bool>) -> R<bool> {
+        for tactic in exit_decisions(cond, aborts) {
+            let before = self.count();
+            let sentence = format!("{tactic}{{{side}}} ^if; 1: by auto.");
+            if self.attempt(&[&sentence], |p| {
+                p.count() == before && p.front().is_some_and(goals::is_program)
+            })? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// `auto => &1 &2 <premise>.` on the leaf's program goal, then the invariant unfolded in
+    /// the premise. Whether it gave a formula or closed the goal; `false` (with nothing kept)
+    /// if `auto` failed or left a program goal.
     fn reduce_leaf(&mut self, premise: &str) -> R<bool> {
         let before = self.count();
-        let reduced = self.attempt(&["sp.", &format!("skip => &1 &2 {premise}.")], |p| {
-            p.count() == before && p.front().is_some_and(goals::is_ambient)
-        })? || self
-            .attempt(&["auto.", &format!("move => &1 &2 {premise}.")], |p| {
-                p.count() == before && p.front().is_some_and(goals::is_ambient)
-            })?;
-        if reduced {
+        let reduced = self.attempt(&[&format!("auto => &1 &2 {premise}.")], |p| {
+            p.count() < before || (p.count() == before && p.front().is_some_and(goals::is_ambient))
+        })?;
+        if reduced && self.count() == before {
             self.unfold_premise(premise)?;
         }
         Ok(reduced)
     }
 
-    /// Takes the front ambient goal apart along the JSON of its formula: binders and premises
-    /// are introduced, conjunctions split, `inv` and the [`Self::part_ops`] unfolded; what is
-    /// left is closed by [`Self::atom`].
-    fn solve_ambient(&mut self, node: usize, pair: Option<&PairRecord>, part: Part) -> R<()> {
+    /// Opens the front ambient goal, which belongs to `part`, until it is leaf parts: binders
+    /// and premises are introduced (`/=` removes the `let`s and record projections), `inv` and
+    /// the [`Self::part_ops`] unfolded (a claim operator makes the goal that claim's, and a
+    /// claim that fails in Domino is admitted at once), and anything else is `do split` into
+    /// bullets. A goal that nothing opens is a leaf part, which goes to [`Self::atom`].
+    fn open_part(&mut self, node: usize, pair: Option<&PairRecord>, part: Part) -> R<()> {
         let mut part = part;
         for _ in 0..64 {
             if self
@@ -1659,44 +1710,45 @@ impl Prover<'_> {
                 }
             }
 
-            match step {
-                Step::Intro(names) => {
-                    if !self.send(&format!("move => {names}."))? {
-                        return self.atom(node, pair, &part);
-                    }
-                }
-                Step::Premise(name) => {
-                    if !self.send(&format!("move => {name}."))? {
-                        return self.atom(node, pair, &part);
-                    }
-                    // let the solver see through the invariant in the premise just introduced
-                    self.unfold_premise(&name)?;
-                }
-                Step::Unfold(op) => {
-                    if !self.send(&format!("rewrite /{op}."))? {
-                        return self.atom(node, pair, &part);
-                    }
-                }
-                Step::Split => {
-                    let before = self.count();
-                    if !self.send("split.")? || self.count() != before + 1 {
-                        return self.atom(node, pair, &part);
-                    }
-                    // the first conjunct is the postcondition's equal-output part unless it
-                    // is `inv` or a relation, which the next round recognises
-                    let first = if part == Part::Whole {
-                        Part::EqualOutput
-                    } else {
-                        part.clone()
-                    };
-                    self.bullet(|p| p.solve_ambient(node, pair, first))?;
-                    let second = part.clone();
-                    return self.bullet(|p| p.solve_ambient(node, pair, second));
-                }
-                Step::Atom => return self.atom(node, pair, &part),
+            if step == Step::Split {
+                return self.split_part(node, pair, &part);
+            }
+            if !self.open_step(step)? {
+                return self.atom(node, pair, &part);
             }
         }
         self.atom(node, pair, &part)
+    }
+
+    /// One step of [`Self::open_part`] that keeps one goal: whether EasyCrypt accepted it.
+    fn open_step(&mut self, step: Step) -> R<bool> {
+        match step {
+            Step::Intro(names) => self.send(&format!("move => {names} /=.")),
+            Step::Premise(name) => {
+                let sent = self.send(&format!("move => {name} /=."))?;
+                if sent {
+                    // let the solver see through the invariant in the premise just introduced
+                    self.unfold_premise(&name)?;
+                }
+                Ok(sent)
+            }
+            Step::Unfold(op) => self.send(&format!("rewrite /{op} /=.")),
+            Step::Split => Ok(false),
+        }
+    }
+
+    /// `do split.`: each goal it gives is a bullet, opened again in `part`. If it gives one
+    /// goal (or is refused), nothing is kept and the goal is a leaf part.
+    fn split_part(&mut self, node: usize, pair: Option<&PairRecord>, part: &Part) -> R<()> {
+        let before = self.count();
+        if !self.attempt(&["do split."], |p| p.count() > before)? {
+            return self.atom(node, pair, part);
+        }
+        for _ in 0..=self.count() - before {
+            let same = part.clone();
+            self.bullet(|p| p.open_part(node, pair, same))?;
+        }
+        Ok(())
     }
 
     /// The end of a part: `smt()`, a rewrite of table reads, `smt(<hints>)`, else an admit that
