@@ -62,6 +62,7 @@ struct EventRow {
 struct EcSums {
     tactic_ms: u64,
     serialize_ms: u64,
+    parse_ms: u64,
     smt_calls: u64,
     translate_ms: u64,
     prepare_ms: u64,
@@ -76,6 +77,8 @@ pub struct Sentence<'a> {
     pub role: &'a Role,
     /// The record's `ms`.
     pub ms: u128,
+    /// The record's `parse_ms`: the part of `ms` Domino spent parsing the answer.
+    pub parse_ms: u64,
     /// The record's `bytes`: the answer's length before the cap.
     pub bytes: usize,
     /// EasyCrypt refused the sentence, or it was interrupted.
@@ -91,7 +94,9 @@ impl TimeByRole {
         row.failed += usize::from(sentence.failed);
         row.largest = row.largest.max(sentence.bytes);
         if let Some(timing) = sentence.timing {
-            self.0.easycrypt.get_or_insert_with(EcSums::default).add(timing);
+            let sums = self.0.easycrypt.get_or_insert_with(EcSums::default);
+            sums.add(timing);
+            sums.parse_ms += sentence.parse_ms;
         }
     }
 
@@ -206,6 +211,7 @@ impl EcSums {
     fn merge(&mut self, other: &EcSums) {
         self.tactic_ms += other.tactic_ms;
         self.serialize_ms += other.serialize_ms;
+        self.parse_ms += other.parse_ms;
         self.smt_calls += other.smt_calls;
         self.translate_ms += other.translate_ms;
         self.prepare_ms += other.prepare_ms;
@@ -219,7 +225,7 @@ impl EcSums {
         let ms = |ms: u64| duration(u128::from(ms));
         format!(
             "    EasyCrypt: tactic {} (smt {}: translate {}, prepare {}, prover {};\n               \
-             {} calls: {} valid, {} timeout, {} unknown), serialize {}\n",
+             {} calls: {} valid, {} timeout, {} unknown), serialize {}, Domino parse {}\n",
             ms(self.tactic_ms),
             ms(self.translate_ms + self.prepare_ms + self.prover_ms),
             ms(self.translate_ms),
@@ -229,7 +235,8 @@ impl EcSums {
             self.valid,
             self.timeout,
             self.unknown,
-            ms(self.serialize_ms)
+            ms(self.serialize_ms),
+            ms(self.parse_ms)
         )
     }
 }
@@ -278,6 +285,7 @@ mod tests {
         Sentence {
             role,
             ms,
+            parse_ms: 0,
             bytes,
             failed,
             timing: None,
@@ -349,6 +357,7 @@ mod tests {
         for timing in [&with_smt, &without] {
             t.add_sentence(&Sentence {
                 timing: Some(timing),
+                parse_ms: 1_500,
                 ..sentence(&Role::Split, 26_000, 5, false)
             });
         }
@@ -356,7 +365,7 @@ mod tests {
         assert!(
             text.ends_with(
                 "    EasyCrypt: tactic 52.0s (smt 45.0s: translate 2.0s, prepare 3.0s, prover 40.0s;\n\
-                 \x20              3 calls: 1 valid, 1 timeout, 1 unknown), serialize 0.8s\n"
+                 \x20              3 calls: 1 valid, 1 timeout, 1 unknown), serialize 0.8s, Domino parse 3.0s\n"
             ),
             "{text}"
         );

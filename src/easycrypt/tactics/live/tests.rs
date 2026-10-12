@@ -107,6 +107,7 @@ impl Rig {
                 sentence,
                 ms.into(),
                 0,
+                0,
                 &response,
             );
             self.transcript.write_all(record.as_bytes()).unwrap();

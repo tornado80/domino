@@ -220,7 +220,10 @@ impl Form {
         if self.kind != "equivF" {
             return None;
         }
-        Some((self.left.as_ref()?.proc.as_ref()?, self.right.as_ref()?.proc.as_ref()?))
+        Some((
+            self.left.as_ref()?.proc.as_ref()?,
+            self.right.as_ref()?.proc.as_ref()?,
+        ))
     }
 }
 
@@ -295,28 +298,50 @@ pub fn parse_response(line: &str) -> Result<Response, serde_json::Error> {
     Ok(response)
 }
 
-/// A list of formulas, or a single formula (`pr`'s `args`) as a list of one.
+/// `args` as EasyCrypt sends it: a list of formulas, or one formula (`pr`) as a list of one.
+///
+/// A visitor, not an untagged enum: the first token picks the shape, so nothing is buffered.
+/// An untagged enum copies each value into serde's `Content` before it tries a variant, and
+/// since a formula's `args` hold formulas, a node at depth *d* is copied *d* times (story 60).
 fn one_or_many<'de, D>(deserializer: D) -> Result<Vec<Form>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum OneOrMany {
-        Many(Vec<Form>),
-        One(Box<Form>),
+    struct OneOrMany;
+
+    impl<'de> serde::de::Visitor<'de> for OneOrMany {
+        type Value = Vec<Form>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a formula or a list of formulas")
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> Result<Vec<Form>, A::Error> {
+            let mut forms = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+            while let Some(form) = seq.next_element()? {
+                forms.push(form);
+            }
+            Ok(forms)
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Vec<Form>, A::Error> {
+            let form = Form::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+            Ok(vec![form])
+        }
     }
-    Ok(match OneOrMany::deserialize(deserializer)? {
-        OneOrMany::Many(v) => v,
-        OneOrMany::One(f) => vec![*f],
-    })
+
+    deserializer.deserialize_any(OneOrMany)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const HEAD: &str = r#""version":"domino-json/2","state":1,"status":"ok","messages":[],"proof":null"#;
+    const HEAD: &str =
+        r#""version":"domino-json/2","state":1,"status":"ok","messages":[],"proof":null"#;
 
     #[test]
     fn an_answer_without_timing_parses() {
@@ -345,5 +370,62 @@ mod tests {
         ))
         .unwrap();
         assert!(r.timing.unwrap().smt.is_none());
+    }
+
+    fn parse_form(text: &str) -> Form {
+        let mut deserializer = serde_json::Deserializer::from_str(text);
+        deserializer.disable_recursion_limit();
+        Form::deserialize(&mut deserializer).unwrap()
+    }
+
+    #[test]
+    fn args_parse_as_a_list_and_as_a_single_formula() {
+        let atom = r#"{"kind":"local","pp":"x"}"#;
+        let list = parse_form(&format!(
+            r#"{{"kind":"app","op":"/\\","args":[{atom},{atom}]}}"#
+        ));
+        assert_eq!(list.args.len(), 2);
+        let single = parse_form(&format!(r#"{{"kind":"pr","args":{atom}}}"#));
+        assert_eq!(single.args.len(), 1);
+        assert_eq!(single.args[0].pp, "x");
+        let absent = parse_form(atom);
+        assert!(absent.args.is_empty());
+    }
+
+    /// Story 60: the parse is linear in the depth. The old untagged enum copied each subtree once
+    /// per level above it, and took seconds on this formula; the bound is generous for slow CI.
+    #[test]
+    fn a_formula_nested_two_thousand_deep_parses_fast() {
+        const DEPTH: usize = 2_000;
+        let atom = r#"{"kind":"local","pp":"x"}"#;
+        let mut text = String::new();
+        for _ in 0..DEPTH {
+            text.push_str(r#"{"kind":"app","op":"/\\","args":["#);
+            text.push_str(atom);
+            text.push(',');
+        }
+        text.push_str(atom);
+        text.push_str(&"]}".repeat(DEPTH));
+        let took = std::thread::Builder::new()
+            .stack_size(1 << 28)
+            .spawn(move || {
+                let began = std::time::Instant::now();
+                let form = parse_form(&text);
+                let took = began.elapsed();
+                let mut depth = 0;
+                let mut node = &form;
+                while let Some(right) = node.args.get(1) {
+                    depth += 1;
+                    node = right;
+                }
+                assert_eq!(depth, DEPTH);
+                // dropping a deep chain recurses too: do it on this stack
+                drop(form);
+                took
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(took < std::time::Duration::from_millis(500), "{took:?}");
     }
 }

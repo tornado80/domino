@@ -113,6 +113,8 @@ pub struct Exchange {
 struct Line {
     raw: String,
     parsed: Result<Response, serde_json::Error>,
+    /// How long the parse took: Domino's part of the round trip (story 60).
+    parse_ms: u64,
 }
 
 /// The stack of the thread that reads and parses EasyCrypt's answers: a goal's formulas nest
@@ -288,8 +290,15 @@ impl Session {
                     match reader.read_line(&mut line) {
                         Ok(0) => break,
                         Ok(_) => {
+                            let began = Instant::now();
                             let parsed = json::parse_response(&line);
-                            if tx.send(Ok(Line { raw: line, parsed })).is_err() {
+                            let parse_ms = began.elapsed().as_millis() as u64;
+                            let line = Line {
+                                raw: line,
+                                parsed,
+                                parse_ms,
+                            };
+                            if tx.send(Ok(line)).is_err() {
                                 break;
                             }
                         }
@@ -366,7 +375,7 @@ impl Session {
     }
 
     /// Appends every later exchange to `writer` as one JSON line (`{"file": tag, "ctx": …,
-    /// "sentence": …, "ms": …, "response": …}`), undone attempts included. This is
+    /// "sentence": …, "ms": …, "parse_ms": …, "response": …}`), undone attempts included. This is
     /// `ec-transcript.jsonl` at `path` (story 27 §3.7); `mode` says whether EasyCrypt's answers
     /// are written verbatim or with their goals capped (story 31, [`transcript`]).
     ///
@@ -531,7 +540,8 @@ impl Session {
             }
         };
         let line = line?;
-        let (ms, record_bytes) = self.write_record(sentence, ran, interrupts, &line.raw)?;
+        let (ms, record_bytes) =
+            self.write_record(sentence, ran, interrupts, line.parse_ms, &line.raw)?;
         let mut response = line.parsed.map_err(|source| SessionError::BadAnswer {
             sentence: sentence.to_string(),
             source,
@@ -541,6 +551,7 @@ impl Session {
             time.add_sentence(&time_by_role::Sentence {
                 role: &self.context.role,
                 ms,
+                parse_ms: line.parse_ms,
                 bytes: line.raw.trim_end().len(),
                 failed: response.status != Status::Ok,
                 timing: response.timing.as_deref(),
@@ -643,6 +654,7 @@ impl Session {
         sentence: &str,
         ran: Duration,
         interrupts: usize,
+        parse_ms: u64,
         answer: &str,
     ) -> Result<(u128, Option<usize>), SessionError> {
         self.clock.until = Some(Instant::now());
@@ -656,6 +668,7 @@ impl Session {
             &self.context,
             sentence,
             ms,
+            parse_ms,
             interrupts,
             answer,
         );
@@ -1429,8 +1442,9 @@ done
         assert_eq!(
             text,
             format!(
-                "{{\"file\":\"Eq.ec\",\"ctx\":{{\"oracle\":null,\"role\":\"structure\"}},\"sentence\":\"split.\",\"ms\":{},\"bytes\":{},\"response\":{}}}\n",
+                "{{\"file\":\"Eq.ec\",\"ctx\":{{\"oracle\":null,\"role\":\"structure\"}},\"sentence\":\"split.\",\"ms\":{},\"parse_ms\":{},\"bytes\":{},\"response\":{}}}\n",
                 ms["ms"],
+                ms["parse_ms"],
                 answer.trim_end().len(),
                 answer.trim_end()
             )

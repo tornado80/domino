@@ -329,6 +329,7 @@ fn the_report_shows_each_oracles_time_by_role_under_its_goals_closed_line() {
     let row = |role, ms, failed| Sentence {
         role,
         ms,
+        parse_ms: 0,
         bytes: 1_300_000,
         failed,
         timing: None,

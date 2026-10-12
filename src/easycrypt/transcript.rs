@@ -4,7 +4,7 @@
 //! bounded by story 31).
 //!
 //! One record per sentence sent, one JSON object per line:
-//! `{"file": <tag>, "ctx": <why it was sent>, "sentence": …, "ms": …, "bytes": …, "response": …}`,
+//! `{"file": <tag>, "ctx": <why it was sent>, "sentence": …, "ms": …, "parse_ms": …, "bytes": …, "response": …}`,
 //! with `"interrupts": <n>` before `response` when the sentence took `n` > 0 interrupts to stop.
 //! `ctx` is a [`SentenceCtx`]; `bytes` the length of EasyCrypt's answer before any cap. Between
 //! them are event records ([`event`]: `{"file", "ctx", "event", "ms"}`) for the time outside
@@ -254,13 +254,15 @@ pub fn event(tag: &str, ctx: &SentenceCtx, event: Event, ms: u128) -> String {
 }
 
 /// One sentence record, with its line break. `answer` is the line EasyCrypt answered with;
-/// `"bytes"` is its length before any cap.
+/// `"bytes"` is its length before any cap; `parse_ms` is the part of `ms` Domino spent parsing
+/// it.
 pub fn record(
     mode: EcTranscriptMode,
     tag: &str,
     ctx: &SentenceCtx,
     sentence: &str,
     ms: u128,
+    parse_ms: u64,
     interrupts: usize,
     answer: &str,
 ) -> String {
@@ -275,7 +277,7 @@ pub fn record(
         n => format!("\"interrupts\":{n},"),
     };
     format!(
-        "{{\"file\":{},\"ctx\":{},\"sentence\":{},\"ms\":{ms},\"bytes\":{},{interrupts}\"response\":{}}}\n",
+        "{{\"file\":{},\"ctx\":{},\"sentence\":{},\"ms\":{ms},\"parse_ms\":{parse_ms},\"bytes\":{},{interrupts}\"response\":{}}}\n",
         serde_json::Value::from(tag),
         ctx.to_json(),
         serde_json::Value::from(sentence),
@@ -452,13 +454,14 @@ pub(crate) mod tests {
             &ctx,
             "split.",
             12,
+            3,
             0,
             &answer,
         );
         assert_eq!(
             record,
             format!(
-                "{{\"file\":\"Eq.ec\",\"ctx\":{{\"oracle\":\"O\",\"node\":0,\"kind\":\"leaf\",\"role\":\"split\"}},\"sentence\":\"split.\",\"ms\":12,\"bytes\":{},\"response\":{}}}\n",
+                "{{\"file\":\"Eq.ec\",\"ctx\":{{\"oracle\":\"O\",\"node\":0,\"kind\":\"leaf\",\"role\":\"split\"}},\"sentence\":\"split.\",\"ms\":12,\"parse_ms\":3,\"bytes\":{},\"response\":{}}}\n",
                 answer.trim_end().len(),
                 answer.trim_end()
             )
@@ -469,7 +472,7 @@ pub(crate) mod tests {
     fn a_capped_record_of_a_real_answer_holds_its_front_goal_text_and_kinds() {
         let answer =
             std::fs::read_to_string("testdata/easycrypt/story31/answer-two-goals.json").unwrap();
-        let record = record(EcTranscriptMode::Capped, "Eq.ec", &SentenceCtx::default(), "split.", 12, 0, &answer);
+        let record = record(EcTranscriptMode::Capped, "Eq.ec", &SentenceCtx::default(), "split.", 12, 3, 0, &answer);
         assert!(record.ends_with("}\n") && record.lines().count() == 1);
         let v: serde_json::Value = serde_json::from_str(&record).unwrap();
         let full: serde_json::Value = serde_json::from_str(&answer).unwrap();
@@ -500,6 +503,7 @@ pub(crate) mod tests {
                 &SentenceCtx::default(),
                 "smt().",
                 900,
+                3,
                 0,
                 &answer,
             );
@@ -517,6 +521,7 @@ pub(crate) mod tests {
             &SentenceCtx::default(),
             "auto.",
             5,
+            3,
             0,
             &answer,
         );
