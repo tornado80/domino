@@ -139,6 +139,7 @@ fn admit() -> Admit {
         claim: "invariant".into(),
         domino: DominoView::Verified,
         goal: "g".into(),
+        smt: None,
     }
 }
 
@@ -237,7 +238,7 @@ fn steps_are_attributed_to_their_goal_with_status_and_error_text() {
     assert!(page.contains("b-timeout\">timed out"));
     assert!(page.contains("[J1 J2]"));
     assert!(page.contains(
-        "(* domino: J3 invariant; reason: domino-verified-ec-failed; Domino: verified *)"
+        "(* domino: J3 invariant; domino-verified-ec-failed *)"
     ));
     assert!(page.contains("st-admitted\">admitted"));
     // the summary lists the admit with its reason

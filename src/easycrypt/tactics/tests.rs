@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use super::driver::{pair_view, Part};
+use super::driver::{pair_view, Part, SmtOutcome};
 use super::*;
 use crate::debug::driver::{ClaimVerdict, PartVerdict, TerminalView, Verdict};
 use crate::debug::lockstep::{PairRecord, PairSide, EQUAL_OUTPUT};
@@ -103,10 +103,11 @@ fn an_admit_label_names_the_id_the_claim_the_reason_and_dominos_verdict() {
         claim: "invariant/StateRelation_rel_keys".into(),
         domino: DominoView::Verified,
         goal: String::new(),
+        smt: None,
     };
     assert_eq!(
         admit.label(),
-        "(* domino: J7 invariant/StateRelation_rel_keys; reason: domino-verified-ec-failed; Domino: verified *)"
+        "(* domino: J7 StateRelation_rel_keys; domino-verified-ec-failed *)"
     );
     // a sentence with such a comment is still one sentence for the session
     let sentences = split_sentences(&format!("admit. {}\nauto.", admit.label()));
@@ -283,6 +284,7 @@ fn admit(reason: AdmitReason, id: &str) -> Admit {
         claim: "equal-output".into(),
         domino: DominoView::Verified,
         goal: "x = y".into(),
+        smt: None,
     }
 }
 
@@ -308,7 +310,7 @@ fn the_report_counts_admits_by_reason_and_lists_the_verified_ones_with_their_goa
     );
     assert!(report.contains("goals closed: 4"), "{report}");
     assert!(
-        report.contains("admit J2 equal-output [domino-verified-ec-failed]"),
+        report.contains("admit J2 equal-output; domino-verified-ec-failed"),
         "{report}"
     );
     // only that class carries the goal text
@@ -367,10 +369,11 @@ fn the_admits_of_a_seal_have_their_own_reason_in_the_report() {
         claim: "open-goal".into(),
         domino: DominoView::NotApplicable,
         goal: String::new(),
+        smt: None,
     };
     assert_eq!(
         sealed.label(),
-        "(* domino: N3 open-goal; reason: interrupted; Domino: n/a *)"
+        "(* domino: N3 open-goal; interrupted *)"
     );
     let o = oracle_with(vec![
         admit(AdmitReason::Stuck, "S1"),
@@ -384,7 +387,7 @@ fn the_admits_of_a_seal_have_their_own_reason_in_the_report() {
         "{report}"
     );
     assert!(
-        report.contains("admit N3 open-goal [interrupted] Domino: n/a"),
+        report.contains("admit N3 open-goal; interrupted"),
         "{report}"
     );
 }
@@ -1129,6 +1132,9 @@ mod live {
             mismatches: vec![],
             stopped: None,
             resume: None,
+            premises: Vec::new(),
+            last_smt: None,
+            admit_smt: None,
         };
         // an alignment mismatch sends the whole oracle down the fallback
         prover
@@ -2714,6 +2720,9 @@ done
         mismatches: vec![],
         stopped: None,
         resume: None,
+        premises: Vec::new(),
+        last_smt: None,
+        admit_smt: None,
     };
     prover.prove_node(0).unwrap();
     prover.prove_node(1).unwrap();
@@ -2747,13 +2756,13 @@ done
         "N1 split do split.".to_string(),
         "N1 split do split.".to_string(),
         "N1 part-fallback smt(). #1 [equal-output+invariant]".to_string(),
-        "N1 part-fallback rewrite !get_set_neqE. #2 [equal-output+invariant]".to_string(),
-        format!("N1 part-fallback {hints} #3 [equal-output+invariant]"),
+        format!("N1 part-fallback {hints} #2 [equal-output+invariant]"),
+        format!("N1 part-fallback move: hpre => />; {hints} #3 [equal-output+invariant]"),
         "N1 admit admit.".to_string(),
         "N1 split do split.".to_string(),
         "N1 part-fallback smt(). #1 [equal-output+invariant]".to_string(),
-        "N1 part-fallback rewrite !get_set_neqE. #2 [equal-output+invariant]".to_string(),
-        format!("N1 part-fallback {hints} #3 [equal-output+invariant]"),
+        format!("N1 part-fallback {hints} #2 [equal-output+invariant]"),
+        format!("N1 part-fallback move: hpre => />; {hints} #3 [equal-output+invariant]"),
         "N1 admit admit.".to_string(),
     ];
     assert_eq!(said, expected);
@@ -2912,6 +2921,9 @@ done
         mismatches: vec![],
         stopped: None,
         resume: None,
+        premises: Vec::new(),
+        last_smt: None,
+        admit_smt: None,
     };
     prover.prove_node(0).unwrap();
     assert_eq!(prover.count(), 0, "the leaf is closed");
@@ -3080,12 +3092,18 @@ fn the_leaf_is_opened_until_only_parts_are_left_and_no_split_is_sent() {
     .to_vec();
     for _ in 0..3 {
         expected.push("split do split.".into());
-        for f in ["smt().", "rewrite !get_set_neqE.", "smt(get_setE mem_set emptyE)."] {
+        // story 65: the part fallback sequence, the premises in the order of introduction
+        for f in [
+            "smt().",
+            "smt(get_setE mem_set emptyE).",
+            "move: hpre hpre => />; smt(get_setE mem_set emptyE).",
+        ] {
             expected.push(format!("part-fallback {f} [{part}]"));
         }
         expected.push(format!("admit admit. [{part}]"));
     }
     assert_eq!(run.said, expected);
+    assert!(!run.said.iter().any(|s| s.contains("get_set_neqE")));
     assert!(!run.said.iter().any(|s| s.ends_with(" split.") && !s.ends_with("do split.")));
     assert!(!run.said.iter().any(|s| s.starts_with("leaf-fallback")));
     assert_eq!(run.admits.len(), 3);
@@ -3093,7 +3111,87 @@ fn the_leaf_is_opened_until_only_parts_are_left_and_no_split_is_sent() {
         assert_eq!(admit.claim, part);
         // the relation's own verdict, not the failing invariant's
         assert_eq!(admit.domino, DominoView::Verified);
+        // the last fallback was refused with no prover outcome
+        assert_eq!(admit.smt, Some(SmtOutcome::Error));
+        assert!(admit.label().ends_with("; smt: error *)"), "{}", admit.label());
     }
+}
+
+/// Story 65: the outcome of the last fallback's answer, from its `timing.smt`.
+#[test]
+fn the_smt_outcome_is_timeout_then_unknown_then_error() {
+    let answer = |status: &str, smt: &str| -> crate::easycrypt::json::Response {
+        serde_json::from_str(&format!(
+            r#"{{"version":"domino-json/2","state":1,"status":"{status}","messages":[],
+               "timing":{{"tactic_ms":1,"serialize_ms":0{smt}}}}}"#
+        ))
+        .unwrap()
+    };
+    let calls = |valid: u64, timeout: u64, unknown: u64| {
+        format!(
+            r#","smt":{{"calls":{},"translate_ms":0,"prepare_ms":0,"prover_ms":0,"valid":{valid},"timeout":{timeout},"unknown":{unknown}}}"#,
+            valid + timeout + unknown
+        )
+    };
+    let of = |r| SmtOutcome::of_answer(&r);
+    assert_eq!(of(answer("error", &calls(0, 1, 2))), Some(SmtOutcome::Timeout));
+    assert_eq!(of(answer("error", &calls(1, 0, 2))), Some(SmtOutcome::Unknown));
+    assert_eq!(of(answer("error", &calls(0, 0, 0))), Some(SmtOutcome::Error));
+    assert_eq!(of(answer("error", "")), Some(SmtOutcome::Error));
+    assert_eq!(of(answer("ok", &calls(1, 0, 0))), None);
+}
+
+/// Story 65: `Domino: <view>` only where the reason does not say it, and `smt:` when a fallback
+/// ran.
+#[test]
+fn the_admit_label_says_dominos_view_only_where_the_reason_does_not() {
+    for reason in AdmitReason::ALL {
+        let admit = Admit {
+            reason,
+            id: "J1".into(),
+            claim: "invariant/StateRelation_s".into(),
+            domino: DominoView::Verified,
+            goal: String::new(),
+            smt: Some(SmtOutcome::Timeout),
+        };
+        let says = matches!(
+            reason,
+            AdmitReason::Router
+                | AdmitReason::Stuck
+                | AdmitReason::SeqPost
+                | AdmitReason::ProgramMismatch
+        );
+        let domino = if says { "; Domino: verified" } else { "" };
+        assert_eq!(
+            admit.label(),
+            format!(
+                "(* domino: J1 StateRelation_s; {}{domino}; smt: timeout *)",
+                reason.slug()
+            )
+        );
+    }
+    let whole = Admit {
+        reason: AdmitReason::DominoVerifiedEcFailed,
+        id: "J2".into(),
+        claim: "equal-output+invariant".into(),
+        domino: DominoView::Verified,
+        goal: String::new(),
+        smt: None,
+    };
+    assert_eq!(whole.label(), "(* domino: J2; domino-verified-ec-failed *)");
+
+    // a session record written before story 65 reads back without change: `domino` is kept
+    let old = AdmitRecord {
+        node: "J1".into(),
+        reason: "domino-verified-ec-failed".into(),
+        claim: "invariant/StateRelation_s".into(),
+        domino: "verified".into(),
+    };
+    let back = Admit::from_record(&old).unwrap().to_record();
+    assert_eq!(
+        (back.node, back.reason, back.claim, back.domino),
+        (old.node, old.reason, old.claim, old.domino)
+    );
 }
 
 /// §3.6 for a claim: the part is admitted as soon as the loop sees its operator. A part with no

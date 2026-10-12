@@ -1721,6 +1721,9 @@ where
         mismatches: Vec::new(),
         stopped: None,
         resume,
+        premises: Vec::new(),
+        last_smt: None,
+        admit_smt: None,
     };
     let proved = prover.oracle(|goal: &Goal| {
         match super::check::align_goal(
@@ -1824,14 +1827,7 @@ impl EquivalenceTactics {
                     o.stats.admits.len()
                 );
                 for a in &o.stats.admits {
-                    let _ = writeln!(
-                        out,
-                        "    admit {} {} [{}] Domino: {}",
-                        a.id,
-                        a.claim,
-                        a.reason.slug(),
-                        a.domino.slug()
-                    );
+                    let _ = writeln!(out, "    admit {}", a.fields());
                 }
                 continue;
             }
@@ -1888,14 +1884,7 @@ impl EquivalenceTactics {
                 let _ = writeln!(out, "    alignment mismatch (fallback used): {m}");
             }
             for a in &o.stats.admits {
-                let _ = writeln!(
-                    out,
-                    "    admit {} {} [{}] Domino: {}",
-                    a.id,
-                    a.claim,
-                    a.reason.slug(),
-                    a.domino.slug()
-                );
+                let _ = writeln!(out, "    admit {}", a.fields());
                 if a.reason == AdmitReason::DominoVerifiedEcFailed {
                     let goal: String = a.goal.chars().take(4000).collect();
                     let _ = writeln!(out, "      goal: {goal}");

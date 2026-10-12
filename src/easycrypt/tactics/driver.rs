@@ -88,6 +88,18 @@ impl AdmitReason {
     pub fn from_slug(slug: &str) -> Option<AdmitReason> {
         AdmitReason::ALL.into_iter().find(|r| r.slug() == slug)
     }
+
+    /// Whether the admit comment needs `Domino: <view>`: only for a reason that does not say
+    /// what Domino concluded.
+    fn needs_domino_view(self) -> bool {
+        matches!(
+            self,
+            AdmitReason::Router
+                | AdmitReason::Stuck
+                | AdmitReason::SeqPost
+                | AdmitReason::ProgramMismatch
+        )
+    }
 }
 
 /// What Domino itself concluded about the claim an admit stands for.
@@ -144,19 +156,72 @@ pub struct Admit {
     pub domino: DominoView,
     /// The goal as EasyCrypt prints it on one line.
     pub goal: String,
+    /// How the last part fallback ended (story 65), or `None` when no fallback ran. The
+    /// session record does not hold it.
+    pub smt: Option<SmtOutcome>,
+}
+
+/// How the last part fallback before an admit ended (story 65).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmtOutcome {
+    /// A prover call timed out: the goal is too large, or the time too short.
+    Timeout,
+    /// The provers stopped without a proof: a lemma is missing, or the claim does not hold in
+    /// EasyCrypt's model.
+    Unknown,
+    /// EasyCrypt refused the sentence with no prover call that timed out or gave up.
+    Error,
+}
+
+impl SmtOutcome {
+    pub fn slug(self) -> &'static str {
+        match self {
+            SmtOutcome::Timeout => "timeout",
+            SmtOutcome::Unknown => "unknown",
+            SmtOutcome::Error => "error",
+        }
+    }
+
+    /// The outcome of an answer: `timeout` if a prover call timed out, else `unknown` if one
+    /// gave up, else `error` if EasyCrypt refused the sentence, else `None`.
+    pub fn of_answer(response: &crate::easycrypt::json::Response) -> Option<SmtOutcome> {
+        match response.timing.as_ref().and_then(|t| t.smt) {
+            Some(s) if s.timeout > 0 => Some(SmtOutcome::Timeout),
+            Some(s) if s.unknown > 0 => Some(SmtOutcome::Unknown),
+            _ if response.status != Status::Ok => Some(SmtOutcome::Error),
+            _ => None,
+        }
+    }
 }
 
 impl Admit {
-    /// The comment after the `admit.`: `(* domino: J7 invariant/StateRelation_rel; reason: <slug>;
-    /// Domino: verified *)`.
+    /// The comment after the `admit.`: `(* domino: <fields> *)`, see [`Self::fields`].
     pub fn label(&self) -> String {
-        format!(
-            "(* domino: {} {}; reason: {}; Domino: {} *)",
-            self.id,
-            self.claim,
-            self.reason.slug(),
-            self.domino.slug()
-        )
+        format!("(* domino: {} *)", self.fields())
+    }
+
+    /// `J7 StateRelation_rel; domino-verified-ec-failed; smt: timeout`: the node id, the claim
+    /// (an invariant claim by its operator's name, nothing for the whole leaf), the reason,
+    /// `Domino: <view>` only when the reason does not say it, and the last fallback's outcome
+    /// when a fallback ran. The report's admit line has the same fields.
+    pub fn fields(&self) -> String {
+        let claim = self.claim.strip_prefix("invariant/").unwrap_or(&self.claim);
+        let claim = claim
+            .strip_prefix("equal-output+invariant")
+            .unwrap_or(claim)
+            .trim();
+        let mut out = self.id.clone();
+        if !claim.is_empty() {
+            out = format!("{out} {claim}");
+        }
+        out = format!("{out}; {}", self.reason.slug());
+        if self.reason.needs_domino_view() {
+            out = format!("{out}; Domino: {}", self.domino.slug());
+        }
+        if let Some(smt) = self.smt {
+            out = format!("{out}; smt: {}", smt.slug());
+        }
+        out
     }
 
     /// The admit as the session record holds it, without the goal.
@@ -182,6 +247,7 @@ impl Admit {
                 DominoView::from_slug(&record.domino)?
             },
             goal: String::new(),
+            smt: None,
         })
     }
 }
@@ -424,6 +490,10 @@ const BASE_SMT_LEMMAS: [&str; 3] = ["get_setE", "mem_set", "emptyE"];
 /// unfolded.
 const FALLBACKS: usize = 4;
 
+/// The length of the part fallback sequence ([`Prover::atom`]); story 66 adds the key case
+/// split as the fourth.
+const PART_FALLBACKS: usize = 3;
+
 /// Timeouts of the prover.
 #[derive(Debug, Clone, Copy)]
 pub struct Timeouts {
@@ -559,6 +629,13 @@ pub(super) struct Prover<'a> {
     pub stopped: Option<Sealed>,
     /// Set when the oracle is resumed from the session record's closed nodes.
     pub resume: Option<Resume>,
+    /// The premises the leaf procedure introduced on the way to the front goal, in the order of
+    /// introduction (story 65): part fallback 3 moves them back into the goal.
+    pub premises: Vec<String>,
+    /// The outcome of the last sentence sent ([`SmtOutcome::of_answer`]).
+    pub last_smt: Option<SmtOutcome>,
+    /// The outcome of the last part fallback, for the next admit's comment; the admit takes it.
+    pub admit_smt: Option<SmtOutcome>,
 }
 
 impl Prover<'_> {
@@ -591,6 +668,7 @@ impl Prover<'_> {
             claim: "open-goal".into(),
             domino: DominoView::NotApplicable,
             goal: String::new(),
+            smt: None,
         };
         let (script, admits) = self.script.sealed(open, &admit.label());
         let node = admit.id.clone();
@@ -724,7 +802,10 @@ impl Prover<'_> {
         let ok = match self.session.send(sentence) {
             // the sentence a stop interrupted lost its goals: stop as if it had not been sent
             Ok(response) if response.goals_lost() => return Err(self.stop_with(before)),
-            Ok(response) => response.status == Status::Ok,
+            Ok(response) => {
+                self.last_smt = SmtOutcome::of_answer(response);
+                response.status == Status::Ok
+            }
             Err(e) => return Err(self.session_failed(e)),
         };
         if ok {
@@ -856,12 +937,14 @@ impl Prover<'_> {
             .front()
             .map(|g| g.concl.pp.replace('\n', " "))
             .unwrap_or_default();
+        let smt = self.admit_smt.take();
         let admit = Admit {
             reason,
             id: id.to_string(),
             claim: claim.to_string(),
             domino,
             goal: goal_pp,
+            smt,
         };
         let label = admit.label();
         self.stop_point()?;
@@ -1604,6 +1687,7 @@ impl Prover<'_> {
         if self.count() < before {
             return Ok(());
         }
+        self.premises = vec!["hpre".to_string()];
         self.deadline = leaf_deadline(self.leaf_budget, std::time::Instant::now());
         let result = self.as_role(Role::Split, |p| p.open_part(node, pair, Part::Whole));
         self.deadline = None;
@@ -1727,6 +1811,7 @@ impl Prover<'_> {
             Step::Premise(name) => {
                 let sent = self.send(&format!("move => {name} /=."))?;
                 if sent {
+                    self.premises.push(name.clone());
                     // let the solver see through the invariant in the premise just introduced
                     self.unfold_premise(&name)?;
                 }
@@ -1744,30 +1829,47 @@ impl Prover<'_> {
         if !self.attempt(&["do split."], |p| p.count() > before)? {
             return self.atom(node, pair, part);
         }
+        // a premise a bullet introduces is that bullet's own
+        let premises = self.premises.len();
         for _ in 0..=self.count() - before {
             let same = part.clone();
             self.bullet(|p| p.open_part(node, pair, same))?;
+            self.premises.truncate(premises);
         }
         Ok(())
     }
 
-    /// The end of a part: `smt()`, a rewrite of table reads, `smt(<hints>)`, else an admit that
-    /// keeps the unfoldings and introductions already made.
+    /// The part fallback sequence (story 65): `smt().`, `smt(<hints>).`, then the premises the
+    /// leaf procedure introduced moved back and crushed (`move: <premises> => />; smt(<hints>).`,
+    /// skipped when there are none). Each is one sentence. Else an admit that keeps the
+    /// unfoldings and introductions already made, with the last fallback's outcome.
     fn atom(&mut self, node: usize, pair: Option<&PairRecord>, part: &Part) -> R<()> {
         let hints = self.hint_sentence();
-        for (n, steps) in (1..).zip([
-            vec!["smt()."],
-            vec!["rewrite !get_set_neqE.", "smt()."],
-            vec![hints.as_str()],
-        ]) {
+        let mut fallbacks = vec!["smt().".to_string(), hints.clone()];
+        if !self.premises.is_empty() {
+            fallbacks.push(format!("move: {} => />; {hints}", self.premises.join(" ")));
+        }
+        let mut outcome = None;
+        for (k, sentence) in (1..).zip(&fallbacks) {
             let role = Role::PartFallback {
-                n,
+                n: k,
                 part: part.claim_label(),
             };
-            if self.as_role(role, |p| p.try_close(&steps))? {
+            let closing = Closing::Fallback {
+                k,
+                of: PART_FALLBACKS,
+            };
+            let shown = sentence.trim_end_matches('.');
+            self.last_smt = None;
+            let closed = self.as_role(role, |p| {
+                p.closing_attempt(closing, shown, |p| p.try_close(&[sentence]))
+            })?;
+            if closed {
                 return Ok(());
             }
+            outcome = self.last_smt;
         }
+        self.admit_smt = outcome;
         self.admit_part(node, pair, part, "")
     }
 
