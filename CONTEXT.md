@@ -43,6 +43,11 @@ false, or unwrapping a `None`. An abort is not an error; it is a run of the game
 adversary loses its ability to query further. Abort **cascades**: a caller whose callee aborted
 aborts too, and once a game has aborted no later query does anything.
 
+**Table write** — an assignment that sets one entry of a table to a `Maybe` value: `Some v` stores
+`v`, and `None` removes the entry. When the value is not known to be `Some` or `None`, the choice
+between storing and removing is a real decision of the oracle.
+_Distinguish_: an **exit guard**, which decides nothing.
+
 **Idealization bit** — a boolean parameter that selects between a real and an idealized behaviour
 of a package. Related instances usually differ only in these bits.
 

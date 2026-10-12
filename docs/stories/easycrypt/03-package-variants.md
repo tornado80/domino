@@ -156,6 +156,11 @@ Translation per statement:
 - `None` → `T <- rem T k;`
 - anything else → `T <- if <rhs> = None then rem T k else T.[k <- oget <rhs>];`
 
+> **Superseded by story 70 (ADR 0015).** `easycryptify` now turns "anything else" into a branch,
+> `if (!(<rhs> = None)) { T.[k] <- oget <rhs>; } else { T <- rem T k; }`, or into the plain
+> `T.[k] <- oget <rhs>;` where an enclosing guard proves `<rhs>` is `Some`. The writer emits no
+> conditional expression for a table write.
+
 The same applies to generated local tables; their `<gen> <- empty` from `tableinitialize` becomes
 a local `var` plus `g <- empty;`.
 

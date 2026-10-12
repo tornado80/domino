@@ -68,7 +68,7 @@ files, or read out of this repository's source. §8 lists the evidence.
 | **`local` clones** | **Impossible.** A non-local module cannot depend on a local one (`module M cannot depend on local module Pkg_L.P`). Not needed either: a file is already a namespace. |
 | **Type parameters** | **Unsupported.** A package instance with a non-empty `types { … }` block is a hard error. (`nprf` is the only project that uses them and it is not a target.) |
 | **Package state** | **Module variables**, not one record per package. Records would force a copy-and-`{\| … with … \|}` dance at every table write, and EasyCrypt forbids two record types sharing a field name. |
-| **Tables** | `fmap`. `T[k] <- Some e` → `T.[k] <- e`; `T[k] <- None` → `T <- rem T k`; an arbitrary `Maybe` right-hand side → `T <- if e = None then rem T k else T.[k <- oget e]`. |
+| **Tables** | `fmap`. `T[k] <- Some e` → `T.[k] <- e`; `T[k] <- None` → `T <- rem T k`; an arbitrary `Maybe` right-hand side → `T <- if e = None then rem T k else T.[k <- oget e]`. **Amended by story 70 (ADR 0015):** `easycryptify` turns an arbitrary `Maybe` right-hand side into a branch, `if (!(e = None)) { T.[k] <- oget e; } else { T <- rem T k; }`, and into the plain `T.[k] <- oget e` where an enclosing guard already proves `e` is `Some`. No conditional expression is emitted. |
 | **Abort** | An oracle returning `T` in Domino returns `T option` in EasyCrypt; `None` is abort. An oracle with no return value returns `unit option` and returns `Some tt`. The abort **flag lives only in the router**, never in a package. |
 | **Early return / abort mid-body** | ~~The export pipeline runs `treeify`, which already pushes the continuation of an `if` (and therefore of an `assert`) into both branches. `treeify` does **not** cover `Unwrap` and `InvokeOracle`, so the translator nests the rest of the block into the `else` of those two itself.~~ **Superseded by story 16.** EasyCrypt restricts us to one *exit point*, not one statement, so nothing is duplicated. `easycryptify` moves the continuation into the sole surviving branch where there is one (this is what `assert`, `Unwrap` and `InvokeOracle` all are), and guards it with a `ec_done` flag at a genuine join of two live paths. Its output is valid Domino with no `Abort` and a single trailing `Return`; oracle signatures become `Maybe(T)`. Story 03 §3.5 and the first two bullets of its §6 no longer apply. |
 | **Pipeline** | ~~`EquivalenceTransform` — the existing `prove` pipeline, `run_treeify = true`.~~ **Amended by story 16:** `EasyCryptTransform` — the same pipeline with `easycryptify` in place of `treeify`, running last, after `tableinitialize`. `treeify` is unchanged and still serves the SMT writer via `EquivalenceTransform`. `domino inline/debug` **with** `--easycrypt` use `EasyCryptTransform`, so the debugger shows the code that is actually exported; **without** the flag they keep using `DebugTransform` unchanged, so a Domino listing still renders `assert` as `assert`. The transform, not a flag inside the IR, is what makes the two listings differ. |
@@ -199,6 +199,7 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 67 | Resume files go to `session/`, the report to `progress/` | `67-resume-files-in-their-own-directory.md` | 35, 36, 37 |
 | 68 | Each oracle is a lemma of its own, and oracles are proved in parallel (ADR 0013) | `68-oracle-lemmas-and-parallel-oracles.md` | 33, 35–38, 67 |
 | 69 | Side-invariant lemmas of the composition, joined with `conseq` (ADR 0014) | `69-side-invariant-lemmas.md` | 58, 64, 65, 68, symbolic-execution 25 |
+| 70 | A table write with an unknown value is a branch (ADR 0015) | `70-table-write-is-a-branch.md` | 16, 17, 18 |
 
 Stories 48–52 come from the owner's review of the debug and progress pages. They are UI-only:
 translation does not change, and the export tree is byte-identical before and after each one. 48
@@ -285,6 +286,12 @@ The goal is fewer admits and less time for each hop. Three tracks:
 
 The tracks are independent of each other. Each story's implementation report compares its numbers
 with the 2026-10-08 runs. `--no-quick-close` and the leaf budget do not change in any of them.
+
+Story 70 comes from the tenth design session (grilling of 2026-10-12), about the conditional
+expression that translation emitted for a table write with an unknown `Maybe` value. It revises
+the "Tables" decision of §3 (ADR 0015). It is independent of the three tracks above. Its report
+counts the admitted parts with `rem`, which story 66 needs before it treats `rem m k` as an
+updated map.
 
 ## 6. Working agreement (important)
 
