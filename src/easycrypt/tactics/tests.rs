@@ -1042,6 +1042,20 @@ mod live {
         ] {
             assert!(text.contains(tactic), "missing `{tactic}` in\n{text}");
         }
+        // story 63: no `sp` right before `rcondt`/`rcondf` (a determined node)
+        let sentences: Vec<&str> = text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        for (i, s) in sentences.iter().enumerate().skip(1) {
+            if s.starts_with("rcondt") || s.starts_with("rcondf") {
+                assert!(
+                    !sentences[i - 1].starts_with("sp "),
+                    "`sp` before `{s}` in\n{text}"
+                );
+            }
+        }
         // no position from our listing: every `sp` count comes from EasyCrypt's JSON, and no
         // subgoal is picked by a number but the `1:` of a side goal
         assert!(!text.contains("swap"));

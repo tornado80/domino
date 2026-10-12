@@ -1337,12 +1337,25 @@ impl Prover<'_> {
 
     /// The tactic of a non-terminal, non-stuck node and its children. `Ok(false)` if the
     /// tactic did not apply (nothing of the children has been handled then).
+    ///
+    /// `sp` runs only before a two-sided step (`if.`, `if{1}.`, `seq`), which needs both
+    /// programs' heads at the same place. A determined node sends `rcondt{i} ^if` without it:
+    /// the side goal reasons about the code before the `if` itself, and each `sp` adds
+    /// existentials to the precondition. The straight-line code that stays is taken by the
+    /// next two-sided step's `sp` or by the leaf.
     fn step_node(&mut self, idx: usize) -> R<bool> {
+        let kind = self.tree.node(idx).kind;
+        if kind == NodeKind::Determined {
+            return if self.front().is_some_and(goals::is_program) {
+                self.determined(idx)
+            } else {
+                Ok(false)
+            };
+        }
         if !self.sp_front()? {
             return Ok(false);
         }
-        match self.tree.node(idx).kind {
-            NodeKind::Determined => self.determined(idx),
+        match kind {
             NodeKind::Synchronized => self.synchronized(idx),
             NodeKind::Split => self.split(idx),
             NodeKind::SamplingSynchronized => self.sampling(idx, true),
