@@ -1,6 +1,7 @@
 # Package and game invariants are conjuncts of `inv`
 
-**Status:** accepted. Implemented by `docs/stories/easycrypt/58-translate-package-and-game-invariants.md`.
+**Status:** superseded by ADR 0014 (side-invariant lemmas of the composition, joined with `conseq`).
+Implemented by `docs/stories/easycrypt/58-translate-package-and-game-invariants.md`.
 
 Domino assumes every package invariant and every game invariant (`CONTEXT.md`) on the states
 before each oracle call, on both sides. It proves each one on the new state as a separate claim,

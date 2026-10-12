@@ -125,6 +125,7 @@ left path #3:
 | 22 | Debug indexes at each level, and `--out` for every run (ADR 0011) | `22-debug-indexes-and-out.md` | 19, 21 |
 | 23 | The core claim set: debug without project lemmas | `23-core-claim-set.md` | 19, 21 |
 | 24 | The main invariant is a part of `invariant` on the EasyCrypt listing | `24-main-invariant-part-on-the-easycrypt-listing.md` | 21, EasyCrypt 58, 59 |
+| 25 | One-sided execution: the side tree of one composition oracle (ADR 0014) | `25-one-sided-execution.md` | 19, 21, 22, 23, EasyCrypt 50, 58 |
 
 Stories 01, 02 and 04 are independent and may be done in any order (or in parallel). Stories 08
 and 09 are independent of each other; whichever lands second wires a one-way hook (see `09` §3.6).

@@ -1,6 +1,7 @@
 # EasyCrypt's answers carry only the front goal
 
-**Status:** accepted. Implemented by `docs/stories/easycrypt/54-answers-carry-only-the-front-goal.md`.
+**Status:** accepted, amended by ADR 0012 (`domino-json/3`: the request says what the answer carries).
+Implemented by `docs/stories/easycrypt/54-answers-carry-only-the-front-goal.md`.
 Changes the protocol of story 25 from `domino-json/1` to `domino-json/2`.
 
 A tactics run sends EasyCrypt one sentence at a time and reads one JSON answer per sentence. In

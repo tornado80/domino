@@ -1,9 +1,9 @@
 # Story 29 — Invariant case analysis on table writes (documented, not scheduled)
 
 **Epic:** EasyCrypt Export — read `docs/stories/easycrypt/00-overview.md` first.
-**Status:** **design record only. Do not implement until the owner schedules it.** Schedule it
-after story 27 has run on real projects and its report lists the `domino-verified-ec-failed`
-invariant parts.
+**Status:** **superseded by story 66** (`66-key-case-split.md`, grilling of 2026-10-09/12). Do not
+implement. Kept as a design record: its §3 method needs the `pp` of formula subnodes, which ADR
+0009 removed.
 **Depends on:** 27.
 
 ---

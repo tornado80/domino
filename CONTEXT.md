@@ -101,6 +101,12 @@ straight-line code up to its next *decision point*, and the two decision points 
 jointly. It is what an EasyCrypt pRHL proof does, which is why it exists.
 _Avoid_: synchronized execution (the word *synchronized* is reserved for the outcomes below).
 
+**One-sided execution** — the debugger's walk of one oracle of one composition on its own, with
+the composition's parameters left free. It builds a **side tree** (the paths of that one oracle) and
+checks the composition's package and game invariants on each path. It is not a strategy, because a
+strategy walks two oracles; it is what a hoare proof of a side-invariant lemma follows, the way an
+equivalence's proof follows the joint tree.
+
 **All-claim run** — a debugger run that names no claim and therefore checks the oracle's whole
 obligation set — its proof tree plus the generated package and game invariant claims — on one
 shared exploration.
@@ -166,6 +172,10 @@ aborted. Three kinds: the **done-flag guard**, the **call-result guard** on an i
 result, and the router's **abort-flag guard**. It decides nothing Domino would call a decision, but
 an EasyCrypt proof has to step over it like any other branch.
 _Avoid_: plumbing branch, plumbing node.
+
+**Exit path** — the exit guards and the router's tail branch that are still in a leaf's EasyCrypt
+programs after lockstep execution has stopped. Each of them has only one way it can go, so a proof
+decides each one before it reasons about the leaf's postcondition.
 
 **Decision skeleton** — a program with its straight-line code erased: the tree of its branches,
 samplings and ends. Two programs that differ only in assignments have the same skeleton.
@@ -244,15 +254,28 @@ _Avoid_: phase (for a stage).
 
 **Proof job** — proving one equivalence (optionally only some of its oracles) against the files
 translation left on disk. A proof job trusts that a file with the expected name is what translation
-would have written, and never rewrites a file that belongs to translation or to another
-equivalence, which is what lets several proof jobs of one theorem run at once. Two proof jobs never
-work on the same equivalence at the same time: the equivalence is the unit of parallelism.
+would have written, and never rewrites a file that belongs to translation or to another oracle,
+which is what lets several proof jobs of one theorem run at once. Two proof jobs never work on the
+same oracle at the same time: the oracle is the unit of parallelism, inside one proof job as well as
+between proof jobs.
 
-**Session record** — what a proof job leaves beside an equivalence's proof about how far proving
-got: each oracle's status and the tactics accepted at each joint node. It is what decides whether
-the next proof job on that equivalence starts fresh, **resumes** (proves only the oracles not yet
-done), or skips the equivalence as complete. An oracle is done when it ended without an
-`interrupted` admit; admits with any other reason count as done. Unlike a run artifact it is worth
+**Oracle lemma** — the proof that one oracle of an equivalence keeps equal outputs and the
+invariant, as a lemma of its own in a file of its own. It assumes the side invariants of both sides
+but does not prove them. The equivalence's own proof only joins its oracle lemmas with the
+side-invariant lemmas of its two compositions; it proves no oracle itself.
+
+**Side-invariant lemma** — the proof that one oracle of a composition keeps all of that
+composition's package invariants and its game invariant, for every value of the composition's
+parameters, as a lemma of its own in a file of its own. It belongs to the composition, not to an
+equivalence, so every equivalence that uses the composition uses the same lemma. A **side-invariant
+job** proves them for one composition; a proof job never does, and will not start an equivalence
+whose compositions have no side-invariant lemmas yet.
+
+**Session record** — what a proof job leaves about how far proving one oracle lemma got: the
+oracle's status and the tactics accepted at each joint node. The records of an equivalence's oracles
+together decide whether the next proof job on that equivalence starts fresh, **resumes** (proves
+only the oracles not yet done), or skips the equivalence as complete. An oracle is done when it
+ended without an `interrupted` admit; admits with any other reason count as done. Unlike a run artifact it is worth
 protecting, because losing it loses the ability to resume.
 
 **Saved joint tree** — the joint tree lockstep execution built for one oracle, kept beside the
@@ -280,6 +303,15 @@ costs no proved oracle. _Avoid_: proof translation.
 
 **Leaf** — a joint node with no further branching: both programs have run to their end and only
 the postcondition is left to prove.
+
+**Leaf part** — one goal that is left when a leaf is taken apart: its exit path decided, its
+programs run to a formula, and that formula opened (binders and premises introduced, conjunctions
+split) until nothing more opens. How many parts a leaf has is known only after this. A part belongs
+to no claim of its own, except when opening it unfolded one of the invariant's operators that stands
+for a claim (a state relation, a package or a game invariant): then it belongs to the last such
+claim. An admitted part is named by its leaf, and its reason is Domino's verdict on its claim, or
+on the leaf as a whole (the worse of equal-output and invariant) when it has none.
+_Avoid_: conjunct (a part can hold several conjuncts), subgoal.
 
 **Leaf budget** — an optional limit, set only by the user, on the time a tactics run may spend
 taking one leaf apart; when it runs out, the leaf's remaining parts are admitted. Without one, a
@@ -320,15 +352,18 @@ Ctrl-C: its respawns ran out, or a respawn failed. It leaves its file and record
 goes on with the next proof job. _Avoid_: interrupted (that is a Ctrl-C).
 
 **Front goal** — the first open goal: the one the next tactic works on. EasyCrypt's answer to a
-sentence gives the front goal in full; of every other open goal it gives only the **goal kind**:
-*program* (a judgement over two programs) or *formula* (anything else). The number of open goals
-is the length of that list. _Avoid_: first goal, focused goal.
+sentence always gives the **goal kind** of every open goal: *program* (a judgement over two
+programs) or *formula* (anything else). The number of open goals is the length of that list. Of the
+front goal it gives what the sentence asked for: nothing, its **head** (the conclusion to a fixed
+depth and the names and types of the hypotheses), or the whole goal. A sentence that fails changes
+no goal, so its answer gives no front goal at all. _Avoid_: first goal, focused goal.
 
 **Sentence role** — why a tactics run sent a sentence: a *quick close*; *structure* (moving through
-the program: straight-line code, branches, samplings); a *side-goal fallback*; a *leaf fallback*;
-*reduce* (turning a leaf's program goal into a formula); *split* (taking a leaf apart into its
-claims); a *part fallback* (closing one claim of a leaf); an *admit*; an *undo*; a *resume*
-(sending again what an earlier run proved, to bring a closed node back). Time is reported by role.
+the program: straight-line code, branches, samplings); a *side-goal fallback*; *exit path*
+(deciding a leaf's exit path); *reduce* (turning a leaf's program goal into a formula); *split*
+(opening a leaf into its parts); a *part fallback* (closing one leaf part); an *admit*; an *undo*;
+a *resume* (sending again what an earlier run proved, to bring a closed node back). Time is
+reported by role.
 _Avoid_: step (the report uses "proofstep" for a hop of the theorem), rung.
 
 **Run artifact** — a file a tactics run writes *about itself* rather than as translation output:
