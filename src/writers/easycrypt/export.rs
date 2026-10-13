@@ -253,6 +253,15 @@ pub fn export_theorem_observed(
         });
     }
 
+    if let Some(file) = files
+        .keys()
+        .find(|rel| super::overwrite::takes_reserved_dir_name(rel))
+    {
+        return Err(EcExportError::ReservedFileName {
+            file: file.display().to_string(),
+        });
+    }
+
     Ok(ExportedTheorem {
         files,
         skipped,

@@ -11,9 +11,9 @@
 //!
 //! - [`create_if_absent`]: the create-if-absent helper.
 //! - [`ensure_translation_files`]: every file of the export except the `Eq_*.ec`.
-//! - [`SessionRecord`]: `Eq_<L>_<R>.session.json`: statuses, and (story 37) the scripts that
+//! - [`SessionRecord`]: `session/Eq_<L>_<R>/record.json`: statuses, and (story 37) the scripts that
 //!   let a job resume the equivalence; (version 3) the closed nodes of interrupted oracles.
-//! - [`SavedTree`]: `Eq_<L>_<R>.<oracle>.tree.json`, the joint tree an interrupted oracle is
+//! - [`SavedTree`]: `session/Eq_<L>_<R>/<oracle>.tree.json`, the joint tree an interrupted oracle is
 //!   resumed on (ADR 0008).
 //! - [`remove_records_and_trees`]: what `domino easycrypt --force` does to both.
 //! - [`ProofLock`], [`progress_dir`], [`check_no_live_jobs`] (story 36): one job per equivalence.
@@ -89,15 +89,55 @@ pub fn ensure_translation_files(
     Ok(created)
 }
 
-/// The record's name for a proof file: `Eq_L_R.ec` gives `Eq_L_R.session.json`.
-pub fn session_record_name(proof_file: &str) -> String {
-    format!("{}.session.json", proof_file.trim_end_matches(".ec"))
+/// `<theorem_out>/session/Eq_<L>_<R>` (story 67): the protected files of one equivalence, its
+/// session record and its saved joint trees. Not a run artifact: the overwrite check stops on
+/// it, and only `--force` removes it.
+pub fn session_dir(theorem_out: &Path, proof_file: &str) -> PathBuf {
+    theorem_out
+        .join("session")
+        .join(proof_file.trim_end_matches(".ec"))
 }
 
-/// The saved joint tree's name for one oracle of a proof file: `Eq_L_R.ec` and `PKENC` give
-/// `Eq_L_R.PKENC.tree.json`.
-pub fn saved_tree_name(proof_file: &str, oracle: &str) -> String {
-    format!("{}.{oracle}.tree.json", proof_file.trim_end_matches(".ec"))
+/// Where the session record of a proof file is written: `session/Eq_L_R/record.json`.
+pub fn session_record_path(theorem_out: &Path, proof_file: &str) -> PathBuf {
+    session_dir(theorem_out, proof_file).join("record.json")
+}
+
+/// Where the saved joint tree of one oracle is written: `session/Eq_L_R/PKENC.tree.json`.
+pub fn saved_tree_path(theorem_out: &Path, proof_file: &str, oracle: &str) -> PathBuf {
+    session_dir(theorem_out, proof_file).join(format!("{oracle}.tree.json"))
+}
+
+/// The record's path before story 67: `Eq_L_R.session.json` beside the proof file. Read when
+/// the new path is missing, never written.
+pub fn old_session_record_path(theorem_out: &Path, proof_file: &str) -> PathBuf {
+    theorem_out.join(format!(
+        "{}.session.json",
+        proof_file.trim_end_matches(".ec")
+    ))
+}
+
+/// The saved tree's path before story 67: `Eq_L_R.PKENC.tree.json`. Read when the new path is
+/// missing, never written.
+pub fn old_saved_tree_path(theorem_out: &Path, proof_file: &str, oracle: &str) -> PathBuf {
+    theorem_out.join(format!(
+        "{}.{oracle}.tree.json",
+        proof_file.trim_end_matches(".ec")
+    ))
+}
+
+/// The path to read: `new` if it exists; else `old` if it exists (said on one line); else
+/// `new`. The caller always writes `new`, and never deletes `old`.
+pub fn path_to_read(new: PathBuf, old: PathBuf) -> PathBuf {
+    if !new.exists() && old.exists() {
+        crate::debug::progress::eprintln_above_bars(&format!(
+            "note: reading {} from its old path; from now on it is written to {}",
+            old.display(),
+            new.display()
+        ));
+        return old;
+    }
+    new
 }
 
 /// How far proving one oracle got.
@@ -209,7 +249,7 @@ impl OracleRecord {
     }
 }
 
-/// `Eq_<L>_<R>.session.json`: what each oracle of one equivalence has got to, and enough of
+/// `session/Eq_<L>_<R>/record.json`: what each oracle of one equivalence has got to, and enough of
 /// its proof to write it back without proving it again (story 37).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRecord {
@@ -365,10 +405,11 @@ pub enum SessionRecordError {
     Read { path: PathBuf, message: String },
 }
 
-/// Deletes every `*.session.json` and `*.tree.json` under `theorem_out` (translation with
-/// `--force`: the proofs they describe are overwritten by skeletons). Returns how many were
-/// deleted.
+/// Deletes every file under `<theorem_out>/session/`, and every old-path `*.session.json` and
+/// `*.tree.json` under `theorem_out` (translation with `--force`: the proofs they describe are
+/// overwritten by skeletons). Returns how many were deleted.
 pub fn remove_records_and_trees(theorem_out: &Path) -> std::io::Result<usize> {
+    let session_root = theorem_out.join("session");
     let mut removed = 0;
     let mut stack = vec![theorem_out.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -382,10 +423,11 @@ pub fn remove_records_and_trees(theorem_out: &Path) -> std::io::Result<usize> {
             let path = entry.path();
             if entry.file_type()?.is_dir() {
                 stack.push(path);
-            } else if path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.ends_with(".session.json") || n.ends_with(".tree.json"))
+            } else if path.starts_with(&session_root)
+                || path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.ends_with(".session.json") || n.ends_with(".tree.json"))
             {
                 std::fs::remove_file(&path)?;
                 removed += 1;
@@ -395,7 +437,7 @@ pub fn remove_records_and_trees(theorem_out: &Path) -> std::io::Result<usize> {
     Ok(removed)
 }
 
-/// `Eq_<L>_<R>.<oracle>.tree.json` (ADR 0008): the joint tree lockstep execution built for one
+/// `session/Eq_<L>_<R>/<oracle>.tree.json` (ADR 0008): the joint tree lockstep execution built for one
 /// oracle, saved before the oracle's first sentence is sent, so that resuming the oracle walks
 /// the very tree its closed nodes were proved against.
 #[derive(Debug, Serialize, Deserialize)]
@@ -959,8 +1001,10 @@ mod tests {
     fn a_saved_joint_tree_reads_back_as_it_was_written() {
         let dir = scratch("tree");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(saved_tree_name("Eq_L_R.ec", "PKENC"));
-        assert!(path.ends_with("Eq_L_R.PKENC.tree.json"));
+        let path = saved_tree_path(&dir, "Eq_L_R.ec", "PKENC");
+        assert!(path.ends_with("session/Eq_L_R/PKENC.tree.json"));
+        assert!(session_record_path(&dir, "Eq_L_R.ec").ends_with("session/Eq_L_R/record.json"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         assert!(matches!(SavedTree::read(&path), Ok(None)));
         let tree = saved_tree();
         std::fs::write(&path, tree.to_json()).unwrap();
@@ -1019,6 +1063,21 @@ mod tests {
     }
 
     #[test]
+    fn the_old_path_is_read_only_when_the_new_one_is_missing() {
+        let dir = scratch("old-path");
+        std::fs::create_dir_all(&dir).unwrap();
+        let new = session_record_path(&dir, "Eq_A_B.ec");
+        let old = old_session_record_path(&dir, "Eq_A_B.ec");
+        assert!(old.ends_with("Eq_A_B.session.json"));
+        assert_eq!(path_to_read(new.clone(), old.clone()), new);
+        std::fs::write(&old, "x").unwrap();
+        assert_eq!(path_to_read(new.clone(), old.clone()), old);
+        std::fs::create_dir_all(new.parent().unwrap()).unwrap();
+        std::fs::write(&new, "x").unwrap();
+        assert_eq!(path_to_read(new.clone(), old), new);
+    }
+
+    #[test]
     fn timestamps_are_rfc_3339() {
         assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
         assert_eq!(rfc3339(1_709_210_096), "2024-02-29T12:34:56Z");
@@ -1029,16 +1088,24 @@ mod tests {
     fn removing_records_deletes_every_session_json_and_tree_json_under_the_directory_and_nothing_else() {
         let dir = scratch("remove");
         std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::create_dir_all(dir.join("session/Eq_A_B")).unwrap();
+        std::fs::create_dir_all(dir.join("progress/Eq_A_B")).unwrap();
         for f in [
             "Eq_A_B.session.json",
             "Eq_A_B.PKENC.tree.json",
             "sub/Eq_C_D.session.json",
+            "session/Eq_A_B/record.json",
+            "session/Eq_A_B/PKENC.tree.json",
             "Eq_A_B.ec",
+            "progress/Eq_A_B/report.txt",
         ] {
             std::fs::write(dir.join(f), "x").unwrap();
         }
-        assert_eq!(remove_records_and_trees(&dir).unwrap(), 3);
+        // story 67: the old and the new paths both go
+        assert_eq!(remove_records_and_trees(&dir).unwrap(), 5);
         assert!(dir.join("Eq_A_B.ec").exists());
+        assert!(dir.join("progress/Eq_A_B/report.txt").exists());
+        assert!(!dir.join("session/Eq_A_B/record.json").exists());
         assert!(!dir.join("Eq_A_B.session.json").exists());
         assert!(!dir.join("Eq_A_B.PKENC.tree.json").exists());
         assert_eq!(remove_records_and_trees(&dir.join("missing")).unwrap(), 0);

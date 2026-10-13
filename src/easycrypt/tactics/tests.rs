@@ -4,7 +4,7 @@ use super::driver::{pair_view, Part, SmtOutcome};
 use super::*;
 use crate::debug::driver::{ClaimVerdict, PartVerdict, TerminalView, Verdict};
 use crate::debug::lockstep::{PairRecord, PairSide, EQUAL_OUTPUT};
-use crate::easycrypt::job::AdmitRecord;
+use crate::easycrypt::job::{session_dir, AdmitRecord};
 
 fn pair_view_for_tests(p: &PairRecord, part: &Part) -> &'static str {
     pair_view(p, part).slug()
@@ -268,7 +268,7 @@ fn equivalence_with(oracles: Vec<OracleTactics>) -> EquivalenceTactics {
         oracles,
         base_case_admitted: false,
         elapsed: Duration::from_secs(4),
-        report_file: "Eq_A_B.report.txt".into(),
+        report_file: "progress/Eq_A_B/report.txt".into(),
         interrupted: None,
         ended_early: None,
         unanswered: vec![],
@@ -498,7 +498,12 @@ fn done(name: &str) -> OracleRecord {
 fn plan_of(oracles: Vec<OracleRecord>, options: &TacticsOptions) -> (JobPlan, tempfile::TempDir) {
     let out = tempfile::tempdir().unwrap();
     let record = SessionRecord::new("T", "L", "R", oracles);
-    std::fs::write(out.path().join("Eq_L_R.session.json"), record.to_json()).unwrap();
+    std::fs::create_dir_all(session_dir(out.path(), "Eq_L_R.ec")).unwrap();
+    std::fs::write(
+        session_record_path(out.path(), "Eq_L_R.ec"),
+        record.to_json(),
+    )
+    .unwrap();
     let plan = plan_job(&eq_report(), out.path(), options).unwrap();
     (plan, out)
 }
@@ -553,7 +558,7 @@ fn a_complete_record_skips_and_force_proves_from_scratch_and_deletes_it() {
     };
     let (plan, out) = plan_of(all, &forced);
     assert!(prior(plan).is_none());
-    assert!(!out.path().join("Eq_L_R.session.json").exists());
+    assert!(!session_record_path(out.path(), "Eq_L_R.ec").exists());
 }
 
 #[test]
@@ -589,14 +594,15 @@ fn force_with_an_oracle_reproves_that_oracle_alone_and_keeps_the_rest() {
     assert!(record.oracle("C").unwrap().is_resumable());
     assert!(!record.complete);
     // the record on disk stays until the job's first checkpoint replaces it
-    assert!(out.path().join("Eq_L_R.session.json").exists());
+    assert!(session_record_path(out.path(), "Eq_L_R.ec").exists());
 }
 
 #[test]
 fn a_version_1_record_cannot_be_resumed_from() {
     let out = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(session_dir(out.path(), "Eq_L_R.ec")).unwrap();
     std::fs::write(
-        out.path().join("Eq_L_R.session.json"),
+        session_record_path(out.path(), "Eq_L_R.ec"),
         r#"{"version": 1, "theorem": "T", "left": "L", "right": "R", "complete": false,
             "oracles": [{"name": "A", "status": "done"}, {"name": "B", "status": "pending"}]}"#,
     )
@@ -897,9 +903,10 @@ mod live {
         let captures = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let mut observer: Option<Box<dyn ExportObserver>> = Some(Box::new(Capturing {
             ec: out.path().join(proof_file),
-            report: out
-                .path()
-                .join(proof_file.trim_end_matches(".ec").to_string() + ".report.txt"),
+            report: out.path().join(format!(
+                "progress/{}/report.txt",
+                proof_file.trim_end_matches(".ec")
+            )),
             captures: captures.clone(),
             stop_at: stop_at.map(|at| {
                 let stop = options.stop.clone().expect("a run to stop has a stop flag");
@@ -1670,7 +1677,7 @@ mod live {
 
     fn record_path(result: &TheoremTactics, out: &Path) -> PathBuf {
         let file = &result.equivalences[0].proof_file;
-        out.join(session_record_name(file))
+        session_record_path(&out, file)
     }
 
     fn read_record(path: &Path) -> SessionRecord {
@@ -2195,9 +2202,7 @@ wait $ec
         assert_eq!(entry.status, OracleStatus::Interrupted);
         assert_eq!(entry.in_flight(), Some(node.as_str()));
         assert!(!entry.closed.is_empty(), "{record:?}");
-        let tree = out
-            .path()
-            .join(saved_tree_name(&stopped.proof_file, oracle));
+        let tree = saved_tree_path(out.path(), &stopped.proof_file, oracle);
         assert!(SavedTree::read(&tree).unwrap().is_some());
         let checkpoint = proof_file(&first_run, out.path());
         let blocks: Vec<String> = entry
@@ -2323,7 +2328,7 @@ wait $ec
             return;
         };
         let file = first_run.equivalences[0].proof_file.clone();
-        let record = out.path().join(session_record_name(&file));
+        let record = session_record_path(&out.path(), &file);
         // N1's script as two sentences, the first of which closes its goal: a stop between them
         // finds one goal fewer in the session than the script, which has neither, accounts for
         edit_json(&record, |r| {
@@ -2384,6 +2389,51 @@ wait $ec
         }
     }
 
+    /// Story 67: the record and the trees are in `session/<Eq>/`, the report in
+    /// `progress/<Eq>/`; the top level holds none of them.
+    #[test]
+    fn a_job_writes_its_record_and_trees_under_session_and_its_report_under_progress() {
+        let Some((first_run, out)) = stopped_mid_oracle() else {
+            return;
+        };
+        let eq = &first_run.equivalences[0];
+        let stem = eq.proof_file.trim_end_matches(".ec");
+        let session = out.path().join("session").join(stem);
+        assert!(session.join("record.json").exists());
+        assert!(session.join("Branch.tree.json").exists());
+        assert_eq!(eq.report_file, format!("progress/{stem}/report.txt"));
+        assert!(out.path().join(&eq.report_file).exists());
+        for entry in std::fs::read_dir(out.path()).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            assert!(
+                !name.ends_with(".session.json")
+                    && !name.ends_with(".tree.json")
+                    && !name.ends_with(".report.txt"),
+                "{name} at the top level"
+            );
+        }
+    }
+
+    /// Story 67: a record and a tree at the paths before story 67 are resumed from; the job
+    /// writes the new paths and leaves the old files.
+    #[test]
+    fn a_job_resumes_from_a_record_and_a_tree_at_the_old_paths() {
+        let Some((first_run, out)) = stopped_mid_oracle() else {
+            return;
+        };
+        let file = first_run.equivalences[0].proof_file.clone();
+        let old_record = old_session_record_path(out.path(), &file);
+        let old_tree = old_saved_tree_path(out.path(), &file, "Branch");
+        std::fs::rename(session_record_path(out.path(), &file), &old_record).unwrap();
+        std::fs::rename(saved_tree_path(out.path(), &file, "Branch"), &old_tree).unwrap();
+        walk_events();
+        let result = run_again_on(TWO_BRANCHES, out.path(), &resume_with(ResumeMode::Trust));
+        assert!(!walk_events().contains(&"lockstep Branch".to_string()));
+        assert!(the_oracle(&result).resumed_at.is_some());
+        assert!(read_record(&session_record_path(out.path(), &file)).complete);
+        assert!(old_record.exists() && old_tree.exists());
+    }
+
     fn the_oracle(result: &TheoremTactics) -> &OracleTactics {
         &result.equivalences[0].oracles[0]
     }
@@ -2393,9 +2443,7 @@ wait $ec
         let Some((first_run, out)) = stopped_mid_oracle() else {
             return;
         };
-        let tree = out
-            .path()
-            .join(saved_tree_name(&first_run.equivalences[0].proof_file, "Branch"));
+        let tree = saved_tree_path(out.path(), &first_run.equivalences[0].proof_file, "Branch");
         let saved = SavedTree::read(&tree).unwrap().unwrap().fingerprint;
         edit_json(&tree, |t| t["fingerprint"] = "from another project".into());
         walk_events();
@@ -2417,14 +2465,14 @@ wait $ec
         let third = copy_export(out.path());
         // no tree file
         let file = &first_run.equivalences[0].proof_file;
-        std::fs::remove_file(out.path().join(saved_tree_name(file, "Branch"))).unwrap();
+        std::fs::remove_file(saved_tree_path(&out.path(), file, "Branch")).unwrap();
         walk_events();
         let result = run_again_on(TWO_BRANCHES, out.path(), &resume_with(ResumeMode::Trust));
         assert!(walk_events().contains(&"lockstep Branch".to_string()));
         assert_eq!(the_oracle(&result).resumed_at, None);
-        assert!(out.path().join(saved_tree_name(file, "Branch")).exists());
+        assert!(saved_tree_path(&out.path(), file, "Branch").exists());
         // a version 2 record has no closed nodes
-        edit_json(&other.path().join(session_record_name(file)), |r| {
+        edit_json(&session_record_path(&other.path(), file), |r| {
             r["version"] = 2.into();
             for o in r["oracles"].as_array_mut().unwrap() {
                 o.as_object_mut().unwrap().remove("closed");
@@ -2438,8 +2486,8 @@ wait $ec
         assert!(record.complete);
         // a tree written by a later lockstep execution than the closed nodes were proved on (a
         // job killed between writing the tree and the record)
-        let record = third.path().join(session_record_name(file));
-        let saved = SavedTree::read(&third.path().join(saved_tree_name(file, "Branch")))
+        let record = session_record_path(&third.path(), file);
+        let saved = SavedTree::read(&saved_tree_path(&third.path(), file, "Branch"))
             .unwrap()
             .expect("a tree");
         assert_eq!(read_record(&record).oracles[0].tree_id.as_ref(), Some(&saved.id));
@@ -2454,9 +2502,7 @@ wait $ec
         let Some((first_run, out)) = stopped_mid_oracle() else {
             return;
         };
-        let tree = out
-            .path()
-            .join(saved_tree_name(&first_run.equivalences[0].proof_file, "Branch"));
+        let tree = saved_tree_path(out.path(), &first_run.equivalences[0].proof_file, "Branch");
         // as if the oracle's code had changed since the tree was saved
         edit_json(&tree, |t| {
             t["fingerprint"] = "0".into();
@@ -2480,9 +2526,7 @@ wait $ec
         let Some((first_run, out)) = stopped_mid_oracle() else {
             return;
         };
-        let tree = out
-            .path()
-            .join(saved_tree_name(&first_run.equivalences[0].proof_file, "Branch"));
+        let tree = saved_tree_path(out.path(), &first_run.equivalences[0].proof_file, "Branch");
         edit_json(&tree, |t| {
             t["fingerprint"] = "0".into();
             t["fingerprint_parts"].as_object_mut().unwrap().remove("claims");
@@ -2505,9 +2549,7 @@ wait $ec
         let Some((first_run, out)) = stopped_mid_oracle() else {
             return;
         };
-        let tree = out
-            .path()
-            .join(saved_tree_name(&first_run.equivalences[0].proof_file, "Branch"));
+        let tree = saved_tree_path(out.path(), &first_run.equivalences[0].proof_file, "Branch");
         edit_json(&tree, |t| {
             t["fingerprint"] = "0".into();
             t["fingerprint_parts"]["claims"] = "0".into();
@@ -2526,7 +2568,7 @@ wait $ec
             return;
         };
         let file = &first_run.equivalences[0].proof_file;
-        edit_json(&out.path().join(session_record_name(file)), |r| {
+        edit_json(&session_record_path(&out.path(), file), |r| {
             r["oracles"][0]["closed"][0]["script"][0]["sentence"] = "sp 9 9.".into();
         });
         walk_events();

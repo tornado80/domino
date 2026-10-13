@@ -124,7 +124,7 @@ fn a_run_killed_mid_oracle_leaves_its_last_write_intact() {
     let dir = scratch("sigkill");
     let theorem = dir.join("out/Proof");
     let file = theorem.join("Eq_medium_composition_small_composition.ec");
-    let report = theorem.join("Eq_medium_composition_small_composition.report.txt");
+    let report = theorem.join("progress/Eq_medium_composition_small_composition/report.txt");
     let mut child = tactics(
         "hello-world-oracle-rename-new",
         &dir.join("out"),
@@ -195,7 +195,7 @@ fn a_run_killed_at_the_default_granularity_leaves_a_compiling_file_and_a_record_
         &["--no-quick-close"],
     );
     // the record is written right after the file: wait for both, so the kill is between writes
-    let record = theorem.join("Eq_medium_composition_small_composition.session.json");
+    let record = theorem.join("session/Eq_medium_composition_small_composition/record.json");
     let began = Instant::now();
     loop {
         if let Ok(text) = std::fs::read_to_string(&file) {

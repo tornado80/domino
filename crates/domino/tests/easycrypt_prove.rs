@@ -96,7 +96,7 @@ fn a_proof_job_touches_only_its_own_files_skips_a_done_equivalence_and_recreates
     assert!(out.status.success(), "{}", stderr(&out));
     let after = snapshot(&theorem);
     for (name, was) in &before {
-        if [".ec", ".report.txt", ".session.json"]
+        if [".ec"]
             .iter()
             .any(|s| name == &format!("{EQ}{s}"))
         {
@@ -107,7 +107,11 @@ fn a_proof_job_touches_only_its_own_files_skips_a_done_equivalence_and_recreates
     assert!(
         !String::from_utf8_lossy(&after[&format!("{EQ}.ec")].0).contains("+ proc; inline. admit.")
     );
-    assert!(after.contains_key(&format!("{EQ}.session.json")));
+    assert!(theorem.join("session").join(EQ).join("record.json").is_file());
+    // story 67: no record, tree or report at the top level
+    assert!(after
+        .keys()
+        .all(|n| !n.ends_with(".session.json") && !n.ends_with(".tree.json") && !n.ends_with(".report.txt")));
     assert!(!stderr(&out).contains("created"), "{}", stderr(&out));
     // `--out` is honoured by lockstep output too
     assert!(theorem.join("!debug!").is_dir());
@@ -284,7 +288,7 @@ fn two_proof_jobs_on_different_equivalences_run_at_once() {
     for stem in ["Eq_CPA_PKE_H0", "Eq_H1_H2"] {
         let proof = std::fs::read_to_string(dir.join(format!("{stem}.ec"))).unwrap();
         assert!(proof.contains("call ("), "{stem}: {proof}");
-        assert!(dir.join(format!("{stem}.session.json")).is_file());
+        assert!(dir.join("session").join(stem).join("record.json").is_file());
         let job = dir.join("progress").join(stem);
         assert!(job.join("index.html").is_file());
         assert!(!job.join("lock").exists(), "{stem}: lock left behind");

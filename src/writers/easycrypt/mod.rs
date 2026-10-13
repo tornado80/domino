@@ -152,6 +152,11 @@ pub enum EcExportError {
     #[error(transparent)]
     Invariant(#[from] invariant::InvariantError),
 
+    /// An exported file would take the name of a directory Domino owns in the export tree
+    /// (`session`, `progress`, `!debug!`; story 67).
+    #[error("the exported file `{file}` would take the name of a directory Domino owns (`session`, `progress` or `!debug!`); rename the package, game or composition")]
+    ReservedFileName { file: String },
+
     /// The transform pipeline (`EasyCryptTransform`, run once per exported
     /// theorem before any translation) failed. The only way a
     /// parser-accepted project can hit this is a sample reachable through a

@@ -136,7 +136,8 @@ pub(crate) struct EcExport {
     /// before any other work, if a theorem's directory holds a file other than a run
     /// artifact (`progress/`, `!debug!/`, `*.report.txt`, `alignment.txt`) or `<out>`
     /// itself holds a file, and lists them. Proofs written by `domino easycrypt prove`, their
-    /// session records (`*.session.json`) and saved joint trees (`*.tree.json`) are discarded.
+    /// session records and saved joint trees (`session/`, and the older `*.session.json` and
+    /// `*.tree.json`) are discarded.
     #[clap(long)]
     pub(crate) force: bool,
     /// How the export reports what it is translating, on stderr (stdout and the written

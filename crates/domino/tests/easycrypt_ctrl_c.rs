@@ -172,7 +172,7 @@ fn ctrl_c_interrupts_the_running_sentence_seals_the_oracle_and_exits_130() {
     );
     // the report names it, its counts are the file's, and the summary still prints
     let report =
-        std::fs::read_to_string(theorem.join("Eq_medium_composition_small_composition.report.txt"))
+        std::fs::read_to_string(theorem.join("progress/Eq_medium_composition_small_composition/report.txt"))
             .unwrap();
     let line = "interrupted: sealed UsefulOracle with 1 admits at node router";
     assert!(report.contains(line), "{report}");
@@ -184,7 +184,7 @@ fn ctrl_c_interrupts_the_running_sentence_seals_the_oracle_and_exits_130() {
     assert!(stdout.contains(line), "{stdout}");
     // the session record (story 35) says the oracle was sealed: a partial, not a complete proof
     let record = std::fs::read_to_string(
-        theorem.join("Eq_medium_composition_small_composition.session.json"),
+        theorem.join("session/Eq_medium_composition_small_composition/record.json"),
     )
     .unwrap();
     assert!(record.contains("\"complete\": false"), "{record}");

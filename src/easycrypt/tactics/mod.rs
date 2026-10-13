@@ -28,8 +28,8 @@
 //! is warned about once per run ([`SwallowWatch`]).
 //!
 //! **Resuming an interrupted oracle** (ADR 0008, [`ResumeMode`]): lockstep execution's joint tree
-//! is saved beside the session record (`Eq_<L>_<R>.<oracle>.tree.json`) before the oracle's first
-//! sentence. An oracle the record holds as `interrupted` is walked again on that saved tree, its
+//! is saved under `session/Eq_<L>_<R>/<oracle>.tree.json`, beside the session record, before the
+//! oracle's first sentence. An oracle the record holds as `interrupted` is walked again on that saved tree, its
 //! closed nodes kept, instead of being proved from scratch.
 //!
 //! - [`script`]: the accepted sentences, bullets and indentation.
@@ -73,8 +73,9 @@ use super::check::{
     EquivalenceSetup,
 };
 use super::job::{
-    create_if_absent, ensure_translation_files, is_proof_file, progress_dir, saved_tree_name,
-    session_record_name, ClosedNode, LockError, LockstepRecord, OracleRecord, OracleStatus,
+    create_if_absent, ensure_translation_files, is_proof_file, old_saved_tree_path,
+    old_session_record_path, path_to_read, progress_dir, saved_tree_path, session_record_path,
+    ClosedNode, LockError, LockstepRecord, OracleRecord, OracleStatus,
     ProofLock, SavedTree, SessionRecord, SessionRecordError,
 };
 use super::json::Goal;
@@ -502,7 +503,8 @@ pub struct EquivalenceTactics {
     /// The base case did not close and was admitted.
     pub base_case_admitted: bool,
     pub elapsed: Duration,
-    /// The written report, `Eq_<L>_<R>.report.txt` in the theorem's output directory.
+    /// The written report, `progress/Eq_<L>_<R>/report.txt`, relative to the theorem's output
+    /// directory.
     pub report_file: String,
     /// The run was stopped by Ctrl-C while on this equivalence (story 34), or the job ended
     /// early ([`Self::ended_early`]): where.
@@ -746,14 +748,26 @@ fn plan_job(
     out_dir: &Path,
     options: &TacticsOptions,
 ) -> Result<JobPlan, TacticsError> {
-    let record_path = out_dir.join(session_record_name(&eq.proof_file));
+    let record_path = path_to_read(
+        session_record_path(out_dir, &eq.proof_file),
+        old_session_record_path(out_dir, &eq.proof_file),
+    );
     let Some(mut record) = SessionRecord::read(&record_path)? else {
         return Ok(JobPlan::Prove { prior: None });
     };
     let file = &eq.proof_file;
     if options.force {
         let Some(oracle) = &options.oracle else {
-            std::fs::remove_file(&record_path)?;
+            // the old and the new record both go (story 67)
+            for path in [
+                session_record_path(out_dir, file),
+                old_session_record_path(out_dir, file),
+            ] {
+                match std::fs::remove_file(&path) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                    _ => {}
+                }
+            }
             return Ok(JobPlan::Prove { prior: None });
         };
         // this oracle alone is proved again: its entry goes, the others stay
@@ -864,7 +878,7 @@ where
         .filter(|name| selected(name) || is_resumed(name))
         .collect();
     live.equivalence_started(&file, eq.proofstep, &eq.left_name, &eq.right_name, &selected_oracles);
-    let report_file = file.trim_end_matches(".ec").to_string() + ".report.txt";
+    let report_file = format!("progress/{}/report.txt", file.trim_end_matches(".ec"));
     let mut proof = ProofFile {
         theorem: &theorem.name,
         source,
@@ -1281,7 +1295,7 @@ impl ProofFile<'_> {
         let record = self.record(&now);
         if record.oracles.iter().any(|o| o.status != OracleStatus::Pending) {
             write_atomically(
-                &self.out_dir.join(session_record_name(&now.proof_file)),
+                &session_record_path(self.out_dir, &now.proof_file),
                 tmp_dir,
                 &record.to_json(),
             )?;
@@ -1333,6 +1347,9 @@ fn write_atomically(path: &Path, tmp_dir: &Path, text: &str) -> std::io::Result<
     use std::io::Write as _;
     let name = path.file_name().expect("a file path").to_string_lossy();
     let tmp = tmp_dir.join(format!(".{name}.tmp"));
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
     let mut file = File::create(&tmp)?;
     file.write_all(text.as_bytes())?;
     file.sync_all()?;
@@ -1424,7 +1441,10 @@ fn resuming<P: Project>(
         ));
         return None;
     }
-    let path = proof.out_dir.join(saved_tree_name(&eq.proof_file, oracle));
+    let path = path_to_read(
+        saved_tree_path(proof.out_dir, &eq.proof_file, oracle),
+        old_saved_tree_path(proof.out_dir, &eq.proof_file, oracle),
+    );
     let saved = match SavedTree::read(&path) {
         Ok(Some(saved)) if saved.oracle == oracle => saved,
         Ok(Some(saved)) => {
@@ -1566,7 +1586,7 @@ where
     Ok(Lockstep::Walk(tree))
 }
 
-/// Writes `Eq_<L>_<R>.<oracle>.tree.json`, atomically, replacing any earlier one, and returns
+/// Writes `session/Eq_<L>_<R>/<oracle>.tree.json`, atomically, replacing any earlier one, and returns
 /// its [`SavedTree::id`]. Without a fingerprint there is no tree to trust later: an earlier one
 /// is removed, with a warning, and there is no id.
 fn save_tree<P: Project>(
@@ -1577,7 +1597,7 @@ fn save_tree<P: Project>(
     proof: &ProofFile<'_>,
     tree: &WalkedTree,
 ) -> std::io::Result<Option<String>> {
-    let path = proof.out_dir.join(saved_tree_name(&eq.proof_file, oracle));
+    let path = saved_tree_path(proof.out_dir, &eq.proof_file, oracle);
     // lockstep execution has just loaded the invariant files, and warned
     let fingerprint = without_custom_smt_warning(|| {
         Fingerprint::of(project, theorem, eq.proofstep, oracle)
@@ -1807,7 +1827,7 @@ fn secs(d: Duration) -> String {
 }
 
 impl EquivalenceTactics {
-    /// The report: `Eq_<L>_<R>.report.txt`, and the same text on stdout.
+    /// The report: `progress/Eq_<L>_<R>/report.txt`, and the same text on stdout.
     pub fn render(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(

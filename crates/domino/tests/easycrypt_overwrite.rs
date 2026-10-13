@@ -218,12 +218,13 @@ fn a_session_record_blocks_translation_and_force_deletes_it() {
     assert!(out.status.success(), "{}", stderr(&out));
 
     // a proof job's record: translation must not overwrite the proof it describes
-    let record = base.join("Proof/Eq_medium_composition_small_composition.session.json");
+    let record = base.join("Proof/session/Eq_medium_composition_small_composition/record.json");
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
     std::fs::write(&record, "{}").unwrap();
     let out = easycrypt(&hello, &base, &[]);
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("Eq_medium_composition_small_composition.session.json"),
+        stderr(&out).contains("session/Eq_medium_composition_small_composition/record.json"),
         "{}",
         stderr(&out)
     );
@@ -243,12 +244,13 @@ fn a_saved_joint_tree_blocks_translation_and_force_deletes_it() {
     let out = easycrypt(&hello, &base, &[]);
     assert!(out.status.success(), "{}", stderr(&out));
 
-    let tree = base.join("Proof/Eq_medium_composition_small_composition.UsefulOracle.tree.json");
+    let tree = base.join("Proof/session/Eq_medium_composition_small_composition/UsefulOracle.tree.json");
+    std::fs::create_dir_all(tree.parent().unwrap()).unwrap();
     std::fs::write(&tree, "{}").unwrap();
     let out = easycrypt(&hello, &base, &[]);
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("Eq_medium_composition_small_composition.UsefulOracle.tree.json"),
+        stderr(&out).contains("UsefulOracle.tree.json"),
         "{}",
         stderr(&out)
     );

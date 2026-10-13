@@ -24,6 +24,25 @@ use thiserror::Error;
 /// written there; see `docs/stories/symbolic-execution/19-…`).
 pub const RUN_ARTIFACT_DIRS: &[&str] = &["progress", "!debug!"];
 
+/// The directory, directly in `<out>/<theorem>/`, of the session records and saved joint trees
+/// (story 67). Protected, not a run artifact: the check below stops on any file in it.
+pub const SESSION_DIR: &str = "session";
+
+/// Whether an exported file `rel` would take the name of a directory Domino owns
+/// ([`SESSION_DIR`] or a [`RUN_ARTIFACT_DIRS`] entry), ignoring case and the extension, so it
+/// never meets that directory on a case-insensitive file system.
+pub fn takes_reserved_dir_name(rel: &Path) -> bool {
+    let Some(first) = rel.components().next() else {
+        return false;
+    };
+    let first = Path::new(first.as_os_str());
+    let stem = first.file_stem().unwrap_or(first.as_os_str());
+    let stem = stem.to_string_lossy();
+    std::iter::once(SESSION_DIR)
+        .chain(RUN_ARTIFACT_DIRS.iter().copied())
+        .any(|d| d.eq_ignore_ascii_case(&stem))
+}
+
 /// File names that are run artifacts wherever they are: the per-equivalence report
 /// (`*.report.txt`) and the alignment report (`alignment.txt`).
 fn is_run_artifact_name(name: &str) -> bool {
@@ -326,6 +345,26 @@ mod tests {
         ] {
             assert!(!is_run_artifact(Path::new(rel)), "{rel}");
         }
+    }
+
+    #[test]
+    fn an_exported_file_never_takes_a_reserved_directory_name() {
+        for rel in [
+            "session",
+            "session.ec",
+            "Session.ec",
+            "progress.ec",
+            "!debug!",
+            "session/x.ec",
+        ] {
+            assert!(takes_reserved_dir_name(Path::new(rel)), "{rel}");
+        }
+        for rel in ["Eq_session_B.ec", "Types.ec", "sessions.ec", ""] {
+            assert!(!takes_reserved_dir_name(Path::new(rel)), "{rel}");
+        }
+        // the record directory is protected, not a run artifact
+        assert!(!is_run_artifact(Path::new("session/Eq_a_b/record.json")));
+        assert!(!is_run_artifact(Path::new("session/Eq_a_b/O.tree.json")));
     }
 
     #[test]
