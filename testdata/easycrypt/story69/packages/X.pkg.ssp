@@ -1,0 +1,11 @@
+package X {
+    invariant: [ ./packages/Ctr.smt2 ]
+    state {
+        ctr: Integer,
+    }
+
+    oracle x() -> Integer {
+        ctr <- (ctr + 1);
+        return ctr;
+    }
+}

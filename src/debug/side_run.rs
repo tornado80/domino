@@ -210,6 +210,57 @@ fn free_params(
     params
 }
 
+/// The fingerprint of the side tree of `oracle` of composition `composition` (ADR 0008), as
+/// [`run_side_command`] saves it in `trace.json`, without running one-sided execution: a job
+/// that resumes an oracle from its saved side tree compares the two (story 69).
+pub fn side_fingerprint<P: Project>(
+    project: &P,
+    theorem_name: &str,
+    composition: &str,
+    oracle: &str,
+) -> Result<Fingerprint, DebugError> {
+    let theorem = project
+        .get_theorem(theorem_name)
+        .ok_or_else(|| DebugError::TheoremNotFound {
+            name: theorem_name.to_string(),
+        })?;
+    let comp = composition_of(project, composition)?;
+    let (theorem, eq) = free_theorem(theorem, comp)?;
+    let (theorem_eq, auxs_eq) = EquivalenceTransform.transform_theorem(&theorem)?;
+    let mut eqctx = EquivalenceContext::new(&eq, &theorem_eq, &auxs_eq);
+    eqctx.load_invariants(project)?;
+    let (theorem_ec, _) = EasyCryptTransform.transform_theorem(&theorem)?;
+    let inlined = inline_oracle_ec(
+        theorem_ec
+            .find_game_instance(composition)
+            .expect("the free instance exists"),
+        oracle,
+    )?;
+    Ok(fingerprint_of(&theorem, &eqctx, composition, &inlined))
+}
+
+/// The fingerprint of a side tree: the listing of the free instance of `composition`, its
+/// constants, the invariants and the names of the claims.
+fn fingerprint_of(
+    theorem: &Theorem<'_>,
+    eqctx: &EquivalenceContext<'_>,
+    composition: &str,
+    inlined: &crate::debug::ir::InlinedOracle,
+) -> Fingerprint {
+    let names: Vec<String> = side_claims(eqctx).iter().map(|c| c.name().to_string()).collect();
+    Fingerprint::of_side(
+        theorem
+            .find_game_instance(composition)
+            .expect("the free instance exists"),
+        format!(
+            "{composition} {:?} -> {:?}\n{}",
+            inlined.args, inlined.return_type, inlined.listing.text
+        ),
+        &eqctx.emit_invariant(),
+        &names,
+    )
+}
+
 /// The claims of a side tree: each package invariant of `C`, then its game invariant, on the
 /// new state, each under `left-no-abort`.
 fn side_claims(eqctx: &EquivalenceContext<'_>) -> Vec<Claim> {
@@ -299,19 +350,7 @@ where
 
     let claims = side_claims(&eqctx);
     let queries: Vec<ClaimQuery> = claims.iter().map(|c| ClaimQuery::of(&eqctx, c, oracle)).collect();
-    let names: Vec<String> = claims.iter().map(|c| c.name().to_string()).collect();
-    let invariants = eqctx.emit_invariant();
-    let fingerprint = Fingerprint::of_side(
-        theorem
-            .find_game_instance(composition)
-            .expect("the free instance exists"),
-        format!(
-            "{composition} {:?} -> {:?}\n{}",
-            inlined.args, inlined.return_type, inlined.listing.text
-        ),
-        &invariants,
-        &names,
-    );
+    let fingerprint = fingerprint_of(&theorem, &eqctx, composition, &inlined);
     let base = side_base_frame(&eqctx, oracle);
 
     observer.on_event(&DebugEvent::Started {

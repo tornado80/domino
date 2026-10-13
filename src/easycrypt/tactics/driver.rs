@@ -267,6 +267,27 @@ pub struct OracleStats {
     pub time: TimeByRole,
 }
 
+/// What the walked lemma is a judgement about (story 69).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Judgement {
+    /// An oracle lemma, `equiv[…]`, walked along the joint tree of lockstep execution.
+    Equiv,
+    /// A side-invariant lemma, `hoare[…]`, walked along the side tree of one-sided execution
+    /// (symbolic-execution story 25). Its tactics name no side, and its leaf has one memory.
+    Hoare,
+}
+
+impl Judgement {
+    /// The side selector of a one-sided tactic on side `side`: `{1}`, `{2}`, or nothing in a
+    /// `hoare` judgement, which has one program.
+    fn side(self, side: u8) -> String {
+        match self {
+            Judgement::Equiv => format!("{{{side}}}"),
+            Judgement::Hoare => String::new(),
+        }
+    }
+}
+
 /// The joint tree of an oracle with what the walk needs to know about each node's subtree.
 pub(super) struct OracleTree<'a> {
     pub outcome: &'a LockstepOutcome,
@@ -341,8 +362,8 @@ pub(super) enum Part {
     Invariant,
     /// A state relation, by the name of its `define-state-relation`.
     Relation(String),
-    /// A one-sided invariant (story 58): a `PkgInv_<l|r>_<Inst>` wrapper or a `GameInv_`
-    /// operator, with the one Domino claim it stands for.
+    /// A side invariant of a side-invariant lemma (story 69): a `PkgInv_<C>_<Inst>` wrapper
+    /// or `GameInv_<C>`, by its EasyCrypt name, with the one Domino claim it stands for.
     SideInvariant { op: String, claim: String },
 }
 
@@ -353,7 +374,9 @@ impl Part {
             Part::EqualOutput => "equal-output".into(),
             Part::Invariant => "invariant".into(),
             Part::Relation(name) => format!("invariant/{}", state_relation_op_name(name)),
-            Part::SideInvariant { op, .. } => format!("invariant/{op}"),
+            Part::SideInvariant { op, .. } => {
+                format!("invariant/{}", op.rsplit_once('.').map_or(op.as_str(), |(_, n)| n))
+            }
         }
     }
 }
@@ -383,15 +406,20 @@ pub(super) fn ambient_step(goal: &Goal, part: &Part, part_ops: &[InvariantOp]) -
     }
     match goals::app_op_leaf(concl) {
         Some("inv") => (Step::Unfold("inv".into()), Part::Invariant),
-        Some(op) => match part_ops.iter().find(|o| o.name == op) {
+        Some(op) => match part_ops.iter().find(|o| op_leaf(&o.name) == op) {
             Some(listed) => (
-                Step::Unfold(op.to_string()),
+                Step::Unfold(listed.name.clone()),
                 part_of_op(listed).unwrap_or_else(|| part.clone()),
             ),
             None => (Step::Split, part.clone()),
         },
         None => (Step::Split, part.clone()),
     }
+}
+
+/// The last path component of an operator name: `side_inv_C` for `Comp_C.side_inv_C`.
+fn op_leaf(name: &str) -> &str {
+    name.rsplit_once('.').map_or(name, |(_, n)| n)
 }
 
 /// The two decisions on an exit-path `if` whose condition reads `cond`, the one Domino predicts
@@ -437,6 +465,9 @@ fn pair_aborts(pair: &PairRecord) -> bool {
 /// failure is not held against EasyCrypt (story 23's note: Domino's verdict is stricter there
 /// than EasyCrypt's `inv`), so it counts as inconclusive.
 pub(super) fn pair_view(pair: &PairRecord, part: &Part) -> DominoView {
+    if pair.verdict_of(EQUAL_OUTPUT).is_none() {
+        return side_pair_view(pair, part);
+    }
     let invariant = |v: &Verdict| {
         let view = view_of_verdict(v);
         if view == DominoView::Fails && pair_aborts(pair) {
@@ -459,6 +490,24 @@ pub(super) fn pair_view(pair: &PairRecord, part: &Part) -> DominoView {
         Part::Whole => {
             view_of_verdict(claim(EQUAL_OUTPUT)).worst(invariant(claim("invariant")))
         }
+    }
+}
+
+/// What Domino says about `part` on a terminal of a side tree (story 69), whose claims are the
+/// package and game invariants of the composition: a side invariant part has the view of its
+/// own claim (`Inconclusive` when the side tree has no verdict for it), and every other part
+/// the worst view of all the claims. One-sided execution checks no claim at a terminal that
+/// aborts (its verdicts are `unreachable`).
+fn side_pair_view(pair: &PairRecord, part: &Part) -> DominoView {
+    match part {
+        Part::SideInvariant { claim, .. } => pair
+            .verdict_of(claim)
+            .map_or(DominoView::Inconclusive, view_of_verdict),
+        _ => pair
+            .claims
+            .iter()
+            .map(|c| view_of_verdict(&c.verdict))
+            .fold(DominoView::Verified, DominoView::worst),
     }
 }
 
@@ -584,18 +633,24 @@ struct Snap {
 
 pub(super) struct Prover<'a> {
     pub session: &'a mut Session,
+    /// An oracle lemma or a side-invariant lemma.
+    pub judgement: Judgement,
     pub script: Script,
     pub tree: &'a OracleTree<'a>,
     pub hints: &'a [String],
-    /// The operators of the invariant file ([`invariant_ops`]), in the order `rewrite /… in`
-    /// unfolds them.
+    /// The operators unfolded in a premise, in the order `rewrite /… in` unfolds them, the one
+    /// whose premise is unfolded first: those of the invariant file ([`invariant_ops`], `inv`
+    /// first) for an oracle lemma, the composition's side invariant operators
+    /// ([`side_invariant_ops`], `side_inv_<C>` first) for a side-invariant lemma.
     ///
     /// [`invariant_ops`]: crate::writers::easycrypt::invariant::invariant_ops
+    /// [`side_invariant_ops`]: crate::writers::easycrypt::invariant::side_invariant_ops
     pub unfold_ops: &'a [String],
-    /// The operators unfolded inside a leaf part ([`leaf_part_ops`]): a `StateRelation_`
-    /// operator starts a [`Part::Relation`], a wrapper or `GameInv_` operator a
-    /// [`Part::SideInvariant`]; a `Helper_` operator or a template is unfolded in the part it
-    /// is in, and is never a part of its own.
+    /// The operators unfolded inside a leaf part ([`leaf_part_ops`] for an oracle lemma, the
+    /// side invariant operators for a side-invariant lemma), matched by the last component of
+    /// their name: a `StateRelation_` operator starts a [`Part::Relation`], an operator with a
+    /// claim (a wrapper or `GameInv_<C>`) a [`Part::SideInvariant`]; any other is unfolded in
+    /// the part it is in, and is never a part of its own.
     ///
     /// [`leaf_part_ops`]: crate::writers::easycrypt::invariant::leaf_part_ops
     pub part_ops: &'a [InvariantOp],
@@ -1064,19 +1119,24 @@ impl Prover<'_> {
     /// /StateRelation_… /Helper_… in name.`), so a solver sees through them; only if the hypothesis mentions
     /// `inv`. `Ok(false)` if there was nothing to unfold or EasyCrypt refused.
     fn unfold_premise(&mut self, name: &str) -> R<bool> {
+        // `inv` for an oracle lemma, `Comp_<C>.side_inv_<C>` for a side-invariant lemma
+        let Some(head) = self.unfold_ops.first().cloned() else {
+            return Ok(false);
+        };
         let mentions = self.front().is_some_and(|g| {
             g.hyps.iter().any(|h| {
                 h.name == name
                     && h.form
                         .as_ref()
-                        .is_some_and(|f| goals::mentions_op(f, "inv"))
+                        .is_some_and(|f| goals::mentions_op(f, op_leaf(&head)))
             })
         });
         if !mentions {
             return Ok(false);
         }
         let all: String = self.unfold_ops.iter().map(|o| format!(" /{o}")).collect();
-        for ops in [all.as_str(), " /inv"] {
+        let only_head = format!(" /{head}");
+        for ops in [all.as_str(), only_head.as_str()] {
             if self.send(&format!("rewrite{ops} in {name}."), Want::Head)? {
                 return Ok(true);
             }
@@ -1173,6 +1233,15 @@ impl Prover<'_> {
         }
         let timeout = self.timeouts.quick_close;
         self.with_timeout(timeout, Self::try_quick_close)
+    }
+
+    /// The claim of a whole leaf: what the oracle lemma's postcondition says, or the side
+    /// invariant of a side-invariant lemma.
+    fn whole_claim(&self) -> &'static str {
+        match self.judgement {
+            Judgement::Equiv => "equal-output+invariant",
+            Judgement::Hoare => "side-invariant",
+        }
     }
 
     fn hint_sentence(&self) -> String {
@@ -1371,18 +1440,21 @@ impl Prover<'_> {
 
         // §3.6: a claim that fails in Domino is not worth EasyCrypt's time
         if let Some(pair) = tree.pairs_below(idx).next() {
-            let all_fail = tree.pairs_below(idx).all(|p| {
-                pair_view(p, &Part::EqualOutput) == DominoView::Fails
-                    && pair_view(p, &Part::Invariant) == DominoView::Fails
+            let all_fail = tree.pairs_below(idx).all(|p| match self.judgement {
+                Judgement::Equiv => {
+                    pair_view(p, &Part::EqualOutput) == DominoView::Fails
+                        && pair_view(p, &Part::Invariant) == DominoView::Fails
+                }
+                // a side tree's terminal: every package and game invariant claim fails
+                Judgement::Hoare => {
+                    !p.claims.is_empty()
+                        && p.claims.iter().all(|c| view_of_verdict(&c.verdict) == DominoView::Fails)
+                }
             });
             if all_fail {
                 let id = pair.id.clone();
-                return self.admit(
-                    AdmitReason::DominoFails,
-                    &id,
-                    "equal-output+invariant",
-                    DominoView::Fails,
-                );
+                let claim = self.whole_claim();
+                return self.admit(AdmitReason::DominoFails, &id, claim, DominoView::Fails);
             }
         }
 
@@ -1439,6 +1511,21 @@ impl Prover<'_> {
     /// `sp k l.` for the assignments at the head of the front goal's programs, `k`/`l` counted
     /// from EasyCrypt's JSON. `false` if the front goal is not a program goal or `sp` failed.
     fn sp_front(&mut self) -> R<bool> {
+        if self.judgement == Judgement::Hoare {
+            let Some(k) = self
+                .front()
+                .and_then(goals::program)
+                .map(|p| goals::leading_assignments(&p.stmt))
+            else {
+                return Ok(false);
+            };
+            // with its count: a bare `sp` also goes through the `if`s that follow
+            return if k == 0 {
+                Ok(true)
+            } else {
+                self.send(&format!("sp {k}."), Want::Full)
+            };
+        }
         let Some((k, l)) = self.front().and_then(goals::sp_counts) else {
             return Ok(false);
         };
@@ -1467,6 +1554,13 @@ impl Prover<'_> {
         }
         if !self.sp_front()? {
             return Ok(false);
+        }
+        if self.judgement == Judgement::Hoare {
+            return match kind {
+                NodeKind::Split => self.split_hoare(idx),
+                NodeKind::SamplingIndependent => self.sampling_hoare(idx),
+                _ => Ok(false),
+            };
         }
         match kind {
             NodeKind::Synchronized => self.synchronized(idx),
@@ -1522,7 +1616,8 @@ impl Prover<'_> {
                 _ => return Ok(false),
             };
             let before = self.count();
-            let closing = format!("{tactic}{{{side}}} ^if; 1: auto => /#.");
+            let at = self.judgement.side(side);
+            let closing = format!("{tactic}{at} ^if; 1: auto => /#.");
             if self.send(&closing, Want::Status)? {
                 // the side goal closed in the same sentence: the main goal is in front
                 if self.count() != before {
@@ -1531,13 +1626,15 @@ impl Prover<'_> {
                 continue;
             }
             // the side goal did not close in one step: take it on its own
-            let plain = format!("{tactic}{{{side}}} ^if.");
+            let plain = format!("{tactic}{at} ^if.");
             if !self.send(&plain, Want::Full)? || self.count() != before + 1 {
                 return Ok(false);
             }
-            if !self
-                .front()
-                .is_some_and(|g| goals::is_ambient(g) || goals::is_skip_pair(g))
+            // a `hoare` side goal is a program judgement; `close_side_goal` reduces it
+            if self.judgement == Judgement::Equiv
+                && !self
+                    .front()
+                    .is_some_and(|g| goals::is_ambient(g) || goals::is_skip_pair(g))
             {
                 return Ok(false);
             }
@@ -1612,6 +1709,55 @@ impl Prover<'_> {
             self.bullet(|p| p.handle_child(idx, child))?;
         }
         Ok(true)
+    }
+
+    /// A branch of a side tree with both arms: `if.` leaves the two arms, `then` in front, and
+    /// each is a bullet. EasyCrypt's answer tells only the front goal of a `hoare` judgement
+    /// apart (the kinds of the others are `formula`), so only that one is checked.
+    fn split_hoare(&mut self, idx: usize) -> R<bool> {
+        let node = self.tree.node(idx);
+        if node.children.len() != 2 {
+            return Ok(false);
+        }
+        let before = self.count();
+        if !self.send("if.", Want::Full)?
+            || self.count() != before + 1
+            || !self.front().is_some_and(goals::is_program)
+        {
+            return Ok(false);
+        }
+        for child in &node.children {
+            self.bullet(|p| p.handle_child(idx, child))?;
+        }
+        Ok(true)
+    }
+
+    /// A sampling of a side tree, at the head of the program after `sp`: `seq 1 : (#pre)`, its
+    /// first goal closed by `auto`. The side invariants do not name the sampled variable.
+    fn sampling_hoare(&mut self, idx: usize) -> R<bool> {
+        let node = self.tree.node(idx);
+        let [child] = node.children.as_slice() else {
+            return Ok(false);
+        };
+        let is_rnd_head = self
+            .front()
+            .and_then(goals::program)
+            .map(|p| goals::head_after_assignments(&p.stmt))
+            .is_some_and(|(k, head)| k == 0 && head.is_some_and(|i| i.kind == "rnd"));
+        if !is_rnd_head {
+            return Ok(false);
+        }
+        let before = self.count();
+        for close in ["auto => />", "auto => /#", "auto"] {
+            let sentence = format!("seq 1 : (#pre); 1: {close}.");
+            if self.attempt(&[&sentence], Want::Full, |p| {
+                p.count() == before && p.front().is_some_and(goals::is_program)
+            })? {
+                self.handle_child(idx, child)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// After a tactic that turned one goal (count `before`) into two program goals.
@@ -1700,7 +1846,8 @@ impl Prover<'_> {
         self.as_role(Role::ExitPath, |p| p.decide_exit_path(pair))?;
         let before = self.count();
         if !self.as_role(Role::Reduce, |p| p.reduce_leaf("hpre"))? {
-            return self.admit_ec_failed(node, &Part::Whole, "equal-output+invariant");
+            let claim = self.whole_claim();
+            return self.admit_ec_failed(node, &Part::Whole, claim);
         }
         if self.count() < before {
             return Ok(());
@@ -1719,14 +1866,28 @@ impl Prover<'_> {
     /// The side (1 or 2) of the first `if` left in the front goal's programs, side 1 first,
     /// and that `if`'s condition.
     fn first_exit_if(&self) -> Option<(u8, String)> {
-        let (l, r) = self.front().and_then(goals::sides)?;
         let first = |side: &crate::easycrypt::json::Side| {
             side.stmt.iter().find(|i| i.kind == "if").map(|i| match &i.cond {
                 Some(c) if !c.pp.is_empty() => c.pp.clone(),
                 _ => i.pp.trim_start_matches("if").to_string(),
             })
         };
-        first(l).map(|c| (1, c)).or_else(|| first(r).map(|c| (2, c)))
+        (1u8..)
+            .zip(self.programs())
+            .find_map(|(side, program)| first(program).map(|c| (side, c)))
+    }
+
+    /// The programs of the front goal: both sides of an `equiv`, side 1 first, or the one
+    /// program of a `hoare`. Empty when the front goal is not a program goal.
+    fn programs(&self) -> Vec<&crate::easycrypt::json::Side> {
+        let Some(goal) = self.front() else {
+            return Vec::new();
+        };
+        match (goals::program(goal), goals::sides(goal)) {
+            (Some(p), _) => vec![p],
+            (None, Some((l, r))) => vec![l, r],
+            (None, None) => Vec::new(),
+        }
     }
 
     /// Decides the `if`s left in the front goal's programs, one at a time: the first `if` of
@@ -1734,9 +1895,11 @@ impl Prover<'_> {
     /// [`exit_decisions`] first. Stops at the first `if` that neither decision takes (`auto`'s
     /// wp then takes it into the formula), and after as many decisions as the goal had `if`s.
     fn decide_exit_path(&mut self, pair: Option<&PairRecord>) -> R<()> {
-        let bound = self.front().and_then(goals::sides).map_or(0, |(l, r)| {
-            l.stmt.iter().chain(&r.stmt).filter(|i| i.kind == "if").count()
-        });
+        let bound: usize = self
+            .programs()
+            .iter()
+            .map(|p| p.stmt.iter().filter(|i| i.kind == "if").count())
+            .sum();
         for _ in 0..bound {
             let Some((side, cond)) = self.first_exit_if() else {
                 return Ok(());
@@ -1757,7 +1920,7 @@ impl Prover<'_> {
     fn decide_if(&mut self, side: u8, cond: &str, aborts: Option<bool>) -> R<bool> {
         for tactic in exit_decisions(cond, aborts) {
             let before = self.count();
-            let sentence = format!("{tactic}{{{side}}} ^if; 1: by auto.");
+            let sentence = format!("{tactic}{} ^if; 1: by auto.", self.judgement.side(side));
             if self.attempt(&[&sentence], Want::Status, |p| {
                 p.count() == before && p.front().is_some_and(goals::is_program)
             })? {
@@ -1767,12 +1930,17 @@ impl Prover<'_> {
         Ok(false)
     }
 
-    /// `auto => &1 &2 <premise>.` on the leaf's program goal, then the invariant unfolded in
+    /// `auto => &1 &2 <premise>.` on the leaf's program goal (`auto => &hr <premise> /=.` in a
+    /// `hoare` judgement, whose `let`s would hide `side_inv_<C>`), then the invariant unfolded in
     /// the premise. Whether it gave a formula or closed the goal; `false` (with nothing kept)
     /// if `auto` failed or left a program goal.
     fn reduce_leaf(&mut self, premise: &str) -> R<bool> {
         let before = self.count();
-        let reduced = self.attempt(&[&format!("auto => &1 &2 {premise}.")], Want::Head, |p| {
+        let sentence = match self.judgement {
+            Judgement::Equiv => format!("auto => &1 &2 {premise}."),
+            Judgement::Hoare => format!("auto => &hr {premise} /=."),
+        };
+        let reduced = self.attempt(&[&sentence], Want::Head, |p| {
             p.count() < before || (p.count() == before && p.front().is_some_and(goals::is_ambient))
         })?;
         if reduced && self.count() == before {
@@ -2033,6 +2201,9 @@ impl Prover<'_> {
             return Ok(());
         }
         self.mismatches = self.front().map(align).unwrap_or_default();
+        if self.judgement == Judgement::Hoare {
+            return self.hoare_prelude();
+        }
         // the router prelude, by construction: `sp`, `if`, then the condition, the guarded body
         // (where lockstep begins) and the case where both sides already aborted
         let after_inline = self.snap();
@@ -2061,6 +2232,31 @@ impl Prover<'_> {
         })
     }
 
+    /// The router prelude of a side-invariant lemma (story 69): `sp`, then `if.` on
+    /// `if (!abort_flag)` gives the arm where the game has not aborted (one-sided execution
+    /// begins there), then the arm where it has, which keeps the state: the quick close, else
+    /// the fallbacks.
+    fn hoare_prelude(&mut self) -> R<()> {
+        let after_inline = self.snap();
+        let before = self.count();
+        let prelude = self.sp_front()?
+            && self.send("if.", Want::Full)?
+            && self.count() == before + 1
+            && self.front().is_some_and(goals::is_program);
+        if !prelude {
+            self.rollback(after_inline)?;
+            self.stats.fallbacks += 1;
+            return self.prove_blind(0, 64);
+        }
+        self.bullet(|p| p.prove_node(0))?;
+        self.bullet(|p| {
+            if p.quick_close_program()? {
+                return Ok(());
+            }
+            p.close_side_goal(0, "already-aborted", true)
+        })
+    }
+
     // ------------------------------------------------------------------
     // The fallback (§3.4): the PDF's trial procedure, without the joint tree
     // ------------------------------------------------------------------
@@ -2086,6 +2282,18 @@ impl Prover<'_> {
         }
         if !self.sp_front()? {
             return admit_mismatch(self);
+        }
+        if self.judgement == Judgement::Hoare {
+            // no trial procedure for one program: its leaf, or an admit
+            let empty = self
+                .front()
+                .and_then(goals::program)
+                .is_some_and(|p| p.stmt.is_empty());
+            return if empty {
+                self.leaf_of(node, None)
+            } else {
+                admit_mismatch(self)
+            };
         }
         let Some((left, right)) = self.front().and_then(goals::sides) else {
             return admit_mismatch(self);

@@ -239,6 +239,9 @@ pub struct Form {
     pub left: Option<Side>,
     #[serde(default)]
     pub right: Option<Side>,
+    /// `hoareS` (`phoareS`, `ehoareS`): the one program.
+    #[serde(default)]
+    pub program: Option<Side>,
     #[serde(default)]
     pub pre: Option<Box<Form>>,
     #[serde(default)]

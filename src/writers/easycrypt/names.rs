@@ -275,7 +275,9 @@ impl Names {
     }
 }
 
-fn mangle_name(kind: NameKind, raw: &str) -> String {
+/// `raw` as a name of `kind`, without the collision check of [`Names::mangle`]: for a name
+/// that an export already mangled through a registry, such as a composition's.
+pub(crate) fn mangle_name(kind: NameKind, raw: &str) -> String {
     let replaced = raw.replace('-', "_");
 
     match kind {

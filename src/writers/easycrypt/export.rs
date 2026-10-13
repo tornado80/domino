@@ -30,11 +30,14 @@ use crate::transforms::theorem_transforms::EasyCryptTransform;
 use crate::transforms::TheoremTransform;
 use crate::types::Type;
 
-use super::game::compute_game_files_observed;
-use super::interfaces::build_interfaces_file;
+use super::ast::{EcFile, Require};
+use super::game::{compute_game_files_observed, GameFile};
+use super::interfaces::{build_interfaces_file, discover_compositions, InterfacesOutput};
+use super::invariant::{composition_items, has_side_invariants, SideCtx, StateOwners};
 use super::package::compute_package_variants_observed;
 use super::progress::{ExportEvent, ExportObserver, ExportPhase, NopExportObserver, PhaseScope};
-use super::proof::compute_equivalence_files_observed;
+use super::proof::{compute_equivalence_files_observed, state_files, EquivalenceFiles};
+use super::sideinv::{build_side_inv_files, SideInvFiles};
 use super::render::render_file;
 use super::types::func_op_name;
 use super::typesfile::{build_types_file, collect_bits_types, collect_fn_consts};
@@ -63,6 +66,21 @@ pub struct EquivalenceReport {
     pub state_relations: Vec<String>,
     /// The SMT names of the helper `define-fun`s the invariant file translates, file order.
     pub helpers: Vec<String>,
+    /// The compositions of the two sides that have side invariants (story 69), by their Domino
+    /// names, the left one first, each one time: the glue needs their `SideInv_<C>.ec`.
+    pub side_compositions: Vec<String>,
+}
+
+/// The side-invariant files of one composition (story 69): what its side-invariant job proves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SideInvReport {
+    /// The composition's name in Domino.
+    pub composition: String,
+    /// `SideInv_<C>.ec`, which joins the lemmas: a translation file.
+    pub join_file: String,
+    /// `(exported oracle, SideInv_<C>_<O>.ec)` for each oracle, in export order: the files the
+    /// side-invariant job owns.
+    pub oracle_files: Vec<(String, String)>,
 }
 
 /// A game hop this exporter does not translate, named with its kind and the
@@ -108,6 +126,8 @@ pub struct ExportedTheorem {
     /// One entry per translated `GameHop::Equivalence`, `theorem.game_hops`
     /// order (story 07).
     pub equivalences: Vec<EquivalenceReport>,
+    /// One entry per composition with side invariants, first-discovery order (story 69).
+    pub side_invariants: Vec<SideInvReport>,
 }
 
 /// The kind + reason for a hop this exporter skips, or `None` for
@@ -207,8 +227,17 @@ pub fn export_theorem_observed(
     scope.item("Interfaces.ec");
     let interfaces_output = build_interfaces_file(&theorem)?;
     scope.finish();
-    let package_variants = compute_package_variants_observed(&theorem, observer)?;
-    let game_files = compute_game_files_observed(&theorem, observer)?;
+    let mut package_variants = compute_package_variants_observed(&theorem, observer)?;
+    let mut game_files = compute_game_files_observed(&theorem, observer)?;
+    // story 69: the state types and package invariant templates go to the package files, the
+    // side records and side invariants to the composition files
+    let owners = StateOwners::of(&theorem)?;
+    for (variant, items) in owners.package_items(&theorem, project)? {
+        if let Some(v) = package_variants.iter_mut().find(|v| v.name == variant) {
+            v.file.items.extend(items);
+        }
+    }
+    add_side_invariants(&theorem, project, &interfaces_output, &owners, &mut game_files)?;
 
     let package_variant_names = package_variants.iter().map(|v| v.name.clone()).collect();
     let game_names = game_files.iter().map(|g| g.name.clone()).collect();
@@ -260,11 +289,26 @@ pub fn export_theorem_observed(
             oracle_set_mismatch: ef.proof.oracle_set_mismatch.clone(),
             state_relations: ef.invariants.state_relations.clone(),
             helpers: ef.invariants.helpers.clone(),
+            side_compositions: side_compositions(&theorem, ef),
         });
     }
 
-    // after every other file: an oracle file may collide with any of them
-    insert_oracle_files(&mut files, &equivalence_files)?;
+    let side_files = build_side_inv_files(&theorem, &interfaces_output, &owners)?;
+    let side_invariants = side_files
+        .iter()
+        .map(|f| SideInvReport {
+            composition: f.composition.clone(),
+            join_file: f.join_file.clone(),
+            oracle_files: f
+                .oracles
+                .iter()
+                .map(|o| (o.oracle.clone(), o.file_name.clone()))
+                .collect(),
+        })
+        .collect();
+
+    // after every other file: a lemma file may collide with any of them
+    insert_lemma_files(&mut files, &lemma_files(&equivalence_files, &side_files))?;
 
     if let Some(file) = files
         .keys()
@@ -284,16 +328,112 @@ pub fn export_theorem_observed(
         game_names,
         randomness_mapping_oracles,
         equivalences,
+        side_invariants,
     })
 }
 
-/// Adds each equivalence's oracle lemma files to `files`, which holds every other file of the
-/// export. The **name rule** (story 68): an oracle file whose name, ignoring case (the file
-/// system may), is already taken, by another file of the export or by another oracle's file,
-/// is [`EcExportError::OracleFileCollision`], which names both.
-fn insert_oracle_files(
+/// Adds what each composition with side invariants declares for them (story 69) to its file:
+/// the items of [`composition_items`], and the import of the package files that declare the
+/// state types they use.
+fn add_side_invariants(
+    theorem: &Theorem<'_>,
+    project: &impl Project,
+    interfaces: &InterfacesOutput,
+    owners: &StateOwners,
+    game_files: &mut [GameFile],
+) -> Result<(), EcExportError> {
+    let ctx = SideCtx {
+        theorem_consts: &theorem.consts,
+        project,
+    };
+    for comp in discover_compositions(theorem) {
+        let name = &interfaces.comp_mangled[&comp.name];
+        let Some(items) = composition_items(&comp, name, &ctx)? else {
+            continue;
+        };
+        let game = game_files
+            .iter_mut()
+            .find(|g| &g.name == name)
+            .expect("every composition has a game file");
+        let state = state_files(owners, [&comp]);
+        if !state.is_empty() {
+            game.file.requires.push(Require {
+                import: true,
+                names: state,
+            });
+        }
+        game.file.items.extend(items);
+    }
+    Ok(())
+}
+
+/// The compositions of `ef`'s two sides with side invariants, by Domino name, left first,
+/// each one time.
+fn side_compositions(theorem: &Theorem<'_>, ef: &EquivalenceFiles) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for name in [&ef.proof.left_name, &ef.proof.right_name] {
+        let comp = theorem
+            .find_game_instance(name)
+            .expect("an exported equivalence names game instances of its theorem")
+            .game();
+        if has_side_invariants(comp) && !out.contains(&comp.name) {
+            out.push(comp.name.clone());
+        }
+    }
+    out
+}
+
+/// A lemma file to add under the name rule: its name, what it is (for the error), its file.
+struct LemmaFile<'a> {
+    name: &'a str,
+    owner: String,
+    file: &'a EcFile,
+}
+
+/// Every lemma file of the export, in order: the oracle lemmas of each equivalence, then the
+/// side-invariant lemmas of each composition and the file that joins them.
+fn lemma_files<'a>(
+    equivalence_files: &'a [EquivalenceFiles],
+    side_files: &'a [SideInvFiles],
+) -> Vec<LemmaFile<'a>> {
+    let mut out = Vec::new();
+    for ef in equivalence_files {
+        let equivalence = ef.proof.file_name.trim_end_matches(".ec");
+        for o in &ef.proof.oracle_files {
+            out.push(LemmaFile {
+                name: &o.file_name,
+                owner: format!("oracle `{}` of `{equivalence}`", o.oracle),
+                file: &o.file,
+            });
+        }
+    }
+    for f in side_files {
+        for o in &f.oracles {
+            out.push(LemmaFile {
+                name: &o.file_name,
+                owner: format!(
+                    "the side-invariant lemma of oracle `{}` of composition `{}`",
+                    o.oracle, f.composition
+                ),
+                file: &o.file,
+            });
+        }
+        out.push(LemmaFile {
+            name: &f.join_file,
+            owner: format!("the side-invariant lemmas of composition `{}`", f.composition),
+            file: &f.join,
+        });
+    }
+    out
+}
+
+/// Adds the lemma files to `files`, which holds every other file of the export. The **name
+/// rule** (stories 68, 69): a lemma file whose name, ignoring case (the file system may), is
+/// already taken, by another file of the export or by another lemma file, is
+/// [`EcExportError::LemmaFileCollision`], which names both.
+fn insert_lemma_files(
     files: &mut BTreeMap<PathBuf, String>,
-    equivalence_files: &[super::proof::EquivalenceFiles],
+    lemmas: &[LemmaFile<'_>],
 ) -> Result<(), EcExportError> {
     let mut taken: HashMap<String, String> = files
         .keys()
@@ -302,19 +442,15 @@ fn insert_oracle_files(
             (name.to_lowercase(), format!("the file `{name}` of the export"))
         })
         .collect();
-    for ef in equivalence_files {
-        let equivalence = ef.proof.file_name.trim_end_matches(".ec");
-        for o in &ef.proof.oracle_files {
-            let owner = format!("oracle `{}` of `{equivalence}`", o.oracle);
-            if let Some(other) = taken.insert(o.file_name.to_lowercase(), owner.clone()) {
-                return Err(EcExportError::OracleFileCollision {
-                    file: o.file_name.clone(),
-                    owner,
-                    other,
-                });
-            }
-            files.insert(PathBuf::from(&o.file_name), render_file(&o.file));
+    for lemma in lemmas {
+        if let Some(other) = taken.insert(lemma.name.to_lowercase(), lemma.owner.clone()) {
+            return Err(EcExportError::LemmaFileCollision {
+                file: lemma.name.to_string(),
+                owner: lemma.owner.clone(),
+                other,
+            });
         }
+        files.insert(PathBuf::from(lemma.name), render_file(lemma.file));
     }
     Ok(())
 }
@@ -394,6 +530,12 @@ mod tests {
         }
         for name in &exported.game_names {
             compile(&base, &format!("{base}/Comp_{name}.ec"));
+        }
+        for side in &exported.side_invariants {
+            for (_, file) in &side.oracle_files {
+                compile(&base, &format!("{base}/{file}"));
+            }
+            compile(&base, &format!("{base}/{}", side.join_file));
         }
         for eq in &exported.equivalences {
             compile(&base, &format!("{base}/{}", eq.invariants_file));
@@ -806,7 +948,7 @@ mod tests {
         let dir = hello_world_with_oracle("Invariants");
         let err = export(dir.path().to_str().unwrap(), "Proof").unwrap_err();
         assert!(
-            matches!(&err, EcExportError::OracleFileCollision { file, .. }
+            matches!(&err, EcExportError::LemmaFileCollision { file, .. }
                 if file == "Eq_medium_composition_small_composition_Invariants.ec"),
             "{err}"
         );

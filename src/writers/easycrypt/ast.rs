@@ -221,15 +221,21 @@ pub enum EcExpr {
     /// precondition (story 13, [`ProofLine::ByequivPrecondition`]); a
     /// self-delimited primitive, atom precedence like every other one here.
     GlobEq(String),
-    /// `equiv[left ~ right : ={arg} /\ inv ==> ={res} /\ inv]`: the goal the `call (: inv)`
-    /// rule leaves for one oracle, and the statement of its oracle lemma (story 68). `left` and
-    /// `right` are the two procedures' qualified paths. Renders over several lines, `inv` laid
-    /// out as in the `call`.
+    /// `equiv[left ~ right : ={arg} /\ inv /\ a1 /\ … ==> ={res} /\ inv]`: the statement of an
+    /// oracle lemma (story 68). `left` and `right` are the two procedures' qualified paths.
+    /// `assumed` are the side invariants of the two sides (story 69): the lemma assumes them and
+    /// does not prove them. Renders over several lines, `inv` and each of `assumed` laid out as
+    /// in the `call`.
     OracleEquiv {
         left: String,
         right: String,
         inv: Box<EcExpr>,
+        assumed: Vec<EcExpr>,
     },
+    /// `hoare[proc : inv ==> inv]`: the statement of a side-invariant lemma (story 69), `proc`
+    /// the procedure's qualified path. Renders over several lines, `inv` laid out as in the
+    /// `call`.
+    OracleHoare { proc: String, inv: Box<EcExpr> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -367,10 +373,11 @@ pub enum ProofLine {
     /// `byequiv\n  (: <c0>\n     /\ <c1>\n     ...\n     ==> _) => //.`
     /// ([`super::render::render_proof_line`]).
     ByequivPrecondition { conjuncts: Vec<EcExpr> },
-    /// The invariant `call` (story 07): `call (: <inv>); last first.`, with
+    /// The invariant `call` (story 07): `call (: <inv> /\ <a1> /\ …); last first.`, with
     /// `inv` the invariant applied to one game-state record literal per
-    /// side. Kept structured so the renderer lays it out (story 43 §3.3):
-    /// each argument on its own line, one record field per line
+    /// side, and `also` the side invariants of the two sides (story 69). Kept
+    /// structured so the renderer lays it out (story 43 §3.3): each argument on
+    /// its own line, one record field per line
     /// ([`super::render::render_proof_line`]).
-    InvariantCall { inv: EcExpr },
+    InvariantCall { inv: EcExpr, also: Vec<EcExpr> },
 }

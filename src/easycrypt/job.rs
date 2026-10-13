@@ -66,14 +66,17 @@ pub fn create_if_absent(path: &Path, text: &str) -> std::io::Result<bool> {
     }
 }
 
-/// Whether `rel` is an oracle lemma file of `exported` (story 68), which the proof job of the
-/// oracle owns. Every other file, the equivalence's glue `Eq_<L>_<R>.ec` and its
-/// `Eq_<L>_<R>_Invariants.ec` included, is a translation file, created when missing.
+/// Whether `rel` is a lemma file of `exported` that a job owns: an oracle lemma file (story 68),
+/// which the proof job of the oracle owns, or a side-invariant lemma file `SideInv_<C>_<O>.ec`
+/// (story 69), which the side-invariant job of the composition owns. Every other file, the
+/// equivalence's glue `Eq_<L>_<R>.ec`, its `Eq_<L>_<R>_Invariants.ec` and `SideInv_<C>.ec`
+/// included, is a translation file, created when missing.
 pub fn is_oracle_file(exported: &ExportedTheorem, rel: &Path) -> bool {
     exported
         .equivalences
         .iter()
         .flat_map(|eq| eq.oracle_files.iter())
+        .chain(exported.side_invariants.iter().flat_map(|s| s.oracle_files.iter()))
         .any(|(_, file)| Path::new(file) == rel)
 }
 
@@ -887,6 +890,7 @@ mod tests {
             oracle_set_mismatch: None,
             state_relations: vec![],
             helpers: vec![],
+            side_compositions: vec![],
         });
         exported
     }

@@ -58,14 +58,18 @@ pub struct EquivalenceProofFile {
     /// dropped.
     pub oracle_set_mismatch: Option<String>,
     /// One oracle lemma file per exported oracle, in the game interface's order. The glue
-    /// (`file`) closes each oracle's goal with `+ by conseq <lemma> => /#.`: the `call` names the
-    /// oracle's parameters where the lemma says `={arg}`, and `/#` closes the difference.
+    /// (`file`) closes each oracle's goal with `+ by conseq <lemma> <left> <right> => /#.`: the
+    /// side-invariant lemmas of the oracle for each side whose composition has one (story 69;
+    /// `_` for a left side without one, nothing for a right side without one). The `call` names
+    /// the oracle's parameters where the lemma says `={arg}`, and `/#` closes the difference.
     pub oracle_files: Vec<OracleProofFile>,
 }
 
 /// One oracle's lemma file, `Eq_<L>_<R>_<O>.ec` (story 68, ADR 0013): the goal the glue's
-/// `call (: inv …)` leaves for the oracle, as a lemma outside any section. Translation writes
-/// `+ proc; inline. admit.` as its proof; the proof job of the oracle owns the file after that.
+/// `call (: inv …)` leaves for the oracle, as a lemma outside any section. Since story 69
+/// (ADR 0014) it assumes the side invariants of both sides in its precondition and proves
+/// only `={res} /\ inv`. Translation writes `+ proc; inline. admit.` as its proof; the proof
+/// job of the oracle owns the file after that.
 pub struct OracleProofFile {
     /// The exported oracle's name, the `<O>` of the file name.
     pub oracle: String,
@@ -135,6 +139,7 @@ pub fn compute_equivalence_files_observed(
     }
     scope.finish();
 
+    let owners = invariant::StateOwners::of(theorem)?;
     let mut lemma_names = Names::new();
     let mut scope = PhaseScope::start(observer, ExportPhase::Proofs, hops.len());
     let mut out = Vec::with_capacity(hops.len());
@@ -145,6 +150,7 @@ pub fn compute_equivalence_files_observed(
             *proofstep,
             equivalence,
             interfaces,
+            &owners,
             &mut lemma_names,
         )?;
         out.push(EquivalenceFiles { invariants, proof });
@@ -167,13 +173,13 @@ pub fn compute_equivalence_files_observed(
 /// `game.rs` (which never exposes these internals) — a pure function of
 /// `comp`, matching story 04's own "recomputed, not threaded through"
 /// precedent (its report §3).
-struct CompLayout {
-    comp_mangled: String,
-    comp_theory: String,
+pub(super) struct CompLayout {
+    pub(super) comp_mangled: String,
+    pub(super) comp_theory: String,
     inst_mangled: Vec<String>,
 }
 
-fn compute_layout(comp: &Composition, interfaces: &InterfacesOutput) -> Result<CompLayout, EcExportError> {
+pub(super) fn compute_layout(comp: &Composition, interfaces: &InterfacesOutput) -> Result<CompLayout, EcExportError> {
     let comp_mangled = interfaces.comp_mangled[&comp.name].clone();
     let comp_theory = format!("Comp_{comp_mangled}");
 
@@ -232,29 +238,11 @@ fn build_side_record_lit(
 
     for &idx in &comp.ordered_pkgs_idx() {
         let inst = &comp.pkgs[idx];
-        let package = inst.pkg.name.as_str();
         let mut names = Names::new();
-        let module_var = |mangled: String| {
-            let path = vec![
-                layout.comp_theory.clone(),
-                format!("Pkg_Inst_{}", layout.inst_mangled[idx]),
-                mangled,
-            ];
-            EcExpr::Qualified { path, mem: Some(mem) }
-        };
-
-        let mut state_fields = Vec::with_capacity(inst.pkg.state.len());
-        for (name, _ty, _span) in &inst.pkg.state {
-            let mangled = names.mangle(NameKind::Var, name)?;
-            state_fields.push((
-                invariant::pkg_state_field_name(package, &mangled),
-                module_var(mangled),
-            ));
-        }
-        if !state_fields.is_empty() {
+        if let Some(state) = instance_state_lit(inst, layout, idx, Some(mem), &mut names)? {
             instance_fields.push((
                 invariant::instance_field_name(field_ns_prefix, inst.name()),
-                EcExpr::RecordLit { fields: state_fields },
+                state,
             ));
         }
 
@@ -265,7 +253,7 @@ fn build_side_record_lit(
             let mangled = names.mangle(NameKind::Var, name)?;
             param_fields.push((
                 invariant::param_field_name(field_ns_prefix, inst.name(), &mangled),
-                module_var(mangled),
+                module_var(layout, idx, mangled, Some(mem)),
             ));
         }
     }
@@ -285,6 +273,81 @@ fn build_side_record_lit(
     ));
 
     Ok(EcExpr::RecordLit { fields })
+}
+
+/// `Comp_<C>.Pkg_Inst_<Inst>.<var>` of instance `idx`, at memory `mem` (none in a one-memory
+/// judgement).
+fn module_var(layout: &CompLayout, idx: usize, var: String, mem: Option<u8>) -> EcExpr {
+    EcExpr::Qualified {
+        path: vec![
+            layout.comp_theory.clone(),
+            format!("Pkg_Inst_{}", layout.inst_mangled[idx]),
+            var,
+        ],
+        mem,
+    }
+}
+
+/// The `<Pkg>_pkgstate` literal of instance `idx` of the composition, its fields read from the
+/// module variables at `mem`, or `None` for an instance without state. The state fields are
+/// mangled through `names` (the instance's own registry, as in the package's module).
+fn instance_state_lit(
+    inst: &crate::package::PackageInstance,
+    layout: &CompLayout,
+    idx: usize,
+    mem: Option<u8>,
+    names: &mut Names,
+) -> Result<Option<EcExpr>, EcExportError> {
+    let package = inst.pkg.name.as_str();
+    let mut fields = Vec::with_capacity(inst.pkg.state.len());
+    for (name, _ty, _span) in &inst.pkg.state {
+        let mangled = names.mangle(NameKind::Var, name)?;
+        fields.push((
+            invariant::pkg_state_field_name(package, &mangled),
+            module_var(layout, idx, mangled, mem),
+        ));
+    }
+    Ok((!fields.is_empty()).then_some(EcExpr::RecordLit { fields }))
+}
+
+/// `Comp_<C>.side_inv_<C>` applied to the composition's side record (story 69), its fields
+/// read from the module variables at `mem` (none for the side-invariant lemma's one memory),
+/// or `None` when the composition has no side invariant. The side record's fields are
+/// qualified with the composition's theory, so a file that uses it need not import that
+/// theory; the `<Pkg>_pkgstate` fields need the package files imported.
+pub(super) fn side_inv_app(
+    comp: &Composition,
+    layout: &CompLayout,
+    mem: Option<u8>,
+) -> Result<Option<EcExpr>, EcExportError> {
+    if !invariant::has_side_invariants(comp) {
+        return Ok(None);
+    }
+    let theory = &layout.comp_theory;
+    let prefix = format!("{}_", layout.comp_mangled);
+    let mut fields = Vec::new();
+    for &idx in &comp.ordered_pkgs_idx() {
+        let inst = &comp.pkgs[idx];
+        if let Some(state) = instance_state_lit(inst, layout, idx, mem, &mut Names::new())? {
+            let field = invariant::instance_field_name(&prefix, inst.name());
+            fields.push((format!("{theory}.{field}"), state));
+        }
+    }
+    fields.push((
+        format!("{theory}.{}", invariant::abort_field_name(&prefix)),
+        EcExpr::Qualified {
+            path: vec![
+                theory.clone(),
+                format!("Game_{}", layout.comp_mangled),
+                "abort_flag".to_string(),
+            ],
+            mem,
+        },
+    ));
+    Ok(Some(EcExpr::App {
+        head: format!("{theory}.{}", invariant::side_inv_op_name(&layout.comp_mangled)),
+        args: vec![EcExpr::RecordLit { fields }],
+    }))
 }
 
 /// A composition-level `run` argument's resolved value: a literal (rendered
@@ -433,6 +496,7 @@ fn build_equivalence_file(
     proofstep: usize,
     equivalence: &Equivalence,
     interfaces: &InterfacesOutput,
+    owners: &invariant::StateOwners,
     lemma_names: &mut Names,
 ) -> Result<EquivalenceProofFile, EcExportError> {
     let left_game_inst = theorem
@@ -535,6 +599,11 @@ fn build_equivalence_file(
         head: "inv".to_string(),
         args: vec![left_record, right_record],
     };
+    // story 69: the side invariants of both sides, assumed by each oracle lemma and joined in
+    // by the glue
+    let left_side = side_inv_app(left_comp, &left_layout, Some(1))?;
+    let right_side = side_inv_app(right_comp, &right_layout, Some(2))?;
+    let assumed: Vec<EcExpr> = left_side.iter().chain(&right_side).cloned().collect();
 
     // --- the byequiv induction start's own relational precondition
     // (story 15 §3.1): `={glob A}` then one `arg{side} = …` per side,
@@ -548,7 +617,10 @@ fn build_equivalence_file(
     let mut proof = vec![
         ProofLine::ByequivPrecondition { conjuncts: precondition },
         plain_line("proc; inline."),
-        ProofLine::InvariantCall { inv: inv_app.clone() },
+        ProofLine::InvariantCall {
+            inv: inv_app.clone(),
+            also: assumed.clone(),
+        },
         blank_line(),
         // Story 19: one line. `t1; t2` runs `t2` on every goal `t1` leaves and
         // on none when `t1` closes the base case, so the `smt` can never fall
@@ -557,7 +629,28 @@ fn build_equivalence_file(
     ];
 
     let stem = format!("Eq_{}_{}", left_game_inst.name(), right_game_inst.name());
-    let theory_requires = theory_requires(&left_layout, &right_layout, same_composition, &stem);
+    let theory_requires = theory_requires(
+        &left_layout,
+        &right_layout,
+        same_composition,
+        &stem,
+        &state_files(owners, [left_comp, right_comp]),
+    );
+    // the side-invariant lemmas of an oracle, as `conseq` takes them: the left side's, then the
+    // right side's; `_` for a left side without one when the right side has one
+    let side_lemmas = |oracle: &str| -> Vec<String> {
+        let lemma = |side: &Option<EcExpr>, layout: &CompLayout| {
+            side.as_ref().map(|_| {
+                let lemma = side_inv_oracle_stem(&layout.comp_mangled, oracle);
+                format!("{lemma}.{lemma}")
+            })
+        };
+        match (lemma(&left_side, &left_layout), lemma(&right_side, &right_layout)) {
+            (None, None) => vec![],
+            (Some(l), None) => vec![l],
+            (l, Some(r)) => vec![l.unwrap_or_else(|| "_".to_string()), r],
+        }
+    };
     let mut oracle_files = Vec::with_capacity(left_comp.exports.len());
     for export in &left_comp.exports {
         let proc_name = proc_names.mangle(NameKind::Proc, export.name())?;
@@ -565,7 +658,11 @@ fn build_equivalence_file(
         let lemma_name = lemma_names.mangle(NameKind::Lemma, &oracle_stem)?;
         proof.push(blank_line());
         proof.push(plain_line(format!("(* {proc_name} *)")));
-        proof.push(bullet_line(format!("by conseq {lemma_name} => /#.")));
+        let joined: String = side_lemmas(export.name())
+            .iter()
+            .map(|l| format!(" {l}"))
+            .collect();
+        proof.push(bullet_line(format!("by conseq {lemma_name}{joined} => /#.")));
         let statement = EcExpr::OracleEquiv {
             left: format!("{}.Game_{}.{proc_name}", left_layout.comp_theory, left_layout.comp_mangled),
             right: format!(
@@ -573,6 +670,7 @@ fn build_equivalence_file(
                 right_layout.comp_theory, right_layout.comp_mangled
             ),
             inv: Box::new(inv_app.clone()),
+            assumed: assumed.clone(),
         };
         oracle_files.push(OracleProofFile {
             oracle: export.name().to_string(),
@@ -662,6 +760,19 @@ fn build_equivalence_file(
     }));
 
     let mut requires = theory_requires;
+    let mut side_files: Vec<String> = Vec::new();
+    for (side, layout) in [(&left_side, &left_layout), (&right_side, &right_layout)] {
+        let file = side_inv_stem(&layout.comp_mangled);
+        if side.is_some() && !side_files.contains(&file) {
+            side_files.push(file);
+        }
+    }
+    if !side_files.is_empty() {
+        requires.push(Require {
+            import: false,
+            names: side_files,
+        });
+    }
     requires.push(Require {
         import: true,
         names: oracle_files
@@ -692,18 +803,20 @@ fn build_equivalence_file(
 }
 
 /// What the glue and every oracle file of the equivalence `stem` require: the libraries, the
-/// two compositions (one when both sides share it) and the invariant file.
+/// two compositions (one when both sides share it), the package files that declare the state
+/// types of the record literals (`state_files`, story 69), and the invariant file.
 fn theory_requires(
     left: &CompLayout,
     right: &CompLayout,
     same_composition: bool,
     stem: &str,
+    state_files: &[String],
 ) -> Vec<Require> {
     let mut comp_requires = vec![left.comp_theory.clone()];
     if !same_composition {
         comp_requires.push(right.comp_theory.clone());
     }
-    vec![
+    let mut requires = vec![
         Require {
             import: true,
             names: ["AllCore", "Distr", "FMap", "Int", "IntDiv", "Types", "Interfaces"]
@@ -714,11 +827,48 @@ fn theory_requires(
             import: false,
             names: comp_requires,
         },
-        Require {
+    ];
+    if !state_files.is_empty() {
+        requires.push(Require {
             import: true,
-            names: vec![format!("{stem}_Invariants")],
-        },
-    ]
+            names: state_files.to_vec(),
+        });
+    }
+    requires.push(Require {
+        import: true,
+        names: vec![format!("{stem}_Invariants")],
+    });
+    requires
+}
+
+/// The package files (`Pkg_<V>`, without `.ec`) that declare the `<Pkg>_pkgstate` of every
+/// package with state in `comps`, each one time, in order (story 69).
+pub(super) fn state_files<'c>(
+    owners: &invariant::StateOwners,
+    comps: impl IntoIterator<Item = &'c Composition>,
+) -> Vec<String> {
+    let mut files: Vec<String> = Vec::new();
+    for comp in comps {
+        for inst in comp.pkgs.iter().filter(|i| !i.pkg.state.is_empty()) {
+            let file = owners.file_of(&inst.pkg.name);
+            if !files.contains(&file) {
+                files.push(file);
+            }
+        }
+    }
+    files
+}
+
+/// The file of composition `comp`'s side-invariant lemmas that joins them, without `.ec`:
+/// `SideInv_<C>` (story 69). `comp` is the composition's EasyCrypt name.
+pub(super) fn side_inv_stem(comp: &str) -> String {
+    format!("SideInv_{comp}")
+}
+
+/// The side-invariant lemma of `oracle` of composition `comp`, and its file without `.ec`:
+/// `SideInv_<C>_<O>` (story 69).
+pub(super) fn side_inv_oracle_stem(comp: &str, oracle: &str) -> String {
+    format!("SideInv_{comp}_{oracle}")
 }
 
 #[cfg(test)]

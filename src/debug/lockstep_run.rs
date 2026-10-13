@@ -61,11 +61,11 @@ use crate::debug::lockstep::{
 use crate::debug::lockstep_report::{self, LockstepSmtWriter};
 use crate::debug::lockstep_viewer;
 use crate::debug::progress::{DebugEvent, DebugObserver};
-use crate::writers::easycrypt::invariant::{state_relation_op_name, side_invariant_ops};
+use crate::writers::easycrypt::invariant::state_relation_op_name;
 use crate::debug::render;
 use crate::debug::smtout::SmtOut;
 use crate::project::Project;
-use crate::theorem::{Claim, ClaimType};
+use crate::theorem::ClaimType;
 use crate::transforms::theorem_transforms::{
     DebugTransform, EasyCryptTransform, EquivalenceTransform,
 };
@@ -442,36 +442,17 @@ fn lockstep_terms(
     }
 }
 
-/// The `invariant` check of the EasyCrypt listing. Its goal is what `inv` says after story 58:
-/// the invariant relation and each package and game invariant claim, on the new states, so a
-/// verified `invariant` means every part is verified. Its parts are the conjuncts of `inv` as
-/// [`invariant_ops`] names them: each state relation but `invariant`, then the one-sided
-/// invariant operators.
+/// The `invariant` check of the EasyCrypt listing. Its goal is what `inv` says after story 69:
+/// the invariant relation on the new states. The package and game invariants are not in `inv`
+/// any more: the oracle lemma assumes them, and the side-invariant lemmas of the compositions
+/// prove them (ADR 0014). Its parts are the state relations but `invariant`.
 pub(crate) fn easycrypt_invariant_query(eqctx: &EquivalenceContext<'_>, oracle: &str) -> ClaimQuery {
-    let goal = |claim: &Claim| eqctx.claim_assumptions_and_goal(claim, oracle).1;
-    let side_claims = eqctx.generate_game_or_package_invariant_claims();
-    let side_goal = |claim: &Claim| goal(&no_dependency_claim(claim.name(), claim.ty));
-    let whole: SmtExpr = SmtAnd(
-        std::iter::once(goal(&no_dependency_claim("invariant", ClaimType::Invariant)))
-            .chain(side_claims.iter().map(side_goal))
-            .collect(),
-    )
-    .into();
-    let mut parts = state_relation_parts(eqctx, oracle, state_relation_op_name);
-    let (left, right) = (
-        eqctx.left_game_inst_ctx().game_inst(),
-        eqctx.right_game_inst_ctx().game_inst(),
-    );
-    for op in side_invariant_ops(left, right) {
-        let Some(claim) = op.claim.as_ref().and_then(|name| side_claims.iter().find(|c| c.name() == name)) else {
-            continue;
-        };
-        let negated = SmtAssert(SmtNot(side_goal(claim))).into();
-        parts.push((op.name, negated));
-    }
+    let goal = eqctx
+        .claim_assumptions_and_goal(&no_dependency_claim("invariant", ClaimType::Invariant), oracle)
+        .1;
     ClaimQuery {
-        parts,
-        ..ClaimQuery::without_dependencies("invariant", SmtAssert(SmtNot(whole)).into())
+        parts: state_relation_parts(eqctx, oracle, state_relation_op_name),
+        ..ClaimQuery::without_dependencies("invariant", SmtAssert(SmtNot(goal)).into())
     }
 }
 
@@ -479,18 +460,6 @@ pub(crate) fn easycrypt_invariant_query(eqctx: &EquivalenceContext<'_>, oracle: 
 /// oracle: `equal-output`, `invariant`, then the parts of `invariant` in the order of
 /// [`easycrypt_invariant_query`].
 pub(crate) fn easycrypt_check_names(eqctx: &EquivalenceContext<'_>) -> Vec<String> {
-    let side_claims = eqctx.generate_game_or_package_invariant_claims();
-    let side_ops = side_invariant_ops(
-        eqctx.left_game_inst_ctx().game_inst(),
-        eqctx.right_game_inst_ctx().game_inst(),
-    )
-    .into_iter()
-    .filter(|op| {
-        op.claim
-            .as_ref()
-            .is_some_and(|name| side_claims.iter().any(|c| c.name() == name))
-    })
-    .map(|op| op.name);
     [EQUAL_OUTPUT.to_string(), "invariant".to_string()]
         .into_iter()
         .chain(
@@ -500,7 +469,6 @@ pub(crate) fn easycrypt_check_names(eqctx: &EquivalenceContext<'_>) -> Vec<Strin
                 .filter(|name| name != "invariant")
                 .map(|name| state_relation_op_name(&name)),
         )
-        .chain(side_ops)
         .collect()
 }
 
@@ -1260,11 +1228,11 @@ mod tests {
         assert!(run.summary.relation_failures.is_empty());
     }
 
-    /// Story 21: on the EasyCrypt listing, the `invariant` goal holds the package and game
-    /// invariant claims, and their part verdicts are there only where `invariant` is not
-    /// verified, named by their EasyCrypt operators.
+    /// Story 69: on the EasyCrypt listing, the `invariant` goal is the invariant relation only.
+    /// The package and game invariants belong to the side-invariant lemmas of the composition
+    /// (ADR 0014): they are neither in the goal nor parts of it.
     #[test]
-    fn the_one_sided_parts_are_checked_only_where_invariant_is_not_verified() {
+    fn the_side_invariants_are_not_checked_by_lockstep_execution_on_the_easycrypt_listing() {
         let dir = "testdata/easycrypt/story58";
         let files = DirectoryFiles::load(Path::new(dir)).unwrap();
         let project = DirectoryProject::load(PathBuf::from(dir), &files).unwrap();
@@ -1286,21 +1254,17 @@ mod tests {
         assert!(!run.outcome.pairs.is_empty());
         let invariant_goal = &run.meta.goals.claims[1];
         assert_eq!(invariant_goal.claim, "invariant");
-        let part_names: Vec<&str> = invariant_goal.parts.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(
-            part_names,
-            ["PkgInv_l_C", "PkgInv_r_C", "GameInv_L", "GameInv_R"]
-        );
+        assert!(invariant_goal.parts.is_empty());
         for claim in ["package-invariant!L-C!", "package-invariant!R-C!", "game-invariant!L!", "game-invariant!R!"] {
-            assert!(invariant_goal.smt.contains(claim), "{claim} in {}", invariant_goal.smt);
+            assert!(!invariant_goal.smt.contains(claim), "{claim} in {}", invariant_goal.smt);
         }
         for pair in &run.outcome.pairs {
-            if matches!(invariant(pair), Verdict::Verified | Verdict::Unreachable { .. }) {
-                assert!(pair.parts().is_empty(), "{}", pair.id);
-            } else {
-                let names: Vec<&str> = pair.parts().iter().map(|p| p.name.as_str()).collect();
-                assert_eq!(names, part_names, "{}", pair.id);
-            }
+            assert!(
+                matches!(invariant(pair), Verdict::Verified | Verdict::Unreachable { .. }),
+                "{}",
+                pair.id
+            );
+            assert!(pair.parts().is_empty(), "{}", pair.id);
         }
     }
 

@@ -266,6 +266,28 @@ pub(crate) fn equivalence_setup<'t>(
     let right_inst = theorem_ec
         .find_game_instance(&eq.right_name)
         .expect("an exported equivalence names a game instance of its theorem");
+    setup_of(left_inst, right_inst)
+}
+
+/// What the side-invariant job of composition `composition` needs (story 69): the setup of an
+/// equivalence of the composition's first game instance with itself. Only the router, its abort
+/// flag and the oracles are read, which every instance of the composition shares.
+pub(crate) fn side_setup<'t>(
+    theorem_ec: &'t Theorem<'_>,
+    composition: &str,
+) -> Result<EquivalenceSetup<'t>, CheckError> {
+    let inst = theorem_ec
+        .instances
+        .iter()
+        .find(|i| i.game().name == composition)
+        .expect("an exported composition has a game instance in its theorem");
+    setup_of(inst, inst)
+}
+
+fn setup_of<'t>(
+    left_inst: &'t crate::theorem::GameInstance,
+    right_inst: &'t crate::theorem::GameInstance,
+) -> Result<EquivalenceSetup<'t>, CheckError> {
     let (left_router, flag) = router_module_and_flag(left_inst.game())?;
     let (right_router, _) = router_module_and_flag(right_inst.game())?;
     let mut oracles = Vec::new();

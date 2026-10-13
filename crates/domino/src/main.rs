@@ -833,6 +833,7 @@ fn easycrypt_prove<P: project::Project + Sync>(
             force: p.force,
             announce_stages: p.progress != ProgressMode::None,
             jobs: p.jobs,
+            side_inv: p.side_inv.clone(),
             resume: match p.resume {
                 ResumeArg::Trust => ResumeMode::Trust,
                 ResumeArg::Replay => ResumeMode::Replay,
@@ -852,8 +853,12 @@ fn easycrypt_prove<P: project::Project + Sync>(
                 &options,
                 &mut || export_observer(p.progress),
             )?;
-            if result.equivalences.is_empty() {
-                // every selected equivalence was skipped (their lines are on stderr)
+            if !result.unproved_side_invariants.is_empty() {
+                // story 69: the equivalence did not start; the warning is on stderr
+                ended_early = true;
+            }
+            if result.jobs().next().is_none() {
+                // every selected job was skipped (their lines are on stderr)
                 continue;
             }
             let report = result.render();
@@ -868,7 +873,8 @@ fn easycrypt_prove<P: project::Project + Sync>(
             ended_early |= result.ended_early();
         }
         if ended_early {
-            // a job gave up on its oracles (its report says why): not a Ctrl-C, not a success
+            // a job gave up on its oracles (its report says why), or an equivalence did not
+            // start for want of side invariants: not a Ctrl-C, not a success
             use std::io::Write as _;
             let _ = std::io::stdout().flush();
             std::process::exit(1);

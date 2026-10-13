@@ -436,17 +436,35 @@ fn render_proof_line(line: &ProofLine) -> String {
             }
         }
         ProofLine::ByequivPrecondition { conjuncts } => render_byequiv_precondition(conjuncts),
-        ProofLine::InvariantCall { inv } => render_invariant_call(inv),
+        ProofLine::InvariantCall { inv, also } => render_invariant_call(inv, also),
     }
 }
 
-/// `call (: inv <left> <right>); last first.` (story 43 §3.3): the
-/// invariant's arguments each start a line two spaces further in than its
-/// name, and each is laid out by [`render_record_block`], so a record literal
-/// puts one field per line.
-fn render_invariant_call(inv: &EcExpr) -> String {
+/// `call (: inv <left> <right> /\ <also>…); last first.` (story 43 §3.3, story 69): the
+/// invariant's arguments each start a line two spaces further in than its name, and each is
+/// laid out by [`render_record_block`], so a record literal puts one field per line. Each of
+/// `also` starts a line of its own with `/\`, laid out the same way.
+fn render_invariant_call(inv: &EcExpr, also: &[EcExpr]) -> String {
     const OPEN: &str = "call (: ";
-    format!("{OPEN}{}); last first.", render_invariant_block(inv, OPEN.len()))
+    format!(
+        "{OPEN}{}); last first.",
+        render_conjunct_blocks(inv, also, OPEN.len())
+    )
+}
+
+/// `first`, then each of `rest` on a line of its own after `/\ `, each laid out by
+/// [`render_invariant_block`] at column `col`.
+fn render_conjunct_blocks(first: &EcExpr, rest: &[EcExpr], col: usize) -> String {
+    const AND: &str = "/\\ ";
+    let mut out = render_invariant_block(first, col);
+    for e in rest {
+        out.push_str(&format!(
+            "\n{}{AND}{}",
+            " ".repeat(col.saturating_sub(AND.len())),
+            render_invariant_block(e, col)
+        ));
+    }
+    out
 }
 
 /// `inv` applied to its arguments, with `inv` itself at column `col`: each argument starts a
@@ -471,23 +489,45 @@ fn render_invariant_block(inv: &EcExpr, col: usize) -> String {
 }
 
 /// The statement of an oracle lemma (story 68): the pre- and the postcondition each start a
-/// line of their own, and `inv` is laid out as in the `call`.
+/// line of their own, and `inv` and each of `assumed` (story 69) are laid out as in the `call`.
 ///
 /// ```text
 /// equiv[L.p ~ R.p :
 ///       ={arg} /\ inv
-///         {| … |}
-///         {| … |}
+///                    {| … |}
+///                    {| … |}
+///               /\ Comp_L.side_inv_L
+///                    {| … |}
 ///       ==> ={res} /\ inv
 ///         …]
 /// ```
-fn render_oracle_equiv(left: &str, right: &str, inv: &EcExpr) -> String {
+fn render_oracle_equiv(left: &str, right: &str, inv: &EcExpr, assumed: &[EcExpr]) -> String {
     const PAD: &str = "      ";
     const PRE: &str = "={arg} /\\ ";
     const POST: &str = "==> ={res} /\\ ";
     format!(
         "equiv[{left} ~ {right} :\n{PAD}{PRE}{}\n{PAD}{POST}{}]",
-        render_invariant_block(inv, PAD.len() + PRE.len()),
+        render_conjunct_blocks(inv, assumed, PAD.len() + PRE.len()),
+        render_invariant_block(inv, PAD.len() + POST.len()),
+    )
+}
+
+/// The statement of a side-invariant lemma (story 69): the pre- and the postcondition each
+/// start a line of their own, and `inv` is laid out as in the `call`.
+///
+/// ```text
+/// hoare[C.p :
+///       side_inv_C
+///         {| … |}
+///       ==> side_inv_C
+///         …]
+/// ```
+fn render_oracle_hoare(proc: &str, inv: &EcExpr) -> String {
+    const PAD: &str = "      ";
+    const POST: &str = "==> ";
+    format!(
+        "hoare[{proc} :\n{PAD}{}\n{PAD}{POST}{}]",
+        render_invariant_block(inv, PAD.len()),
         render_invariant_block(inv, PAD.len() + POST.len()),
     )
 }
@@ -679,7 +719,8 @@ fn prec(e: &EcExpr) -> i8 {
         | EcExpr::MapEmpty
         | EcExpr::Pr { .. }
         | EcExpr::GlobEq(_)
-        | EcExpr::OracleEquiv { .. } => ATOM_PREC,
+        | EcExpr::OracleEquiv { .. }
+        | EcExpr::OracleHoare { .. } => ATOM_PREC,
         EcExpr::App { args, .. } if args.is_empty() => ATOM_PREC,
         EcExpr::App { .. } | EcExpr::Some_(_) | EcExpr::Oget(_) | EcExpr::MapRem { .. } => {
             APP_PREC
@@ -882,6 +923,12 @@ fn render_expr_inner(e: &EcExpr) -> String {
             )
         }
         EcExpr::GlobEq(module) => format!("={{glob {module}}}"),
-        EcExpr::OracleEquiv { left, right, inv } => render_oracle_equiv(left, right, inv),
+        EcExpr::OracleEquiv {
+            left,
+            right,
+            inv,
+            assumed,
+        } => render_oracle_equiv(left, right, inv, assumed),
+        EcExpr::OracleHoare { proc, inv } => render_oracle_hoare(proc, inv),
     }
 }

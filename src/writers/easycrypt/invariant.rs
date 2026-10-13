@@ -3,9 +3,10 @@
 //! Building `Eq_<Left>_<Right>_Invariants.ec`
 //! (`docs/stories/easycrypt/06-invariant-translation.md`): translating an
 //! equivalence's hand-written SMT-LIB invariant (`Equivalence::invariants()`)
-//! into one state record type per package, a pair of game-state records that
-//! nest them (`docs/adr/0007-invariant-game-state-nests-package-state-records.md`,
-//! story 42), plus a closed set of EasyCrypt operators, one per
+//! into a pair of game-state records that nest one state record type per
+//! package (`docs/adr/0007-invariant-game-state-nests-package-state-records.md`,
+//! story 42; since story 69 the package files declare those types, [`StateOwners`],
+//! and this file imports them), plus a closed set of EasyCrypt operators, one per
 //! `define-fun`/`define-state-relation` in the source file(s). `op inv`
 //! guards only the relation named `invariant` (story 47).
 //!
@@ -41,6 +42,7 @@ use super::types::{func_op_name, translate_type};
 use super::EcExportError;
 
 mod side;
+pub(crate) use side::{composition_items, has_side_invariants, SideCtx};
 pub use side::SideInvariantError;
 
 /// Errors specific to invariant translation. Folds into [`EcExportError`]
@@ -98,11 +100,11 @@ pub enum InvariantError {
     #[error("game instance `{name}` not found for this equivalence")]
     MissingGameInstance { name: String },
 
-    /// Two instances of one package in one equivalence whose state fields
+    /// Two instances of one package in one theorem whose state fields
     /// translate to different types (different widths), so they cannot
-    /// share `<Pkg>_pkgstate` (ADR 0007).
+    /// share `<Pkg>_pkgstate` (ADR 0007; one type for the theorem since story 69).
     #[error(
-        "package `{package}` is instantiated with different state field types in one equivalence, so its instances cannot share one `{package}_pkgstate` record type"
+        "package `{package}` is instantiated with different state field types in one theorem, so its instances cannot share one `{package}_pkgstate` record type"
     )]
     PackageStateMismatch { package: String },
 
@@ -294,25 +296,18 @@ pub fn build_invariant_file(
 
     let params_inv_expr = build_params_inv(&left_side, &right_side)?;
 
-    let side_ops = side::build(
-        &side::SideInput {
-            left: left_game_inst,
-            right: right_game_inst,
-            left_record_ty: left_record_ty.clone(),
-            right_record_ty: right_record_ty.clone(),
-            theorem_consts: &theorem.consts,
-            project,
-        },
-        &mut state.ops,
-    )?;
+    // story 69: the package files declare the `<Pkg>_pkgstate` types, and this file imports them
+    let owners = StateOwners::of(theorem)?;
+    let mut pkg_requires = Vec::new();
+    for t in &pkg_state_types {
+        owners.check(&t.package, &t.fields)?;
+        let file = owners.file_of(&t.package);
+        if !pkg_requires.contains(&file) {
+            pkg_requires.push(file);
+        }
+    }
 
-    let mut items: Vec<EcItem> = pkg_state_types
-        .into_iter()
-        .map(|t| EcItem::Record {
-            name: t.name,
-            fields: t.fields,
-        })
-        .collect();
+    let mut items: Vec<EcItem> = Vec::new();
     items.push(EcItem::Record {
         name: left_side.record_type_name.clone(),
         fields: left_side.fields.clone(),
@@ -322,7 +317,6 @@ pub fn build_invariant_file(
         fields: right_side.fields.clone(),
     });
     items.extend(state.items);
-    items.extend(side_ops.items);
 
     items.push(EcItem::OpDef {
         name: "params_inv".to_string(),
@@ -345,12 +339,7 @@ pub fn build_invariant_file(
             op: EcUnop::Not,
             arg: Box::new(field_expr("l", &left_side.abort_field)),
         }),
-        rhs: Box::new(fold_and(
-            std::iter::once(invariant_app)
-                .chain(side_ops.left)
-                .chain(side_ops.right)
-                .collect(),
-        )),
+        rhs: Box::new(invariant_app),
     };
 
     let inv_body = fold_and(vec![
@@ -378,7 +367,7 @@ pub fn build_invariant_file(
             left_game_inst.name(),
             right_game_inst.name()
         )],
-        requires: vec![Require {
+        requires: std::iter::once(Require {
             import: true,
             names: vec![
                 "AllCore".to_string(),
@@ -388,7 +377,12 @@ pub fn build_invariant_file(
                 "IntDiv".to_string(),
                 "Types".to_string(),
             ],
-        }],
+        })
+        .chain((!pkg_requires.is_empty()).then_some(Require {
+            import: true,
+            names: pkg_requires,
+        }))
+        .collect(),
         items,
     };
 
@@ -469,9 +463,9 @@ impl From<crate::util::smtparser::Error> for InvariantError {
 
 // --- the record types (story 06 §3.1, story 42 §3.1–§3.2) ---------------
 
-/// The record type holding one package's state fields:
-/// `<Pkg>_pkgstate`. Shared by every instance of the package on either
-/// side of the equivalence, and declared only in the invariant file.
+/// The record type holding one package's state fields: `<Pkg>_pkgstate`. Shared by every
+/// instance of the package, and declared in the file of the package's first variant (story 69:
+/// [`side::package_items`]).
 pub(super) fn pkg_state_type_name(package: &str) -> String {
     format!("{package}_pkgstate")
 }
@@ -481,15 +475,25 @@ pub(crate) fn pkg_inv_template_name(package: &str) -> String {
     format!("PkgInv_{package}")
 }
 
-/// The wrapper operator of one instance's package invariant on one side:
-/// `PkgInv_<l|r>_<Inst>`, over the side's game record. `side` is `l` or `r`.
-pub(crate) fn pkg_inv_op_name(side: &str, instance: &str) -> String {
-    format!("PkgInv_{side}_{instance}")
+/// The operator of one instance's package invariant in composition `comp` (its EasyCrypt
+/// name): `PkgInv_<C>_<Inst>`, over the composition's side record.
+pub(crate) fn pkg_inv_op_name(comp: &str, instance: &str) -> String {
+    format!("PkgInv_{comp}_{instance}")
 }
 
-/// The operator of a game instance's game invariant: `GameInv_<GameInst>`, over its game record.
-pub(crate) fn game_inv_op_name(game_inst: &str) -> String {
-    format!("GameInv_{game_inst}")
+/// The operator of a composition's game invariant: `GameInv_<C>`, over its side record.
+pub(crate) fn game_inv_op_name(comp: &str) -> String {
+    format!("GameInv_{comp}")
+}
+
+/// The side invariant of a composition: `side_inv_<C>`, over its side record (story 69).
+pub(crate) fn side_inv_op_name(comp: &str) -> String {
+    format!("side_inv_{comp}")
+}
+
+/// The side record of a composition: `<C>_side`, the state of its packages and its abort flag.
+pub(crate) fn side_record_type_name(comp: &str) -> String {
+    format!("{comp}_side")
 }
 
 /// A field of [`pkg_state_type_name`]: `<Pkg>_<mangled state field>`.
@@ -514,6 +518,94 @@ pub(super) fn abort_field_name(field_ns_prefix: &str) -> String {
 /// variable ([`package::param_needs_var`]): `{l_|r_}pkg_<Inst>_<mangled param>`.
 pub(super) fn param_field_name(field_ns_prefix: &str, instance: &str, mangled_param: &str) -> String {
     format!("{field_ns_prefix}pkg_{instance}_{mangled_param}")
+}
+
+/// Where the record type of each package's state, `<Pkg>_pkgstate`, is declared (story 69):
+/// in the file of the package's first variant, in discovery order
+/// ([`package::discover_variants`]), with the package invariant's template. One type serves
+/// every instance of the package in the theorem.
+pub struct StateOwners {
+    owners: Vec<StateOwner>,
+}
+
+struct StateOwner {
+    package: String,
+    /// The variant whose file `Pkg_<variant>.ec` declares the type.
+    variant: String,
+    /// The type's fields; empty for a package without state, which has no type.
+    fields: Vec<(String, EcType)>,
+    /// The first instance of the variant.
+    inst: PackageInstance,
+}
+
+impl StateOwners {
+    pub(crate) fn of(theorem: &Theorem<'_>) -> Result<StateOwners, EcExportError> {
+        let discovered = package::discover_variants(theorem);
+        let names = package::assign_names(&discovered, &mut Names::new())?;
+        let mut owners: Vec<StateOwner> = Vec::new();
+        for (key, comp, idx) in &discovered {
+            let inst = &comp.pkgs[*idx];
+            if owners.iter().any(|o| o.package == inst.pkg.name) {
+                continue;
+            }
+            let fields = pkg_state_fields(inst, &mut Names::new())?
+                .into_iter()
+                .map(|(_, field, ty)| (field, ty))
+                .collect();
+            owners.push(StateOwner {
+                package: inst.pkg.name.clone(),
+                variant: names[key].clone(),
+                fields,
+                inst: inst.clone(),
+            });
+        }
+        Ok(StateOwners { owners })
+    }
+
+    fn owner(&self, package: &str) -> &StateOwner {
+        self.owners
+            .iter()
+            .find(|o| o.package == package)
+            .expect("every package of the theorem has a variant")
+    }
+
+    /// The file that declares `package`'s state type, without `.ec`: `Pkg_<variant>`.
+    pub(crate) fn file_of(&self, package: &str) -> String {
+        format!("Pkg_{}", self.owner(package).variant)
+    }
+
+    /// Checks that `fields`, the state of an instance of `package`, are the fields of its
+    /// `<Pkg>_pkgstate`: else [`InvariantError::PackageStateMismatch`].
+    fn check(&self, package: &str, fields: &[(String, EcType)]) -> Result<(), InvariantError> {
+        if self.owner(package).fields == fields {
+            Ok(())
+        } else {
+            Err(InvariantError::PackageStateMismatch {
+                package: package.to_string(),
+            })
+        }
+    }
+
+    /// For each package, its variant and what that variant's file declares for the side
+    /// invariants ([`side::package_items`]), when it declares anything.
+    pub(crate) fn package_items<P: Project>(
+        &self,
+        theorem: &Theorem<'_>,
+        project: &P,
+    ) -> Result<Vec<(String, Vec<EcItem>)>, EcExportError> {
+        let ctx = side::SideCtx {
+            theorem_consts: &theorem.consts,
+            project,
+        };
+        let mut out = Vec::new();
+        for owner in &self.owners {
+            let items = side::package_items(&owner.inst, &ctx)?;
+            if !items.is_empty() {
+                out.push((owner.variant.clone(), items));
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// One `<Pkg>_pkgstate` record type.
@@ -799,7 +891,10 @@ fn expr_references_var(e: &EcExpr, name: &str) -> bool {
         // `={glob M}` names a module, never one of this translator's own
         // local variables.
         EcExpr::GlobEq(_) => false,
-        EcExpr::OracleEquiv { inv, .. } => expr_references_var(inv, name),
+        EcExpr::OracleEquiv { inv, assumed, .. } => {
+            expr_references_var(inv, name) || assumed.iter().any(|a| expr_references_var(a, name))
+        }
+        EcExpr::OracleHoare { inv, .. } => expr_references_var(inv, name),
     }
 }
 
@@ -1042,10 +1137,13 @@ pub(crate) fn helper_op_name(raw: &str) -> String {
 /// One operator of the invariant file that the tactics run unfolds (story 58 §3.6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvariantOp {
-    /// The EasyCrypt operator, e.g. `PkgInv_r_Prf`.
+    /// The EasyCrypt operator, qualified with its theory when the files that use it do not
+    /// import it, e.g. `Comp_Hybrid2.PkgInv_Hybrid2_Prf`.
     pub name: String,
-    /// The one Domino claim it stands for: `package-invariant!Hybrid2-Prf!` for a wrapper,
-    /// `game-invariant!Hybrid2!` for a `GameInv_` operator. `None` for every other operator.
+    /// The one Domino claim it stands for in a side-invariant job (story 69):
+    /// `package-invariant!Hybrid2-Prf!` for a wrapper, `game-invariant!Hybrid2!` for a
+    /// `GameInv_` operator. `None` for every other operator, and in an oracle lemma, which only
+    /// assumes the side invariants.
     pub claim: Option<String>,
     /// The raw SMT name of the state relation, for a `StateRelation_` operator only.
     pub relation: Option<String>,
@@ -1085,15 +1183,22 @@ pub fn invariant_ops(
         .collect()
 }
 
-/// The operators that the tactics run unfolds inside a leaf part: `StateRelation_<r>` for
-/// each of `relations` (the raw names of the state relations), `Helper_<h>` for each of
-/// `helpers` (the raw names of the other `define-fun`s), then [`side_invariant_ops`].
+/// The operators that the tactics run unfolds inside a leaf part of an oracle lemma:
+/// `StateRelation_<r>` for each of `relations` (the raw names of the state relations),
+/// `Helper_<h>` for each of `helpers` (the raw names of the other `define-fun`s), then the
+/// [`side_invariant_ops`] of the left composition and of the right one (one time when they are
+/// the same). The oracle lemma assumes the side invariants (story 69), so their operators are
+/// unfolded in its premise only, and none of them stands for a claim of its own there.
 pub fn leaf_part_ops(
     left: &GameInstance,
     right: &GameInstance,
     relations: &[String],
     helpers: &[String],
 ) -> Vec<InvariantOp> {
+    let mut comps = vec![left.game()];
+    if right.game().name != left.game().name {
+        comps.push(right.game());
+    }
     relations
         .iter()
         .map(|r| InvariantOp::state_relation(r))
@@ -1102,38 +1207,48 @@ pub fn leaf_part_ops(
                 .iter()
                 .map(|h| InvariantOp::plain(helper_op_name(h))),
         )
-        .chain(side_invariant_ops(left, right))
+        .chain(
+            comps
+                .into_iter()
+                .flat_map(side_invariant_ops)
+                .map(|op| InvariantOp::plain(op.name)),
+        )
         .collect()
 }
 
-/// The one-sided invariant operators of `left ~ right`: the `PkgInv_<l|r>_<Inst>` wrappers,
-/// then the `PkgInv_<Pkg>` templates, then the `GameInv_<GameInst>` operators. The wrappers
-/// come before the templates, so one `rewrite /… in` unfolds both.
-pub fn side_invariant_ops(left: &GameInstance, right: &GameInstance) -> Vec<InvariantOp> {
+/// The side invariant operators of composition `comp` (story 69), in the order
+/// `rewrite /… in` unfolds them: `Comp_<C>.side_inv_<C>`, the wrappers
+/// `Comp_<C>.PkgInv_<C>_<Inst>`, the templates `PkgInv_<Pkg>` (the files that use them import
+/// the package files), then `Comp_<C>.GameInv_<C>`. A wrapper and `GameInv_<C>` stand for the
+/// claims that one-sided execution of `C` checks (symbolic-execution story 25). Empty for a
+/// composition without side invariants.
+pub fn side_invariant_ops(comp: &crate::package::Composition) -> Vec<InvariantOp> {
     use crate::writers::smt::contexts::{game_invariant_claim_name, package_invariant_claim_name};
-    let sides = [("l", left), ("r", right)];
-    let mut wrappers = Vec::new();
+    if !side::has_side_invariants(comp) {
+        return Vec::new();
+    }
+    let name = super::names::mangle_name(NameKind::Module, &comp.name);
+    let qualified = |op: String| format!("Comp_{name}.{op}");
+    let mut ops = vec![InvariantOp::plain(qualified(side_inv_op_name(&name)))];
     let mut templates: Vec<InvariantOp> = Vec::new();
-    let mut games = Vec::new();
-    for (letter, game_inst) in sides {
-        for inst in side::invariant_instances(game_inst) {
-            wrappers.push(InvariantOp {
-                claim: Some(package_invariant_claim_name(game_inst.name(), inst.name())),
-                ..InvariantOp::plain(pkg_inv_op_name(letter, inst.name()))
-            });
-            let template = pkg_inv_template_name(&inst.pkg.name);
-            if !templates.iter().any(|t| t.name == template) {
-                templates.push(InvariantOp::plain(template));
-            }
-        }
-        if !game_inst.game().invariants.is_empty() {
-            games.push(InvariantOp {
-                claim: Some(game_invariant_claim_name(game_inst.name())),
-                ..InvariantOp::plain(game_inv_op_name(game_inst.name()))
-            });
+    for inst in side::invariant_instances(comp) {
+        ops.push(InvariantOp {
+            claim: Some(package_invariant_claim_name(&comp.name, inst.name())),
+            ..InvariantOp::plain(qualified(pkg_inv_op_name(&name, inst.name())))
+        });
+        let template = pkg_inv_template_name(&inst.pkg.name);
+        if !templates.iter().any(|t| t.name == template) {
+            templates.push(InvariantOp::plain(template));
         }
     }
-    wrappers.into_iter().chain(templates).chain(games).collect()
+    ops.extend(templates);
+    if !comp.invariants.is_empty() {
+        ops.push(InvariantOp {
+            claim: Some(game_invariant_claim_name(&comp.name)),
+            ..InvariantOp::plain(qualified(game_inv_op_name(&name)))
+        });
+    }
+    ops
 }
 
 /// Mangles an SMT-LIB definition name into a legal (partial) EasyCrypt
@@ -2635,26 +2750,34 @@ mod tests {
 
     #[test]
     fn hybrid0_hybrid1_invariants_file_compiles() {
-        let (theorem, project) = load_hybrid0_hybrid1();
-        let equivalence = find_equivalence(&theorem, "Hybrid0", "Hybrid1");
-        let result = build_invariant_file(&theorem, equivalence, project).unwrap();
-        let rendered = crate::writers::easycrypt::render::render_file(&result.file);
-
-        let scratch_dir = std::env::temp_dir().join(format!(
-            "domino-easycrypt-story06-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&scratch_dir).unwrap();
-        let file_path = scratch_dir.join(&result.file_name);
-        std::fs::write(&file_path, &rendered).unwrap();
-
-        let types_dir = format!("{}/testdata/easycrypt/story02/4WHS", env!("CARGO_MANIFEST_DIR"));
-        crate::writers::easycrypt::test_support::assert_compiles_with_paths(
-            &[scratch_dir.to_str().unwrap(), &types_dir],
-            file_path.to_str().unwrap(),
+        assert_invariant_file_compiles(
+            "example-projects/4WHS",
+            "Simple4WHS",
+            "Eq_Hybrid0_Hybrid1_Invariants.ec",
         );
+    }
 
-        let _ = std::fs::remove_dir_all(&scratch_dir);
+    /// Exports `theorem` of the project in `dir` to a scratch directory and compiles `file`, an
+    /// invariant file, after what it requires: `Types.ec` and the package files, which declare
+    /// the state types since story 69 (skips without `easycrypt`).
+    fn assert_invariant_file_compiles(dir: &str, theorem: &str, file: &str) {
+        use crate::project::{DirectoryFiles, DirectoryProject, Project};
+        let files = DirectoryFiles::load(std::path::Path::new(dir)).unwrap();
+        let project = DirectoryProject::load(std::path::PathBuf::from(dir), &files).unwrap();
+        let exported = crate::writers::easycrypt::export::export_theorem(
+            project.get_theorem(theorem).unwrap(),
+            &project,
+        )
+        .unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        crate::writers::easycrypt::export::write_files(scratch.path(), &exported.files).unwrap();
+        let base = scratch.path().to_str().unwrap();
+        let compile = crate::writers::easycrypt::test_support::assert_compiles;
+        compile(base, &format!("{base}/Types.ec"));
+        for name in &exported.package_variant_names {
+            compile(base, &format!("{base}/Pkg_{name}.ec"));
+        }
+        compile(base, &format!("{base}/{file}"));
     }
 
     #[test]
@@ -2960,19 +3083,34 @@ mod tests {
         item_text(rendered, "op params_inv")
     }
 
+    /// Story 69: each package with state gets one state record type, in its own file, which
+    /// the invariant file imports.
     #[test]
-    fn each_package_with_state_gets_one_state_record_type_shared_by_both_sides() {
-        let rendered = params_project_file("Params", "L", "R").unwrap();
+    fn each_package_with_state_gets_one_state_record_type_in_its_own_file() {
+        use crate::project::{DirectoryFiles, DirectoryProject, Project};
+        let files = DirectoryFiles::load(std::path::Path::new(PARAMS_PROJECT)).unwrap();
+        let project =
+            DirectoryProject::load(std::path::PathBuf::from(PARAMS_PROJECT), &files).unwrap();
+        let exported = crate::writers::easycrypt::export::export_theorem(
+            project.get_theorem("Params").unwrap(),
+            &project,
+        )
+        .unwrap();
+        let text = |name: &str| exported.files[std::path::Path::new(name)].as_str();
         assert_eq!(
-            item_text(&rendered, "type Ctr_pkgstate"),
+            item_text(text("Pkg_Ctr.ec"), "type Ctr_pkgstate"),
             "type Ctr_pkgstate = {\n  Ctr_ctr : int\n}."
         );
         assert_eq!(
-            item_text(&rendered, "type CtrToo_pkgstate"),
+            item_text(text("Pkg_CtrToo.ec"), "type CtrToo_pkgstate"),
             "type CtrToo_pkgstate = {\n  CtrToo_ctr : int\n}."
         );
-        assert_eq!(rendered.matches("type Twin_pkgstate").count(), 1, "{rendered}");
-        assert!(!rendered.contains("Pass_pkgstate"), "{rendered}");
+        let all: String = exported.files.values().cloned().collect();
+        assert_eq!(all.matches("type Twin_pkgstate").count(), 1);
+        assert!(!all.contains("type Pass_pkgstate"));
+        let rendered = params_project_file("Params", "L", "R").unwrap();
+        assert!(!rendered.contains("_pkgstate = {"), "{rendered}");
+        assert!(rendered.contains("\nrequire import Pkg_"), "{rendered}");
     }
 
     #[test]
@@ -3351,28 +3489,7 @@ mod tests {
 
     #[test]
     fn the_params_project_invariant_file_compiles() {
-        let (theorem, project) = load_project(PARAMS_PROJECT, "Params");
-        let equivalence = find_equivalence(&theorem, "L", "R");
-        let result = build_invariant_file(&theorem, equivalence, project).unwrap();
-        let rendered = crate::writers::easycrypt::render::render_file(&result.file);
-
-        let scratch_dir = std::env::temp_dir().join(format!(
-            "domino-easycrypt-story42-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&scratch_dir).unwrap();
-        let file_path = scratch_dir.join(&result.file_name);
-        std::fs::write(&file_path, &rendered).unwrap();
-        std::fs::write(
-            scratch_dir.join("Types.ec"),
-            "require import AllCore Distr FMap Int IntDiv.\n",
-        )
-        .unwrap();
-        crate::writers::easycrypt::test_support::assert_compiles_with_paths(
-            &[scratch_dir.to_str().unwrap()],
-            file_path.to_str().unwrap(),
-        );
-        let _ = std::fs::remove_dir_all(&scratch_dir);
+        assert_invariant_file_compiles(PARAMS_PROJECT, "Params", "Eq_L_R_Invariants.ec");
     }
 
     /// Story 62: the operators come in call order, each caller before its callees, so one
@@ -3456,22 +3573,7 @@ mod tests {
 
     #[test]
     fn a_state_relation_and_a_helper_compile() {
-        let (theorem, project) = load_project(PARAMS_PROJECT, "ParamsHelper");
-        let equivalence = find_equivalence(&theorem, "L", "R");
-        let result = build_invariant_file(&theorem, equivalence, project).unwrap();
-        let rendered = crate::writers::easycrypt::render::render_file(&result.file);
-        let scratch = tempfile::tempdir().unwrap();
-        let file_path = scratch.path().join(&result.file_name);
-        std::fs::write(&file_path, &rendered).unwrap();
-        std::fs::write(
-            scratch.path().join("Types.ec"),
-            "require import AllCore Distr FMap Int IntDiv.\n",
-        )
-        .unwrap();
-        crate::writers::easycrypt::test_support::assert_compiles_with_paths(
-            &[scratch.path().to_str().unwrap()],
-            file_path.to_str().unwrap(),
-        );
+        assert_invariant_file_compiles(PARAMS_PROJECT, "ParamsHelper", "Eq_L_R_Invariants.ec");
     }
 
     #[test]

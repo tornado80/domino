@@ -263,6 +263,7 @@ fn oracle_with(admits: Vec<Admit>) -> OracleTactics {
 
 fn equivalence_with(oracles: Vec<OracleTactics>) -> EquivalenceTactics {
     EquivalenceTactics {
+        composition: None,
         proofstep: 0,
         proof_file: "Eq_A_B.ec".into(),
         left: "A".into(),
@@ -452,6 +453,8 @@ fn an_interrupted_report_names_what_was_sealed() {
     let theorem = TheoremTactics {
         theorem: "T".into(),
         equivalences: vec![eq],
+        side_invariants: vec![],
+        unproved_side_invariants: vec![],
         elapsed: Duration::from_secs(4),
         swallowed_interrupt: None,
     };
@@ -488,6 +491,7 @@ fn eq_report() -> EquivalenceReport {
         oracle_set_mismatch: None,
         state_relations: vec!["invariant".into()],
         helpers: Vec::new(),
+        side_compositions: Vec::new(),
     }
 }
 
@@ -743,6 +747,8 @@ fn a_swallowed_interrupt_is_warned_about_once_per_run() {
     let run = TheoremTactics {
         theorem: "T".into(),
         equivalences: vec![],
+        side_invariants: vec![],
+        unproved_side_invariants: vec![],
         elapsed: Duration::ZERO,
         swallowed_interrupt: watch.warning(),
     };
@@ -788,6 +794,8 @@ fn an_unanswered_interrupt_is_its_own_line_in_the_report() {
     let run = TheoremTactics {
         theorem: "T".into(),
         equivalences: vec![eq],
+        side_invariants: vec![],
+        unproved_side_invariants: vec![],
         elapsed: Duration::ZERO,
         swallowed_interrupt: None,
     };
@@ -1224,6 +1232,7 @@ mod live {
         let (mut session, empty) = hello_world_oracle_goal(out.path());
         let tree = super::driver::OracleTree::new(&empty);
         let mut prover = super::driver::Prover {
+            judgement: super::driver::Judgement::Equiv,
             session: &mut session,
             script: Default::default(),
             tree: &tree,
@@ -3060,6 +3069,7 @@ done
     );
     assert_eq!(session.send("start.", Want::Full).unwrap().status, crate::easycrypt::json::Status::Ok);
     let mut prover = super::driver::Prover {
+        judgement: super::driver::Judgement::Equiv,
         session: &mut session,
         script: Default::default(),
         tree: &tree,
@@ -3270,6 +3280,7 @@ done
     );
     assert_eq!(session.send("start.", Want::Full).unwrap().status, crate::easycrypt::json::Status::Ok);
     let mut prover = super::driver::Prover {
+        judgement: super::driver::Judgement::Equiv,
         session: &mut session,
         script: Default::default(),
         tree: &tree,
@@ -3787,4 +3798,325 @@ fn seven_key_pairs_give_no_split() {
     let run = run_leaf(&goals, "start", arms, vec![], &[]);
     assert!(!run.said.iter().any(|s| s.contains("case (")), "{:?}", run.said);
     assert_eq!(run.admits.len(), 1);
+}
+
+/// Story 69: the side-invariant jobs, and what `--proofstep`, `--side-inv` and a whole-theorem
+/// run start.
+mod side_invariant_jobs {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::easycrypt::session::{json_binary_configured, locate_binary};
+    use crate::project::{DirectoryFiles, DirectoryProject};
+    use crate::writers::easycrypt::export::{export_theorem, write_files, ExportedTheorem};
+
+    const STORY58: &str = "testdata/easycrypt/story58";
+
+    fn project() -> DirectoryProject<'static> {
+        let dir = PathBuf::from(STORY58);
+        let files = Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
+        DirectoryProject::load(dir, files).unwrap()
+    }
+
+    fn exported(project: &DirectoryProject<'static>) -> ExportedTheorem {
+        export_theorem(project.get_theorem("OneSided").unwrap(), project).unwrap()
+    }
+
+    #[test]
+    fn a_proofstep_whose_side_invariant_files_are_missing_does_not_start_and_warns() {
+        let exported = exported(&project());
+        let out = tempfile::tempdir().unwrap();
+        let options = TacticsOptions {
+            proofstep: Some(0),
+            ..TacticsOptions::default()
+        };
+        let plan = plan_run(&exported, out.path(), &options).unwrap();
+        assert!(plan.equivalences.is_empty(), "the equivalence does not start");
+        assert!(plan.side.is_empty(), "a proof job never proves side invariants");
+        assert_eq!(plan.unproved, ["Game"]);
+        assert_eq!(
+            unproved_side_invariants_line("Game"),
+            "warning: side invariants of Game are not proved: run prove --side-inv Game first"
+        );
+        // one file missing is enough
+        write_files(out.path(), &exported.files).unwrap();
+        std::fs::remove_file(out.path().join("SideInv_Game_Inc.ec")).unwrap();
+        let plan = plan_run(&exported, out.path(), &options).unwrap();
+        assert!(plan.equivalences.is_empty());
+        assert_eq!(plan.unproved, ["Game"]);
+        // on disk, with admits (a partial proof): the equivalence starts
+        write_files(out.path(), &exported.files).unwrap();
+        let plan = plan_run(&exported, out.path(), &options).unwrap();
+        assert_eq!(plan.equivalences.len(), 1);
+        assert!(plan.unproved.is_empty());
+    }
+
+    /// No EasyCrypt runs: the plan starts nothing, and the result says why.
+    #[test]
+    fn a_proofstep_run_without_side_invariant_files_starts_no_job_and_its_report_says_why() {
+        let project = project();
+        let exported = exported(&project);
+        let out = tempfile::tempdir().unwrap();
+        let options = TacticsOptions {
+            proofstep: Some(0),
+            ..TacticsOptions::default()
+        };
+        let result = run_tactics(
+            project.get_theorem("OneSided").unwrap(),
+            &project,
+            &exported,
+            out.path(),
+            &crate::util::smtsolver::process::IncrementalCvc5Backend,
+            &options,
+        )
+        .unwrap();
+        assert!(result.equivalences.is_empty() && result.side_invariants.is_empty());
+        assert_eq!(result.unproved_side_invariants, ["Game"]);
+        assert!(
+            result
+                .render()
+                .contains("side invariants of Game are not proved: run prove --side-inv Game first"),
+            "{}",
+            result.render()
+        );
+        assert!(!out.path().join("progress").exists(), "no job started");
+    }
+
+    #[test]
+    fn side_inv_plans_only_its_job_and_a_whole_theorem_run_plans_both_kinds() {
+        let exported = exported(&project());
+        let out = tempfile::tempdir().unwrap();
+        let only = TacticsOptions {
+            side_inv: Some("Game".into()),
+            ..TacticsOptions::default()
+        };
+        let plan = plan_run(&exported, out.path(), &only).unwrap();
+        assert!(plan.equivalences.is_empty());
+        let [(report, composition)] = plan.side.as_slice() else {
+            panic!("one side-invariant job");
+        };
+        assert_eq!(composition, "Game");
+        // its records, trees and locks are under `SideInv_<C>`
+        assert_eq!(report.proof_file, "SideInv_Game.ec");
+        assert_eq!(
+            report.oracle_files,
+            [("Inc".to_string(), "SideInv_Game_Inc.ec".to_string())]
+        );
+        let whole = plan_run(&exported, out.path(), &TacticsOptions::default()).unwrap();
+        assert_eq!(whole.equivalences.len(), 1);
+        assert_eq!(whole.side.len(), 1);
+        let none = TacticsOptions {
+            side_inv: Some("Nothing".into()),
+            ..TacticsOptions::default()
+        };
+        assert!(matches!(
+            plan_run(&exported, out.path(), &none),
+            Err(TacticsError::NoSideInvariants { composition }) if composition == "Nothing"
+        ));
+    }
+
+    /// The side-invariant lemma files belong to the side-invariant job: a proof job does not
+    /// create them, and `SideInv_<C>.ec` is a translation file.
+    #[test]
+    fn only_the_side_invariant_lemma_files_are_owned_by_the_side_invariant_job() {
+        let exported = exported(&project());
+        use crate::easycrypt::job::is_oracle_file;
+        assert!(is_oracle_file(&exported, Path::new("SideInv_Game_Inc.ec")));
+        assert!(!is_oracle_file(&exported, Path::new("SideInv_Game.ec")));
+        assert!(is_oracle_file(&exported, Path::new("Eq_L_R_Inc.ec")));
+    }
+
+    // ------------------------------------------------------------------
+    // Live: a `-json` EasyCrypt (`DOMINO_EASYCRYPT`) and `cvc5` on `PATH`
+    // ------------------------------------------------------------------
+
+    fn backend() -> crate::util::smtsolver::process::IncrementalCvc5Backend {
+        crate::util::smtsolver::process::IncrementalCvc5Backend
+    }
+
+    fn prove(
+        project: &DirectoryProject<'static>,
+        exported: &ExportedTheorem,
+        out: &Path,
+        options: &TacticsOptions,
+    ) -> TheoremTactics {
+        let theorem = project.get_theorem("OneSided").unwrap();
+        run_tactics(theorem, project, exported, out, &backend(), options).unwrap()
+    }
+
+    fn compiles(dir: &Path, file: &str) -> Result<(), String> {
+        let output = std::process::Command::new(locate_binary())
+            .args(["compile", "-I"])
+            .arg(dir)
+            .arg(file)
+            .current_dir(dir)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).into_owned())
+        }
+    }
+
+    /// Symbolic-execution story 25's composition `S`: a branch on the free parameter `n`, then
+    /// one on the argument `x`, where `x < 0` breaks the package invariant `k >= 0`. Each branch
+    /// is an `if.` with a bullet for each arm, and the two terminals where the invariant breaks
+    /// are admitted with Domino's verdict, without EasyCrypt time spent on them.
+    #[test]
+    fn a_side_tree_with_branches_is_walked_with_if_and_its_failing_claim_is_admitted() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let dir = PathBuf::from("testdata/debug/se25");
+        let files = Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
+        let project = DirectoryProject::load(dir, files).unwrap();
+        let theorem = project.get_theorem("T").unwrap();
+        let exported = export_theorem(theorem, &project).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        write_files(out.path(), &exported.files).unwrap();
+        let options = TacticsOptions {
+            side_inv: Some("S".into()),
+            quick_close: false,
+            ..TacticsOptions::default()
+        };
+        let result = run_tactics(theorem, &project, &exported, out.path(), &backend(), &options)
+            .unwrap();
+        let [job] = result.side_invariants.as_slice() else {
+            panic!("one side-invariant job: {}", result.render());
+        };
+        let [o] = job.oracles.as_slice() else {
+            panic!("one oracle: {}", result.render());
+        };
+        assert_eq!(o.joint_paths, 4, "{}", result.render());
+        let lemma = std::fs::read_to_string(out.path().join("SideInv_S_O.ec")).unwrap();
+        // the router prelude's `if.`, and one for each branch of the side tree
+        assert!(lemma.matches("if.").count() >= 3, "{lemma}");
+        assert!(!o.stats.admits.is_empty(), "{}", result.render());
+        for a in &o.stats.admits {
+            assert_eq!(a.reason, AdmitReason::DominoFails, "{}", result.render());
+            assert_eq!(a.claim, "invariant/PkgInv_S_p", "{}", result.render());
+        }
+        compiles(out.path(), "SideInv_S_O.ec").unwrap();
+    }
+
+    /// `prove --side-inv Game`: one-sided execution of `Inc`, then its `hoare` lemma proved
+    /// along the side tree, with no admit; then the equivalence, and the glue joins them.
+    #[test]
+    fn side_inv_proves_the_hoare_lemma_along_the_side_tree_and_the_glue_compiles() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let project = project();
+        let exported = exported(&project);
+        let out = tempfile::tempdir().unwrap();
+        write_files(out.path(), &exported.files).unwrap();
+        let options = TacticsOptions {
+            side_inv: Some("Game".into()),
+            quick_close: false,
+            ..TacticsOptions::default()
+        };
+        let result = prove(&project, &exported, out.path(), &options);
+        assert!(result.equivalences.is_empty());
+        let [job] = result.side_invariants.as_slice() else {
+            panic!("one side-invariant job: {}", result.render());
+        };
+        assert_eq!(job.composition.as_deref(), Some("Game"));
+        let [inc] = job.oracles.as_slice() else {
+            panic!("one oracle: {}", result.render());
+        };
+        assert!(inc.problem.is_none(), "{}", result.render());
+        assert!(inc.joint_paths > 0, "the walk followed a side tree: {}", result.render());
+        assert!(inc.stats.admits.is_empty(), "{}", result.render());
+        assert!(result.render().contains("tactics for SideInv_Game.ec (side invariants of Game)"));
+        let lemma = std::fs::read_to_string(out.path().join("SideInv_Game_Inc.ec")).unwrap();
+        assert!(!lemma.contains("proc; inline. admit."), "{lemma}");
+        // the router prelude, then the leaf of the one terminal, opened by claim
+        for step in ["sp 1.", "if.", "auto => &hr hpre /=.", "rewrite /Comp_Game.PkgInv_Game_C /=."] {
+            assert!(lemma.contains(step), "{step} in:\n{lemma}");
+        }
+        for f in ["session/SideInv_Game/Inc.record.json", "session/SideInv_Game/Inc.tree.json"] {
+            assert!(out.path().join(f).is_file(), "{f}");
+        }
+        assert!(!out.path().join("progress/SideInv_Game/Inc.lock").exists(), "the lock is released");
+        compiles(out.path(), "SideInv_Game_Inc.ec").unwrap();
+
+        // the equivalence: its oracle lemma assumes the side invariants
+        let options = TacticsOptions {
+            proofstep: Some(0),
+            ..TacticsOptions::default()
+        };
+        let result = prove(&project, &exported, out.path(), &options);
+        assert!(result.unproved_side_invariants.is_empty());
+        assert_eq!(result.equivalences.len(), 1, "{}", result.render());
+        assert_eq!(result.admit_count(), 0, "{}", result.render());
+        compiles(out.path(), "Eq_L_R.ec").unwrap();
+    }
+
+    /// An EasyCrypt that logs `start` and `end` lines to `log` around the real one.
+    fn logging_easycrypt(dir: &Path, log: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join("logging-easycrypt");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho start >> '{log}'\n'{real}' \"$@\" <&0 &\nec=$!\n\
+                 ( while kill -0 $ec 2>/dev/null; do sleep 0.05; done; echo end >> '{log}' ) \
+                 </dev/null >/dev/null 2>&1 &\nwait $ec\n",
+                log = log.display(),
+                real = locate_binary().display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    /// Story 69 §3.3: a whole-theorem run starts the side-invariant job beside the proof job.
+    #[test]
+    fn a_whole_theorem_prove_runs_a_side_invariant_job_and_a_proof_job_at_the_same_time() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let project = project();
+        let exported = exported(&project);
+        let out = tempfile::tempdir().unwrap();
+        write_files(out.path(), &exported.files).unwrap();
+        let fake = tempfile::tempdir().unwrap();
+        let log = fake.path().join("log");
+        TEST_EASYCRYPT.with(|t| {
+            *t.borrow_mut() = Some(FakeEasyCrypt {
+                binary: logging_easycrypt(fake.path(), &log),
+                grace: Duration::from_millis(1_500),
+                resend: Duration::from_millis(250),
+            })
+        });
+        let result = prove(&project, &exported, out.path(), &TacticsOptions::default());
+        TEST_EASYCRYPT.with(|t| t.borrow_mut().take());
+        let began = Instant::now();
+        while began.elapsed() < Duration::from_secs(10) {
+            let text = std::fs::read_to_string(&log).unwrap();
+            if text.matches("start").count() == text.matches("end").count() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let (mut running, mut most, mut started) = (0, 0, 0);
+        for line in std::fs::read_to_string(&log).unwrap().lines() {
+            if line == "start" {
+                running += 1;
+                started += 1;
+            } else {
+                running -= 1;
+            }
+            most = most.max(running);
+        }
+        assert_eq!(started, 2, "one EasyCrypt for each job's oracle");
+        assert_eq!(most, 2, "the two jobs at the same time");
+        assert_eq!(result.equivalences.len(), 1, "{}", result.render());
+        assert_eq!(result.side_invariants.len(), 1, "{}", result.render());
+    }
 }

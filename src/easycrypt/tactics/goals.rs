@@ -8,9 +8,17 @@
 
 use crate::easycrypt::json::{Form, Goal, GoalKind, Instr, Side};
 
-/// A relational program goal: `equiv[ S1 ~ S2 : pre ==> post ]`.
+/// A program goal: `equiv[ S1 ~ S2 : pre ==> post ]`, or `hoare[ S : pre ==> post ]` in a
+/// side-invariant lemma (story 69).
 pub(super) fn is_program(goal: &Goal) -> bool {
-    goal.concl.kind == "equivS"
+    matches!(goal.concl.kind.as_str(), "equivS" | "hoareS")
+}
+
+/// The one program of a `hoare[ S : pre ==> post ]` goal.
+pub(super) fn program(goal: &Goal) -> Option<&Side> {
+    (goal.concl.kind == "hoareS")
+        .then_some(goal.concl.program.as_ref())
+        .flatten()
 }
 
 /// Whether the goal is a formula of the ambient logic, possibly with a program judgement under
@@ -40,7 +48,7 @@ pub(super) fn is_if_split(front: Option<&Goal>, kind: impl Fn(usize) -> Option<G
 }
 
 pub(super) fn sides(goal: &Goal) -> Option<(&Side, &Side)> {
-    if !is_program(goal) {
+    if goal.concl.kind != "equivS" {
         return None;
     }
     Some((goal.concl.left.as_ref()?, goal.concl.right.as_ref()?))

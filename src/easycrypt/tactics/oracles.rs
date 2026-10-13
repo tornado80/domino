@@ -35,14 +35,14 @@ use crate::writers::easycrypt::progress::{
     ExportEvent, ExportObserver, ExportPhase, NopExportObserver,
 };
 
-use super::super::check::{equivalence_setup, CheckError, EquivalenceSetup};
+use super::super::check::{equivalence_setup, side_setup, CheckError, EquivalenceSetup};
 use super::super::job::{
     create_if_absent, ensure_translation_files, oracle_lock_path, oracle_record_path,
     progress_dir, LiveJob, LockError, OracleStatus, ProofLock, SessionRecord,
 };
 use super::{
     open_lemma, plan_job, tactics_for_oracle, translation_files_line, translation_line,
-    with_script, write_atomically, EquivalenceTactics, Interrupted, JobPlan, LiveConfig,
+    with_script, write_atomically, EquivalenceTactics, Interrupted, JobKind, JobPlan, LiveConfig,
     LiveHandle, OracleEnd, OracleTactics, ProofFile, SessionSetup, SwallowWatch, TacticsError,
     TacticsOptions, Unanswered, MAX_RESPAWNS,
 };
@@ -55,7 +55,9 @@ pub(super) struct EquivalenceJob<'a, P, B> {
     pub theorem_ec: &'a Theorem<'a>,
     pub project: &'a P,
     pub exported: &'a ExportedTheorem,
+    /// The equivalence, or for a side-invariant job its report ([`JobKind::SideInvariants`]).
     pub eq: &'a EquivalenceReport,
+    pub kind: JobKind<'a>,
     /// The theorem's output directory.
     pub out_dir: &'a Path,
     pub backend: &'a B,
@@ -107,7 +109,10 @@ where
 {
     let started = Instant::now();
     let (eq, options) = (job.eq, job.options);
-    let setup = equivalence_setup(job.theorem_ec, eq)?;
+    let setup = match job.kind {
+        JobKind::Equivalence => equivalence_setup(job.theorem_ec, eq)?,
+        JobKind::SideInvariants(c) => side_setup(job.theorem_ec, c)?,
+    };
     if let Some(wanted) = &options.oracle {
         if !setup.oracles.iter().any(|(name, _)| name == wanted) {
             return Err(CheckError::NoSuchOracle {
@@ -324,6 +329,7 @@ where
         record_path,
         started: Instant::now(),
         tactics: EquivalenceTactics {
+            composition: job.kind.composition(),
             proofstep: job.eq.proofstep,
             proof_file: file.to_string(),
             left: job.eq.left_name.clone(),
@@ -407,6 +413,7 @@ where
             job.project,
             job.theorem,
             job.eq,
+            job.kind,
             setup,
             oracle,
             job.backend,
@@ -568,6 +575,7 @@ impl Board {
             _ => format!("progress/{stem}/report.txt"),
         };
         EquivalenceTactics {
+            composition: job.kind.composition(),
             proofstep: job.eq.proofstep,
             proof_file: job.eq.proof_file.clone(),
             left: job.eq.left_name.clone(),

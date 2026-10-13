@@ -1,0 +1,25 @@
+theorem Collide {
+    instance L = A {
+    }
+
+    instance R = A {
+    }
+
+    instance Other = A_B {
+    }
+
+    gamehops {
+        equivalence L R {
+            invariant: [ ./theorem/invariant-true.smt2 ]
+            B_x: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,11 @@
+package Bx {
+    invariant: [ ./packages/Ctr.smt2 ]
+    state {
+        ctr: Integer,
+    }
+
+    oracle B_x() -> Integer {
+        ctr <- (ctr + 1);
+        return ctr;
+    }
+}

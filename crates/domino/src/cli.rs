@@ -170,9 +170,19 @@ pub(crate) struct EcProve {
     #[clap(long)]
     pub(crate) theorem: String,
     /// Only this proofstep (as printed by `domino proofsteps`). Without it the proofsteps run
-    /// one after another in this process; to run them at once start one process each.
-    #[clap(long)]
+    /// one after another in this process; to run them at once start one process each. Its
+    /// equivalence does not start when the side-invariant files `SideInv_<C>.ec` and
+    /// `SideInv_<C>_<O>.ec` of one of its compositions are missing (a file with admits counts):
+    /// prove them first with `--side-inv <C>`. Without `--proofstep` and `--side-inv`, the
+    /// side-invariant jobs of the compositions run in parallel with the equivalences (story 69).
+    #[clap(long, conflicts_with = "side_inv")]
     pub(crate) proofstep: Option<usize>,
+    /// Only the side-invariant job of this composition (story 69): the `hoare` lemma
+    /// `SideInv_<C>_<O>.ec` of each of its oracles, proved along the side tree of one-sided
+    /// execution. Its records and pages are under `session/SideInv_<C>/` and
+    /// `progress/SideInv_<C>/`.
+    #[clap(long)]
+    pub(crate) side_inv: Option<String>,
     /// Only this exported oracle; the rest keep what their session records hold, or
     /// `+ proc; inline. admit.`. Each oracle has its own lock, so jobs on different oracles of
     /// one equivalence can run at once.

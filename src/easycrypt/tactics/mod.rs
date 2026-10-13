@@ -43,6 +43,14 @@
 //! - [`live`], `live::page`: the live page of one oracle, `progress/Eq_<L>_<R>/<O>/index.html`
 //!   (story 28, 36).
 //!
+//! **Side-invariant jobs** (story 69, ADR 0014): the side-invariant lemmas of a composition,
+//! `SideInv_<C>_<O>.ec`, are proved the same way, one oracle at a time, along the side tree of
+//! one-sided execution (symbolic-execution story 25) and in a `hoare` judgement ([`JobKind`]).
+//! Their records, saved trees and locks are `session/SideInv_<C>/<O>.record.json`,
+//! `<O>.tree.json` and `progress/SideInv_<C>/<O>.lock`. A proof job never proves side invariants:
+//! `--proofstep` stops when the side-invariant files of its compositions are missing, and a
+//! whole-theorem run proves the compositions in parallel with the equivalences.
+//!
 //! `domino easycrypt export` never gets here.
 
 mod driver;
@@ -64,6 +72,7 @@ use crate::debug::lockstep::LockstepOutcome;
 use crate::debug::lockstep_fingerprint::{describe_part, Fingerprint};
 use crate::gamehops::equivalence::smtrewrite::without_custom_smt_warning;
 use crate::debug::lockstep_run::{run_lockstep_command, LockstepDebugOptions, LockstepSummary};
+use crate::debug::side_run::{run_side_command, side_debug_dir, side_fingerprint};
 use crate::debug::progress::eprintln_above_bars;
 use crate::writers::easycrypt::progress::{ExportObserver, NopExportObserver};
 use crate::project::Project;
@@ -71,8 +80,8 @@ use crate::theorem::Theorem;
 use crate::transforms::theorem_transforms::EasyCryptTransform;
 use crate::transforms::TheoremTransform;
 use crate::util::smtsolver::SmtSolverBackend;
-use crate::writers::easycrypt::export::{EquivalenceReport, ExportedTheorem};
-use crate::writers::easycrypt::invariant::{invariant_ops, leaf_part_ops};
+use crate::writers::easycrypt::export::{EquivalenceReport, ExportedTheorem, SideInvReport};
+use crate::writers::easycrypt::invariant::{invariant_ops, leaf_part_ops, side_invariant_ops};
 use crate::writers::easycrypt::lower::inline_oracle_ec;
 
 use super::check::{
@@ -92,7 +101,7 @@ pub use super::transcript::{EcTranscriptMode, GOAL_CONCL_CAP, GOAL_HYPS_CAP};
 pub use live::{strip_timings, LiveConfig, LiveHandle};
 
 pub use driver::{Admit, AdmitReason, DominoView, OracleStats, Timeouts};
-use driver::{OracleTree, Prover, Resume, Sealed};
+use driver::{Judgement, OracleTree, Prover, Resume, Sealed};
 
 #[derive(Debug, Error)]
 pub enum TacticsError {
@@ -112,6 +121,9 @@ pub enum TacticsError {
     Io(#[from] std::io::Error),
     #[error("invalid `ssp.toml`: {0}")]
     Config(String),
+    /// `prove --side-inv C` for a composition without side invariants, or none of the theorem.
+    #[error("composition `{composition}` has no side invariants in this theorem: no package of it has a package invariant, and it has no game invariant")]
+    NoSideInvariants { composition: String },
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +161,9 @@ pub struct TacticsOptions {
     /// `prove --jobs N` (story 68): how many oracles of an equivalence are proved at once, each
     /// in an EasyCrypt process of its own. 0 counts as 1.
     pub jobs: usize,
+    /// `prove --side-inv C` (story 69): only the side-invariant job of composition `C` (its
+    /// Domino name), and no equivalence.
+    pub side_inv: Option<String>,
 }
 
 /// How a proof job resumes an oracle the session record holds as `interrupted` (`--resume`,
@@ -321,6 +336,7 @@ impl Default for TacticsOptions {
             resume: ResumeMode::Trust,
             announce_stages: false,
             jobs: 1,
+            side_inv: None,
         }
     }
 }
@@ -365,6 +381,48 @@ pub(crate) fn parse_smt_hints(text: &str) -> Result<Vec<String>, TacticsError> {
             Ok(name.to_string())
         })
         .collect()
+}
+
+/// What a job proves (story 69).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum JobKind<'a> {
+    /// The oracle lemmas of an equivalence, along joint trees of lockstep execution.
+    Equivalence,
+    /// The side-invariant lemmas of a composition (its Domino name), along side trees of
+    /// one-sided execution.
+    SideInvariants(&'a str),
+}
+
+impl JobKind<'_> {
+    /// The composition of a side-invariant job.
+    fn composition(self) -> Option<String> {
+        match self {
+            JobKind::Equivalence => None,
+            JobKind::SideInvariants(c) => Some(c.to_string()),
+        }
+    }
+
+    /// Where the lockstep or one-sided execution of `oracle` writes its artifacts.
+    fn debug_dir(self, out_dir: &Path, eq: &EquivalenceReport, oracle: &str) -> PathBuf {
+        match self {
+            JobKind::Equivalence => debug_dir(out_dir, &eq.left_name, &eq.right_name, oracle),
+            JobKind::SideInvariants(c) => side_debug_dir(out_dir, c, oracle),
+        }
+    }
+
+    /// The fingerprint of the tree of `oracle` (ADR 0008).
+    fn fingerprint<P: Project>(
+        self,
+        project: &P,
+        theorem: &Theorem<'_>,
+        eq: &EquivalenceReport,
+        oracle: &str,
+    ) -> Result<Fingerprint, crate::debug::driver::DebugError> {
+        match self {
+            JobKind::Equivalence => Fingerprint::of(project, theorem, eq.proofstep, oracle),
+            JobKind::SideInvariants(c) => side_fingerprint(project, &theorem.name, c, oracle),
+        }
+    }
 }
 
 /// What happened to one oracle.
@@ -514,6 +572,9 @@ impl OracleTactics {
 
 #[derive(Debug, Clone)]
 pub struct EquivalenceTactics {
+    /// The side-invariant job of this composition (story 69), by its Domino name; `None` for
+    /// the proof job of an equivalence.
+    pub composition: Option<String>,
     pub proofstep: usize,
     pub proof_file: String,
     pub left: String,
@@ -542,15 +603,26 @@ pub struct EquivalenceTactics {
 pub struct TheoremTactics {
     pub theorem: String,
     pub equivalences: Vec<EquivalenceTactics>,
+    /// The side-invariant jobs (story 69), in the order of the export.
+    pub side_invariants: Vec<EquivalenceTactics>,
+    /// The compositions whose side-invariant files a `--proofstep` job did not find on disk;
+    /// their equivalences were not started (story 69 §3.3).
+    pub unproved_side_invariants: Vec<String>,
     pub elapsed: Duration,
     /// The warning given when an answer showed EasyCrypt swallowed an interrupt (once per run).
     pub swallowed_interrupt: Option<String>,
 }
 
 impl TheoremTactics {
-    /// Every oracle of the theorem, in the order of the report.
+    /// Every oracle of the theorem, in the order of the report: the equivalences', then the
+    /// side-invariant jobs'.
     pub fn oracles(&self) -> impl Iterator<Item = &OracleTactics> {
-        self.equivalences.iter().flat_map(|e| e.oracles.iter())
+        self.jobs().flat_map(|e| e.oracles.iter())
+    }
+
+    /// Every job of the run: the equivalences, then the side-invariant jobs.
+    pub fn jobs(&self) -> impl Iterator<Item = &EquivalenceTactics> {
+        self.equivalences.iter().chain(&self.side_invariants)
     }
 
     /// The `admit` count over all translated oracles.
@@ -560,8 +632,7 @@ impl TheoremTactics {
 
     /// Where Ctrl-C stopped the run, if it did (story 34): the run ended there.
     pub fn interrupted(&self) -> Option<&Interrupted> {
-        self.equivalences
-            .iter()
+        self.jobs()
             .filter(|e| e.ended_early.is_none())
             .find_map(|e| e.interrupted.as_ref())
     }
@@ -569,7 +640,7 @@ impl TheoremTactics {
     /// Whether a proof job ended before its last oracle without a Ctrl-C
     /// ([`EquivalenceTactics::ended_early`]).
     pub fn ended_early(&self) -> bool {
-        self.equivalences.iter().any(|e| e.ended_early.is_some())
+        self.jobs().any(|e| e.ended_early.is_some())
     }
 }
 
@@ -625,42 +696,211 @@ where
     let started = Instant::now();
     let (theorem_ec, _aux) = EasyCryptTransform.transform_theorem(theorem)?;
     let swallow = SwallowWatch::default();
+    let plan = plan_run(exported, &out_dir, options)?;
+    let ctx = RunCtx {
+        theorem,
+        theorem_ec: &theorem_ec,
+        project,
+        exported,
+        out_dir: &out_dir,
+        backend,
+        options,
+        swallow: &swallow,
+        #[cfg(test)]
+        fake: tests::TEST_EASYCRYPT.with(|t| t.borrow().clone()),
+    };
+    let eqs = || plan.equivalences.iter().map(|eq| (eq, JobKind::Equivalence));
+    // the side-invariant jobs, one after another; on a thread of their own while the
+    // equivalences' proof jobs run (story 69 §3.3)
+    let sides = || {
+        plan.side
+            .iter()
+            .map(|(eq, c)| (eq, JobKind::SideInvariants(c.as_str())))
+    };
+    let (equivalences, side_invariants) = if plan.equivalences.is_empty() {
+        (Vec::new(), run_jobs(&ctx, sides(), progress)?)
+    } else if plan.side.is_empty() {
+        (run_jobs(&ctx, eqs(), progress)?, Vec::new())
+    } else {
+        std::thread::scope(|s| {
+            let side = s.spawn(|| run_jobs(&ctx, sides(), &mut || Box::new(NopExportObserver)));
+            let equivalences = run_jobs(&ctx, eqs(), progress);
+            let side = side.join().expect("the side-invariant jobs do not panic");
+            Ok::<_, TacticsError>((equivalences?, side?))
+        })?
+    };
+    Ok(TheoremTactics {
+        theorem: theorem.name.clone(),
+        equivalences,
+        side_invariants,
+        unproved_side_invariants: plan.unproved,
+        elapsed: started.elapsed(),
+        swallowed_interrupt: swallow.warning(),
+    })
+}
 
-    let mut equivalences = Vec::new();
-    for eq in &exported.equivalences {
-        if options.proofstep.is_some_and(|p| p != eq.proofstep) {
-            continue;
+/// What a run proves, decided before any job starts (story 69 §3.3).
+struct RunPlan {
+    /// The equivalences whose proof jobs run, in theorem order.
+    equivalences: Vec<EquivalenceReport>,
+    /// The side-invariant jobs that run: the job's report (its files are the side-invariant
+    /// files of the composition, [`side_job_report`]) and the composition's Domino name.
+    side: Vec<(EquivalenceReport, String)>,
+    /// The compositions whose side-invariant files a `--proofstep` run did not find.
+    unproved: Vec<String>,
+}
+
+/// - `--side-inv C`: the side-invariant job of `C` only.
+/// - `--proofstep P`: the proof job of `P`, if the side-invariant files of its compositions are
+///   on disk (a file with admits counts); else a warning, and nothing runs.
+/// - neither: every equivalence, and the side-invariant job of every composition with side
+///   invariants (each job skips what its records say is proved).
+fn plan_run(
+    exported: &ExportedTheorem,
+    out_dir: &Path,
+    options: &TacticsOptions,
+) -> Result<RunPlan, TacticsError> {
+    let side_job = |s: &SideInvReport| (side_job_report(s), s.composition.clone());
+    if let Some(composition) = &options.side_inv {
+        let side = exported
+            .side_invariants
+            .iter()
+            .find(|s| &s.composition == composition)
+            .ok_or_else(|| TacticsError::NoSideInvariants {
+                composition: composition.clone(),
+            })?;
+        return Ok(RunPlan {
+            equivalences: Vec::new(),
+            side: vec![side_job(side)],
+            unproved: Vec::new(),
+        });
+    }
+    let Some(proofstep) = options.proofstep else {
+        return Ok(RunPlan {
+            equivalences: exported.equivalences.clone(),
+            side: exported.side_invariants.iter().map(side_job).collect(),
+            unproved: Vec::new(),
+        });
+    };
+    let mut plan = RunPlan {
+        equivalences: Vec::new(),
+        side: Vec::new(),
+        unproved: Vec::new(),
+    };
+    for eq in exported.equivalences.iter().filter(|e| e.proofstep == proofstep) {
+        let missing: Vec<&String> = eq
+            .side_compositions
+            .iter()
+            .filter(|c| !side_files_on_disk(exported, out_dir, c))
+            .collect();
+        for c in &missing {
+            eprintln!("{}", unproved_side_invariants_line(c));
+            if !plan.unproved.contains(c) {
+                plan.unproved.push((*c).clone());
+            }
         }
+        if missing.is_empty() {
+            plan.equivalences.push(eq.clone());
+        }
+    }
+    Ok(plan)
+}
+
+/// The warning of a `--proofstep` run whose equivalence needs the side invariants of
+/// `composition`, and does not find them on disk (story 69 §3.3).
+pub fn unproved_side_invariants_line(composition: &str) -> String {
+    format!(
+        "warning: side invariants of {composition} are not proved: run prove --side-inv \
+         {composition} first"
+    )
+}
+
+/// Whether `SideInv_<C>.ec` and each `SideInv_<C>_<O>.ec` of `composition` are in `out_dir`.
+fn side_files_on_disk(exported: &ExportedTheorem, out_dir: &Path, composition: &str) -> bool {
+    exported
+        .side_invariants
+        .iter()
+        .find(|s| s.composition == composition)
+        .is_some_and(|s| {
+            std::iter::once(&s.join_file)
+                .chain(s.oracle_files.iter().map(|(_, f)| f))
+                .all(|f| out_dir.join(f).is_file())
+        })
+}
+
+/// The report the side-invariant job of a composition works from: its "proof file" is
+/// `SideInv_<C>.ec`, so its records, trees, locks and pages are under `SideInv_<C>`, and its
+/// oracle files are the side-invariant lemma files.
+fn side_job_report(side: &SideInvReport) -> EquivalenceReport {
+    EquivalenceReport {
+        proofstep: 0,
+        left_name: side.composition.clone(),
+        right_name: String::new(),
+        invariants_file: String::new(),
+        proof_file: side.join_file.clone(),
+        oracle_files: side.oracle_files.clone(),
+        oracle_count: side.oracle_files.len(),
+        admit_count: side.oracle_files.len(),
+        oracle_set_mismatch: None,
+        state_relations: Vec::new(),
+        helpers: Vec::new(),
+        side_compositions: Vec::new(),
+    }
+}
+
+/// What every job of one run shares.
+struct RunCtx<'a, P, B> {
+    theorem: &'a Theorem<'a>,
+    theorem_ec: &'a Theorem<'a>,
+    project: &'a P,
+    exported: &'a ExportedTheorem,
+    out_dir: &'a Path,
+    backend: &'a B,
+    options: &'a TacticsOptions,
+    swallow: &'a SwallowWatch,
+    /// Read on the thread that started the run: a job may run on another (story 69).
+    #[cfg(test)]
+    fake: Option<tests::FakeEasyCrypt>,
+}
+
+/// Runs the jobs one after another, until one is stopped by Ctrl-C. A job that ended early is
+/// not a stop: the next one is a job of its own.
+fn run_jobs<'a, P, B>(
+    ctx: &RunCtx<'a, P, B>,
+    jobs: impl Iterator<Item = (&'a EquivalenceReport, JobKind<'a>)>,
+    progress: &mut dyn FnMut() -> Box<dyn ExportObserver>,
+) -> Result<Vec<EquivalenceTactics>, TacticsError>
+where
+    P: Project + Sync,
+    B: SmtSolverBackend + Sync,
+{
+    let mut done = Vec::new();
+    for (eq, kind) in jobs {
         let job = oracles::EquivalenceJob {
-            theorem,
-            theorem_ec: &theorem_ec,
-            project,
-            exported,
+            theorem: ctx.theorem,
+            theorem_ec: ctx.theorem_ec,
+            project: ctx.project,
+            exported: ctx.exported,
             eq,
-            out_dir: &out_dir,
-            backend,
-            options,
-            swallow: &swallow,
+            kind,
+            out_dir: ctx.out_dir,
+            backend: ctx.backend,
+            options: ctx.options,
+            swallow: ctx.swallow,
             #[cfg(test)]
-            fake: tests::TEST_EASYCRYPT.with(|t| t.borrow().clone()),
+            fake: ctx.fake.clone(),
         };
         // `None`: skipped, the reason on stderr
         let Some(tactics) = oracles::prove_equivalence(&job, progress)? else {
             continue;
         };
-        // a job that ended early is not a stop: the next equivalence is a job of its own
         let interrupted = tactics.interrupted.is_some() && tactics.ended_early.is_none();
-        equivalences.push(tactics);
+        done.push(tactics);
         if interrupted {
             break;
         }
     }
-    Ok(TheoremTactics {
-        theorem: theorem.name.clone(),
-        equivalences,
-        elapsed: started.elapsed(),
-        swallowed_interrupt: swallow.warning(),
-    })
+    Ok(done)
 }
 
 /// The one line the page shows in place of the export's phases: which translation files were
@@ -1058,6 +1298,7 @@ fn resuming<P: Project>(
     project: &P,
     theorem: &Theorem<'_>,
     eq: &EquivalenceReport,
+    kind: JobKind<'_>,
     oracle: &str,
     proof: &ProofFile<'_>,
     options: &TacticsOptions,
@@ -1107,7 +1348,7 @@ fn resuming<P: Project>(
         ));
         return None;
     }
-    let stale = match Fingerprint::of(project, theorem, eq.proofstep, oracle) {
+    let stale = match kind.fingerprint(project, theorem, eq, oracle) {
         Ok(now) if now.hex == saved.fingerprint => Vec::new(),
         Ok(now) => {
             let changed = now.changed_from(&saved.fingerprint_parts);
@@ -1155,6 +1396,7 @@ fn lockstep<P, B>(
     project: &P,
     theorem: &Theorem<'_>,
     eq: &EquivalenceReport,
+    kind: JobKind<'_>,
     oracle: &str,
     backend: &B,
     options: &TacticsOptions,
@@ -1169,18 +1411,34 @@ where
     live.activity("lockstep execution");
     live.lockstep_started(oracle);
     let mut lockstep_observer = live.lockstep_observer();
-    let run = run_lockstep_command(
-        project,
-        &theorem.name,
-        eq.proofstep,
-        oracle,
-        &LockstepDebugOptions::easycrypt(options.lockstep_timeout_ms),
-        backend,
-        // next to the export it describes: `<out>/<theorem>/!debug!/<left>-<right>/<oracle>/`
-        Some(debug_dir(proof.out_dir, &eq.left_name, &eq.right_name, oracle)),
-        lockstep_observer.as_mut(),
-        options.stop.as_deref(),
-    );
+    let opts = LockstepDebugOptions::easycrypt(options.lockstep_timeout_ms);
+    // next to the export it describes: `<out>/<theorem>/!debug!/<left>-<right>/<oracle>/`, or
+    // `!debug!/SideInv_<C>/<oracle>/` for a side tree
+    let dir = kind.debug_dir(proof.out_dir, eq, oracle);
+    let run = match kind {
+        JobKind::Equivalence => run_lockstep_command(
+            project,
+            &theorem.name,
+            eq.proofstep,
+            oracle,
+            &opts,
+            backend,
+            Some(dir),
+            lockstep_observer.as_mut(),
+            options.stop.as_deref(),
+        ),
+        JobKind::SideInvariants(c) => run_side_command(
+            project,
+            &theorem.name,
+            c,
+            oracle,
+            &opts,
+            backend,
+            dir,
+            lockstep_observer.as_mut(),
+            options.stop.as_deref(),
+        ),
+    };
     // its bars go before the summary line is printed
     drop(lockstep_observer);
     let lockstep_time = lockstep_started.elapsed();
@@ -1221,7 +1479,7 @@ where
         lockstep_time,
         id: None,
     };
-    tree.id = save_tree(project, theorem, eq, oracle, proof, &tree)?;
+    tree.id = save_tree(project, theorem, eq, kind, oracle, proof, &tree)?;
     Ok(Lockstep::Walk(tree))
 }
 
@@ -1232,15 +1490,14 @@ fn save_tree<P: Project>(
     project: &P,
     theorem: &Theorem<'_>,
     eq: &EquivalenceReport,
+    kind: JobKind<'_>,
     oracle: &str,
     proof: &ProofFile<'_>,
     tree: &WalkedTree,
 ) -> std::io::Result<Option<String>> {
     let path = saved_tree_path(proof.out_dir, &eq.proof_file, oracle);
     // lockstep execution has just loaded the invariant files, and warned
-    let fingerprint = without_custom_smt_warning(|| {
-        Fingerprint::of(project, theorem, eq.proofstep, oracle)
-    });
+    let fingerprint = without_custom_smt_warning(|| kind.fingerprint(project, theorem, eq, oracle));
     let fingerprint = match fingerprint {
         Ok(fingerprint) => fingerprint,
         Err(e) => {
@@ -1277,6 +1534,7 @@ fn tactics_for_oracle<P, B>(
     project: &P,
     theorem: &Theorem<'_>,
     eq: &EquivalenceReport,
+    kind: JobKind<'_>,
     setup: &EquivalenceSetup<'_>,
     oracle: &str,
     backend: &B,
@@ -1290,16 +1548,16 @@ where
 {
     live.oracle_started(oracle);
     // an interrupted oracle of the session record: its saved joint tree, no lockstep execution
-    let (walked, resume_from) = match resuming(project, theorem, eq, oracle, proof, options) {
+    let (walked, resume_from) = match resuming(project, theorem, eq, kind, oracle, proof, options) {
         Some(Resuming { tree, from }) => {
             live.oracle_resumed(&from.in_flight, from.mode.slug());
-            let dir = debug_dir(proof.out_dir, &eq.left_name, &eq.right_name, oracle);
+            let dir = kind.debug_dir(proof.out_dir, eq, oracle);
             if dir.join("index.html").exists() {
                 live.lockstep_done(&dir);
             }
             (tree, Some(from))
         }
-        None => match lockstep(session, project, theorem, eq, oracle, backend, options, live, proof)? {
+        None => match lockstep(session, project, theorem, eq, kind, oracle, backend, options, live, proof)? {
             Lockstep::Walk(tree) => (tree, None),
             Lockstep::Ended(end) => return Ok(end),
         },
@@ -1311,11 +1569,19 @@ where
         Resume::new(&tree, from.mode, from.closed.clone(), &from.in_flight)
     });
     let (left, right) = (setup.left_inst, setup.right_inst);
-    let unfold_ops: Vec<String> = invariant_ops(left, right, &walked.relations, &walked.helpers)
-        .into_iter()
-        .map(|op| op.name)
-        .collect();
-    let part_ops = leaf_part_ops(left, right, &walked.relations, &walked.helpers);
+    let (unfold, part_ops, judgement) = match kind {
+        JobKind::Equivalence => (
+            invariant_ops(left, right, &walked.relations, &walked.helpers),
+            leaf_part_ops(left, right, &walked.relations, &walked.helpers),
+            Judgement::Equiv,
+        ),
+        // `Comp_<C>.side_inv_<C>` first: the premise unfolded is the one that mentions it
+        JobKind::SideInvariants(_) => {
+            let ops = side_invariant_ops(left.game());
+            (ops.clone(), ops, Judgement::Hoare)
+        }
+    };
+    let unfold_ops: Vec<String> = unfold.into_iter().map(|op| op.name).collect();
     let left_ir = inline_oracle_ec(setup.left_inst, oracle)?;
     let right_ir = inline_oracle_ec(setup.right_inst, oracle)?;
     let began = Instant::now();
@@ -1357,6 +1623,7 @@ where
     };
     let mut prover = Prover {
         session,
+        judgement,
         script: Default::default(),
         tree: &tree,
         hints: &options.smt_hints,
@@ -1387,6 +1654,10 @@ where
         admit_smt: None,
     };
     let proved = prover.oracle(|goal: &Goal| {
+        if judgement == Judgement::Hoare {
+            // the side tree comes from the listing of the composition itself
+            return Vec::new();
+        }
         match super::check::align_goal(
             goal,
             (&left_ir, &setup.left_flag),
@@ -1470,11 +1741,18 @@ impl EquivalenceTactics {
     /// The report: `progress/Eq_<L>_<R>/report.txt`, and the same text on stdout.
     pub fn render(&self) -> String {
         let mut out = String::new();
-        let _ = writeln!(
-            out,
-            "tactics for {} (proofstep {}: {} ~ {})",
-            self.proof_file, self.proofstep, self.left, self.right
-        );
+        match &self.composition {
+            Some(c) => {
+                let _ = writeln!(out, "tactics for {} (side invariants of {c})", self.proof_file);
+            }
+            None => {
+                let _ = writeln!(
+                    out,
+                    "tactics for {} (proofstep {}: {} ~ {})",
+                    self.proof_file, self.proofstep, self.left, self.right
+                );
+            }
+        }
         for o in &self.oracles {
             if o.resumed {
                 let _ = writeln!(
@@ -1576,8 +1854,11 @@ impl EquivalenceTactics {
 impl TheoremTactics {
     pub fn render(&self) -> String {
         let mut out = format!("tactics for theorem {}\n", self.theorem);
-        for eq in &self.equivalences {
-            out.push_str(&eq.render());
+        for job in self.jobs() {
+            out.push_str(&job.render());
+        }
+        for c in &self.unproved_side_invariants {
+            let _ = writeln!(out, "{}", unproved_side_invariants_line(c));
         }
         for o in self.oracles() {
             if let Some(transcript) = &o.transcript {

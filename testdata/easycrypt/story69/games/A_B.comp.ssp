@@ -1,0 +1,10 @@
+composition A_B {
+    instance C = X {
+    }
+
+    compose {
+        adversary: {
+            x: C,
+        },
+    }
+}
