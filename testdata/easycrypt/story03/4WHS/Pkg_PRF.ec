@@ -27,7 +27,7 @@ module PRF = {
       d_LTK.[kid_] <- ltk_;
       d_H.[kid_] <- true;
     } else {
-      d_LTK <- if ltk = None then rem d_LTK kid_ else d_LTK.[kid_ <- oget ltk];
+      d_LTK.[kid_] <- oget ltk;
       d_H.[kid_] <- false;
     }
     ec_result <- Some kid_;

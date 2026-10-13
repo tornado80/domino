@@ -3120,7 +3120,7 @@ done
             s
         })
         .collect();
-    let hints = "smt(get_setE mem_set emptyE).";
+    let hints = "smt(get_setE mem_set remE mem_rem emptyE).";
     let expected = [
         "N0 quick-close auto => /#.".to_string(),
         "N0 structure exfalso; smt().".to_string(),
@@ -3355,7 +3355,7 @@ fn fallbacks_and_admits_ask_for_status_and_the_opening_for_the_head() {
     "pragma Goals:printall.") n=$((n-1)); ans;;
     admit.) g=none; ans;;"#;
     let run = run_leaf(&goals, "start", arms, vec![leaf_pair(false, Verdict::Verified, &[])], &[]);
-    let hints = "smt(get_setE mem_set emptyE).";
+    let hints = "smt(get_setE mem_set remE mem_rem emptyE).";
     assert_eq!(
         run.requests,
         [
@@ -3521,8 +3521,8 @@ fn the_leaf_is_opened_until_only_parts_are_left_and_no_split_is_sent() {
         // story 65: the part fallback sequence, the premises in the order of introduction
         for f in [
             "smt().",
-            "smt(get_setE mem_set emptyE).",
-            "move: hpre hpre => />; smt(get_setE mem_set emptyE).",
+            "smt(get_setE mem_set remE mem_rem emptyE).",
+            "move: hpre hpre => />; smt(get_setE mem_set remE mem_rem emptyE).",
         ] {
             expected.push(format!("part-fallback {f} [{part}]"));
         }
@@ -3699,7 +3699,7 @@ fn run_key_split(last_closes: bool) -> LeafRun {
     "auto => &1 &2 hpre.") g=all; ans;;
     "move => c d /=.") g=p1; ans;;
     "case ("*) case $g in p1) g=n2; ans;; n2) g=n3; ans;; n1) g=n2; ans;; *) err;; esac;;
-    "smt(get_setE mem_set emptyE).") case $g in n3) g=n2; ans;; n2) g=n1; ans;; n1) {last};; *) err;; esac;;
+    "smt(get_setE mem_set remE mem_rem emptyE).") case $g in n3) g=n2; ans;; n2) g=n1; ans;; n1) {last};; *) err;; esac;;
     admit.) g=none; ans;;"#
     );
     run_leaf(&goals, "start", &arms, vec![], &[])
@@ -3708,11 +3708,11 @@ fn run_key_split(last_closes: bool) -> LeafRun {
 const KEY_SPLIT: [&str; 7] = [
     "case (c = Comp_H3.M.k{2}) => [->|?].",
     "case (d = Comp_H3.M.j{2}) => [->|?].",
-    "smt(get_setE mem_set emptyE).",
-    "smt(get_setE mem_set emptyE).",
+    "smt(get_setE mem_set remE mem_rem emptyE).",
+    "smt(get_setE mem_set remE mem_rem emptyE).",
     "case (d = Comp_H3.M.j{2}) => [->|?].",
-    "smt(get_setE mem_set emptyE).",
-    "smt(get_setE mem_set emptyE).",
+    "smt(get_setE mem_set remE mem_rem emptyE).",
+    "smt(get_setE mem_set remE mem_rem emptyE).",
 ];
 
 /// Story 66: two pairs give four cases, in order, each a bullet, and the part is closed.
@@ -3739,11 +3739,11 @@ fn two_key_pairs_split_into_four_cases_each_a_bullet() {
         [
             "case (c = Comp_H3.M.k{2}) => [->|?].",
             "+ case (d = Comp_H3.M.j{2}) => [->|?].",
-            "+ smt(get_setE mem_set emptyE).",
-            "+ smt(get_setE mem_set emptyE).",
+            "+ smt(get_setE mem_set remE mem_rem emptyE).",
+            "+ smt(get_setE mem_set remE mem_rem emptyE).",
             "+ case (d = Comp_H3.M.j{2}) => [->|?].",
-            "+ smt(get_setE mem_set emptyE).",
-            "+ smt(get_setE mem_set emptyE).",
+            "+ smt(get_setE mem_set remE mem_rem emptyE).",
+            "+ smt(get_setE mem_set remE mem_rem emptyE).",
         ],
         "{}",
         run.script

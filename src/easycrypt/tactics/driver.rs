@@ -533,7 +533,7 @@ fn part_view(
 
 /// The lemmas every `smt(…)` of the last fallbacks is given (§3.5 step 5); the project's own come
 /// from `ssp.toml`.
-const BASE_SMT_LEMMAS: [&str; 3] = ["get_setE", "mem_set", "emptyE"];
+const BASE_SMT_LEMMAS: [&str; 5] = ["get_setE", "mem_set", "remE", "mem_rem", "emptyE"];
 
 /// The length of the fallback sequence: `smt()` and `smt(hints)`, each also with the premise
 /// unfolded.

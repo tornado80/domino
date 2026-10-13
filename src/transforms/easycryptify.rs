@@ -661,14 +661,9 @@ impl UnwrapGuards {
                                     span,
                                 });
                             }
-                            kill(&mut facts, &pattern_writes(&pattern));
-                            out.push(Statement::Assignment(
-                                Assignment {
-                                    pattern,
-                                    rhs: AssignmentRhs::Expression(value),
-                                },
-                                span,
-                            ));
+                            let write = branch_table_write(assign(pattern, value, span), &facts);
+                            kill(&mut facts, &stmt_writes(&write));
+                            out.push(write);
                         }
                     }
                 }
@@ -677,15 +672,14 @@ impl UnwrapGuards {
                     // Story 18 §4: a user's `None` test proves its operand
                     // `Some` inside the then-branch, and after the `if` when
                     // the else-branch always terminates (the `assert` shape).
+                    // Story 70 §3.2: `if (e == None)` proves `e` `Some` in
+                    // its else-branch.
                     let tested = some_test(&ite.cond).cloned();
-                    let mut then_facts = facts.clone();
-                    if let Some(e) = &tested {
-                        if !then_facts.contains(e) {
-                            then_facts.push(e.clone());
-                        }
-                    }
-                    let then = self.block(&ite.then_block.0, then_facts);
-                    let els = self.block(&ite.else_block.0, facts.clone());
+                    let then = self.block(&ite.then_block.0, with_fact(&facts, tested.as_ref()));
+                    let els = self.block(
+                        &ite.else_block.0,
+                        with_fact(&facts, none_test(&ite.cond)),
+                    );
                     let then_writes = block_writes(&ite.then_block.0);
                     let mut written = then_writes.clone();
                     written.extend(block_writes(&ite.else_block.0));
@@ -719,6 +713,7 @@ impl UnwrapGuards {
                     // An `invoke` writes only the local it binds: the callee
                     // is another package, and packages share no state
                     // (story 17 §2.2).
+                    let other = branch_table_write(other, &facts);
                     kill(&mut facts, &stmt_writes(&other));
                     out.push(other);
                 }
@@ -1097,14 +1092,61 @@ fn rename_block(stmts: &[Statement], renames: &BTreeMap<String, Identifier>) -> 
         .collect()
 }
 
-/// `e` when `cond` is exactly `not (e == None)` (`None` second, two
-/// elements): what `assert not (e == None)`, `if (e != None)` and an unwrap
-/// guard all parse to (story 18 §4.1).
-fn some_test(cond: &Expression) -> Option<&Expression> {
-    let ExpressionKind::Not(inner) = cond.kind() else {
-        return None;
+/// `facts` plus `fact`, when there is one and it is not already known.
+fn with_fact(facts: &[Expression], fact: Option<&Expression>) -> Vec<Expression> {
+    let mut out = facts.to_vec();
+    if let Some(e) = fact {
+        if !out.contains(e) {
+            out.push(e.clone());
+        }
+    }
+    out
+}
+
+/// Story 70 §3.1: a table write `T[k] <- e` whose value is neither `Some(_)`
+/// nor `None` stores or removes, and the two cases become two statements.
+/// When `facts` proves `e` `Some` it is `T[k] <- Some(Unwrap(e))`; else it is
+/// `if (not (e == None)) { T[k] <- Some(Unwrap(e)) } else { T[k] <- None }`,
+/// all with the write's span. Every other statement is returned unchanged.
+fn branch_table_write(stmt: Statement, facts: &[Expression]) -> Statement {
+    let Statement::Assignment(
+        Assignment {
+            pattern: pattern @ Pattern::Table { .. },
+            rhs: AssignmentRhs::Expression(value),
+        },
+        span,
+    ) = &stmt
+    else {
+        return stmt;
     };
-    match inner.kind() {
+    let TypeKind::Maybe(inner) = value.get_type().into_kind() else {
+        unreachable!("a table write's value is always Maybe-typed: {value:?}")
+    };
+    if matches!(value.kind(), ExpressionKind::Some(_) | ExpressionKind::None(_)) {
+        return stmt;
+    }
+    let store = assign(
+        pattern.clone(),
+        Expression::from_kind(ExpressionKind::Some(Box::new(Expression::from_kind(
+            ExpressionKind::Unwrap(Box::new(value.clone())),
+        )))),
+        *span,
+    );
+    if facts.contains(value) {
+        return store;
+    }
+    let remove = assign(
+        pattern.clone(),
+        Expression::from_kind(ExpressionKind::None(*inner)),
+        *span,
+    );
+    if_then_else(is_some(value), vec![store], vec![remove], *span)
+}
+
+/// `e` when `cond` is exactly `e == None` (`None` second, two elements): the
+/// else-branch of such an `if` knows `e` is `Some` (story 70 §3.2).
+fn none_test(cond: &Expression) -> Option<&Expression> {
+    match cond.kind() {
         ExpressionKind::Equals(es)
             if es.len() == 2 && matches!(es[1].kind(), ExpressionKind::None(_)) =>
         {
@@ -1114,9 +1156,20 @@ fn some_test(cond: &Expression) -> Option<&Expression> {
     }
 }
 
+/// `e` when `cond` is exactly `not (e == None)` (`None` second, two
+/// elements): what `assert not (e == None)`, `if (e != None)` and an unwrap
+/// guard all parse to (story 18 §4.1).
+fn some_test(cond: &Expression) -> Option<&Expression> {
+    let ExpressionKind::Not(inner) = cond.kind() else {
+        return None;
+    };
+    none_test(inner)
+}
+
 /// The containment story 17 §3.3 asks to be asserted: every `Unwrap(e)` —
 /// in a condition, an assignment, an argument or a table index — lies inside
-/// the then-branch of an `if (not (e == None))`.
+/// the then-branch of an `if (not (e == None))` or the else-branch of an
+/// `if (e == None)` (story 70 §3.2).
 fn every_unwrap_is_guarded(stmts: &[Statement]) -> bool {
     fn expr_ok(e: &Expression, guards: &[&Expression]) -> bool {
         let here = match e.kind() {
@@ -1130,18 +1183,25 @@ fn every_unwrap_is_guarded(stmts: &[Statement]) -> bool {
             own_exprs(stmt).iter().all(|e| expr_ok(e, guards))
                 && match stmt {
                     Statement::IfThenElse(ite) => {
-                        let guard = some_test(&ite.cond);
-                        guards.extend(guard);
-                        let then_ok = walk(&ite.then_block.0, guards);
-                        if guard.is_some() {
-                            guards.pop();
-                        }
-                        then_ok && walk(&ite.else_block.0, guards)
+                        walk_guarded(&ite.then_block.0, some_test(&ite.cond), guards)
+                            && walk_guarded(&ite.else_block.0, none_test(&ite.cond), guards)
                     }
                     Statement::For(_, _, _, body, _) => walk(&body.0, guards),
                     _ => true,
                 }
         })
+    }
+    fn walk_guarded<'a>(
+        stmts: &'a [Statement],
+        guard: Option<&'a Expression>,
+        guards: &mut Vec<&'a Expression>,
+    ) -> bool {
+        guards.extend(guard);
+        let ok = walk(stmts, guards);
+        if guard.is_some() {
+            guards.pop();
+        }
+        ok
     }
     walk(stmts, &mut Vec::new())
 }
@@ -2166,6 +2226,113 @@ return ec_result
 
     fn ite_e(cond: Expression, then: Vec<Statement>, els: Vec<Statement>) -> Statement {
         if_then_else(cond, then, els, span())
+    }
+
+    // --- story 70: a table write with an unknown value is a branch ---------
+
+    /// `T[k] <- e`, with `e : Maybe(Integer)` as it is.
+    fn put_maybe(e: Expression) -> Statement {
+        assign(
+            Pattern::Table {
+                ident: int_table("T"),
+                index: int("k"),
+            },
+            e,
+            span(),
+        )
+    }
+
+    #[test]
+    fn a_table_write_with_an_unknown_value_is_a_branch() {
+        let out = lower_int_oracle(vec![put_maybe(maybe_int("x")), ret(1)]);
+        assert_eq!(
+            show(&out),
+            "\
+ec_result <- None
+if not (x == None) {
+  T[k] <- Some(Unwrap(x))
+} else {
+  T[k] <- None
+}
+ec_result <- Some(1)
+return ec_result
+"
+        );
+    }
+
+    #[test]
+    fn a_table_write_with_a_known_value_is_a_plain_write() {
+        let cases = [
+            vec![
+                ite_e(not(is_none(maybe_int("x"))), vec![put_maybe(maybe_int("x"))], vec![]),
+                ret(1),
+            ],
+            vec![assert_some_e(maybe_int("x")), put_maybe(maybe_int("x")), ret(1)],
+            vec![
+                ite_e(is_none(maybe_int("x")), vec![set("a", 1)], vec![put_maybe(maybe_int("x"))]),
+                ret(1),
+            ],
+        ];
+        for body in cases {
+            let text = show(&lower_int_oracle(body));
+            assert!(text.contains("T[k] <- Some(Unwrap(x))"), "{text}");
+            assert!(!text.contains("T[k] <- None"), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_write_after_the_guard_keeps_the_table_write_branch() {
+        let reassign = assign(
+            Pattern::Ident(maybe_var("x")),
+            Expression::from_kind(ExpressionKind::None(Type::integer())),
+            span(),
+        );
+        let text = show(&lower_int_oracle(vec![
+            assert_some_e(maybe_int("x")),
+            reassign,
+            put_maybe(maybe_int("x")),
+            ret(1),
+        ]));
+        assert!(text.contains("T[k] <- None"), "{text}");
+    }
+
+    #[test]
+    fn a_none_test_covers_unwraps_in_its_else_branch() {
+        let body = vec![
+            ite_e(is_none(maybe_int("x")), vec![set("a", 1)], vec![unwrap("y", "x")]),
+            ret(1),
+        ];
+        let text = show(&lower_int_oracle(body));
+        assert_eq!(text.matches("if not (x == None)").count(), 0, "{text}");
+        assert!(text.contains("y <- Unwrap(x)"), "{text}");
+        assert!(every_unwrap_is_guarded(&[ite_e(
+            is_none(maybe_int("x")),
+            vec![],
+            vec![let_(
+                "y",
+                Expression::from_kind(ExpressionKind::Unwrap(Box::new(maybe_int("x"))))
+            )],
+        )]));
+    }
+
+    #[test]
+    fn some_none_and_sampled_table_writes_do_not_change() {
+        let none = put_maybe(Expression::from_kind(ExpressionKind::None(Type::integer())));
+        let text = show(&lower_int_oracle(vec![
+            put("T", int("k"), int("v")),
+            none,
+            ret(1),
+        ]));
+        assert_eq!(
+            text,
+            "\
+ec_result <- None
+T[k] <- Some(v)
+T[k] <- None
+ec_result <- Some(1)
+return ec_result
+"
+        );
     }
 
     /// The `if (_mess = 2)` cascade of `KX_nochecks::Send3` (§1.2) in

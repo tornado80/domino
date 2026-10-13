@@ -959,10 +959,8 @@ impl OracleTranslator<'_> {
         Ok(out)
     }
 
-    /// `T[k] <- rhs` (§3.4). `rhs` may be `Unwrap`-headed — `T[k] <-
-    /// Unwrap(m)` for `m : Maybe(Maybe(V))`, once story 17 has inlined
-    /// `unwrapify`'s temporary back into it. It is guarded by then and falls
-    /// to the general arm below, which only ever `oget`s it.
+    /// `T[k] <- rhs` (§3.4). `rhs` is `Some(_)` or `None`: `easycryptify`
+    /// turns every other table write into a branch over the two (story 70).
     fn translate_table_write(
         &mut self,
         ident: &Identifier,
@@ -989,35 +987,9 @@ impl OracleTranslator<'_> {
                     key: Box::new(key),
                 },
             }]),
-            _ => {
-                let TypeKind::Maybe(inner_ty) = rhs_expr.get_type().into_kind() else {
-                    unreachable!("a table write's right-hand side is always Maybe-typed")
-                };
-                let inner_ec_ty = translate_type(&inner_ty, span)?;
-                let rhs = self.translate_e(rhs_expr, span)?;
-                let cond = EcExpr::Binop {
-                    op: super::ast::EcBinop::Eq,
-                    lhs: Box::new(rhs.clone()),
-                    rhs: Box::new(EcExpr::None_(inner_ec_ty)),
-                };
-                let else_expr = EcExpr::MapSet {
-                    map: Box::new(map_expr.clone()),
-                    key: Box::new(key.clone()),
-                    value: Box::new(EcExpr::Oget(Box::new(rhs))),
-                };
-                let then_expr = EcExpr::MapRem {
-                    map: Box::new(map_expr),
-                    key: Box::new(key),
-                };
-                Ok(vec![EcStmt::Assign {
-                    lhs: EcLvalue::Var(map),
-                    rhs: EcExpr::If {
-                        cond: Box::new(cond),
-                        then_expr: Box::new(then_expr),
-                        else_expr: Box::new(else_expr),
-                    },
-                }])
-            }
+            _ => unreachable!(
+                "easycryptify rewrites every table write whose value is not Some or None (story 70)"
+            ),
         }
     }
 

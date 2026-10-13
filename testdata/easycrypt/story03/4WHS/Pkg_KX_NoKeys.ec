@@ -41,7 +41,7 @@ module KX_NoKeys (O : KX_NoKeys_Imports) = {
       d_LTK.[kid_] <- ltk_;
       d_H.[kid_] <- true;
     } else {
-      d_LTK <- if ltk = None then rem d_LTK kid_ else d_LTK.[kid_ <- oget ltk];
+      d_LTK.[kid_] <- oget ltk;
       d_H.[kid_] <- false;
     }
     ec_result <- Some kid_;
@@ -56,7 +56,11 @@ module KX_NoKeys (O : KX_NoKeys_Imports) = {
       ctr_ <- ctr_ + 1;
       ltk <- oget d_LTK.[kid];
       d_State.[ctr_] <- (d_U, u, d_V, ltk, None, None, None, None, None, 0);
-      d_Fresh <- if d_H.[kid] = None then rem d_Fresh ctr_ else d_Fresh.[ctr_ <- oget d_H.[kid]];
+      if (!(d_H.[kid] = None)) {
+        d_Fresh.[ctr_] <- oget d_H.[kid];
+      } else {
+        d_Fresh <- rem d_Fresh ctr_;
+      }
       ec_result <- Some ctr_;
     }
     return ec_result;
