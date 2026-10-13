@@ -10,7 +10,7 @@
 //! them are event records ([`event`]: `{"file", "ctx", "event", "ms"}`) for the time outside
 //! sentences, so that the `ms` of all records of one oracle add up to its EasyCrypt time.
 //! [`EcTranscriptMode::Full`] writes EasyCrypt's answer verbatim as `response`: the front goal
-//! in full and the kind of each open goal (`domino-json/2`, ADR 0009). [`EcTranscriptMode::Capped`]
+//! in full and the kind of each open goal (`domino-json/3`, ADR 0009). [`EcTranscriptMode::Capped`]
 //! (the default) writes the same answer with its front goal cut to what the live page embeds
 //! ([`cap_response`]): split into its conclusion (cut at [`GOAL_CONCL_CAP`] characters) and its
 //! hypotheses (cut at [`GOAL_HYPS_CAP`]), so at most ~5 kB of goal text per record (story 51;
@@ -389,7 +389,7 @@ pub(crate) mod tests {
         );
         let kinds = vec!["\"formula\""; n].join(",");
         format!(
-            "{{\"version\":\"domino-json/2\",\"state\":7,\"status\":\"error\",\"error\":{{\"loc\":{{\"start\":0,\"end\":4}},\"msg\":\"no\"}},\"messages\":[{{\"level\":\"warning\",\"text\":\"careful\"}}],\"proof\":{{\"front\":{front},\"kinds\":[{kinds}]}}}}"
+            "{{\"version\":\"domino-json/3\",\"state\":7,\"status\":\"error\",\"error\":{{\"loc\":{{\"start\":0,\"end\":4}},\"msg\":\"no\"}},\"messages\":[{{\"level\":\"warning\",\"text\":\"careful\"}}],\"proof\":{{\"front\":{front},\"kinds\":[{kinds}]}}}}"
         )
     }
 
@@ -419,7 +419,7 @@ pub(crate) mod tests {
         for key in ["version", "state", "status", "error", "messages"] {
             assert_eq!(v[key], full[key], "{key}");
         }
-        assert!(capped.starts_with("{\"version\":\"domino-json/2\",\"state\":7,\"status\":\"error\",\"error\":{\"loc\":{\"start\":0,\"end\":4},\"msg\":\"no\"},\"messages\":[{\"level\":\"warning\",\"text\":\"careful\"}],\"proof\":"));
+        assert!(capped.starts_with("{\"version\":\"domino-json/3\",\"state\":7,\"status\":\"error\",\"error\":{\"loc\":{\"start\":0,\"end\":4},\"msg\":\"no\"},\"messages\":[{\"level\":\"warning\",\"text\":\"careful\"}],\"proof\":"));
         assert!(
             capped.len() < (GOAL_CONCL_CAP + GOAL_HYPS_CAP) * 2 + 1_000,
             "{}",
@@ -433,9 +433,9 @@ pub(crate) mod tests {
         let v: serde_json::Value = serde_json::from_str(&cap_response(&answer).unwrap()).unwrap();
         assert_eq!(v["proof"]["front"]["concl"], "é".repeat(10));
         assert_eq!(v["proof"]["front"]["concl_cut"], 0);
-        let no_proof = "{\"version\":\"domino-json/2\",\"state\":0,\"status\":\"ok\",\"messages\":[],\"proof\":null}";
+        let no_proof = "{\"version\":\"domino-json/3\",\"state\":0,\"status\":\"ok\",\"messages\":[],\"proof\":null}";
         assert_eq!(cap_response(no_proof).unwrap(), no_proof);
-        let no_goal = "{\"version\":\"domino-json/2\",\"state\":3,\"status\":\"ok\",\"messages\":[],\"proof\":{\"front\":null,\"kinds\":[]}}";
+        let no_goal = "{\"version\":\"domino-json/3\",\"state\":3,\"status\":\"ok\",\"messages\":[],\"proof\":{\"front\":null,\"kinds\":[]}}";
         assert_eq!(cap_response(no_goal).unwrap(), no_goal);
         assert_eq!(cap_response("not json"), None);
     }

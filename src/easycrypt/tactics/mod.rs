@@ -78,7 +78,7 @@ use super::job::{
     ProofLock, SavedTree, SessionRecord, SessionRecordError,
 };
 use super::json::Goal;
-use super::session::{split_sentences, Session, SessionError, SessionEvent, JSON_BRANCH};
+use super::session::{split_sentences, Session, SessionError, SessionEvent, Want, JSON_BRANCH};
 use super::transcript::{Role, SentenceCtx};
 
 pub use super::transcript::{EcTranscriptMode, GOAL_CONCL_CAP, GOAL_HYPS_CAP};
@@ -1023,7 +1023,7 @@ fn admit_outside(session: &mut Session, oracle: Option<&str>) -> Result<(), Sess
         node: None,
         role: Role::Admit { part: None },
     })?;
-    session.send("admit.").map(|_| ())
+    session.send("admit.", Want::Status).map(|_| ())
 }
 
 /// What every EasyCrypt of a proof job is started with: the first one and each respawn.
@@ -1108,7 +1108,7 @@ fn open_proof(
     options: &TacticsOptions,
 ) -> Result<Opened, TacticsError> {
     for sentence in call_prefix {
-        let response = session.send(sentence)?;
+        let response = session.send(sentence, Want::Full)?;
         if options.stop_requested() {
             return Ok(Opened::Stopped);
         }
@@ -1119,7 +1119,7 @@ fn open_proof(
             base_case_admitted: false,
         });
     };
-    if !admitted && session.send(base)?.status == super::json::Status::Ok {
+    if !admitted && session.send(base, Want::Status)?.status == super::json::Status::Ok {
         return Ok(Opened::Open {
             base_case_admitted: false,
         });
@@ -1127,7 +1127,7 @@ fn open_proof(
     if options.stop_requested() {
         return Ok(Opened::Stopped);
     }
-    session.send("admit.")?;
+    session.send("admit.", Want::Status)?;
     Ok(Opened::Open {
         base_case_admitted: true,
     })

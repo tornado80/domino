@@ -28,7 +28,7 @@ use crate::writers::easycrypt::EcExportError;
 
 use super::align::{align_router, Alignment, Mismatch, PathStep};
 use super::json::{Goal, Response, Status};
-use super::session::{split_sentences, Session, SessionError};
+use super::session::{split_sentences, Session, SessionError, Want};
 use super::skeleton::{ec_skeleton, ir_skeleton, Arm};
 
 #[derive(Debug, Error)]
@@ -312,7 +312,7 @@ fn check_equivalence(
 
     let mut session = Session::start(out_dir)?;
     for sentence in sentences_until_call(&file, source)? {
-        let response = session.send(&sentence)?;
+        let response = session.send(&sentence, Want::Full)?;
         ok_or_reject(response, &file, &sentence)?;
     }
 
@@ -341,7 +341,7 @@ fn check_equivalence(
             });
         }
         // the base case, a goal of another oracle, or the one just compared: admitted
-        let response = session.send("admit.")?;
+        let response = session.send("admit.", Want::Status)?;
         ok_or_reject(response, &file, "admit.")?;
     }
 
@@ -385,7 +385,7 @@ fn align_one(
     let left_ir = inline_oracle_ec(left_inst, oracle)?;
     let right_ir = inline_oracle_ec(right_inst, oracle)?;
 
-    let response = session.send("proc; inline.")?;
+    let response = session.send("proc; inline.", Want::Full)?;
     let mut out = OracleAlignment {
         oracle: oracle.to_string(),
         problem: None,

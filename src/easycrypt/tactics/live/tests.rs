@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::easycrypt::json::parse_response;
+use crate::easycrypt::session::Want;
 use crate::easycrypt::transcript::{record, EcTranscriptMode};
 use crate::writers::easycrypt::progress::NopExportObserver;
 
@@ -84,7 +85,9 @@ impl Rig {
                 None => self.state + 1,
             };
         }
-        let front = goals.first().map_or("null".to_string(), |text| {
+        // a failed sentence carries no front goal (ADR 0012)
+        let carried = goals.first().filter(|_| status == "ok");
+        let front = carried.map_or("null".to_string(), |text| {
             format!(
                 "{{\"id\":1,\"concl\":{{\"kind\":\"app\",\"pp\":\"c\"}},\"text\":{}}}",
                 serde_json::Value::from(*text)
@@ -92,7 +95,7 @@ impl Rig {
         });
         let kinds = vec!["\"formula\""; goals.len()].join(",");
         let response = format!(
-            "{{\"version\":\"domino-json/2\",\"state\":{},\"status\":\"{status}\",{}\"messages\":[],\"proof\":{{\"front\":{front},\"kinds\":[{kinds}]}}}}",
+            "{{\"version\":\"domino-json/3\",\"state\":{},\"status\":\"{status}\",{}\"messages\":[],\"proof\":{{\"front\":{front},\"kinds\":[{kinds}]}}}}",
             self.state,
             error.map_or(String::new(), |e| format!(
                 "\"error\":{{\"msg\":{}}},",
@@ -119,6 +122,7 @@ impl Rig {
             response: &parsed,
             elapsed: Duration::from_millis(ms),
             record_bytes,
+            front_in_record: carried.is_some(),
             stopped,
             interrupts: 0,
         });
@@ -205,7 +209,11 @@ fn a_sentence_stopped_by_ctrl_c_is_interrupted_and_one_out_of_time_is_timed_out(
     rig.live.finish();
     let page = rig.page();
     assert_eq!(page.matches("b-timeout\">timed out").count(), 1, "{page}");
-    assert_eq!(page.matches("b-interrupted\">interrupted").count(), 1, "{page}");
+    assert_eq!(
+        page.matches("b-interrupted\">interrupted").count(),
+        1,
+        "{page}"
+    );
 }
 
 #[test]
@@ -237,9 +245,7 @@ fn steps_are_attributed_to_their_goal_with_status_and_error_text() {
     assert!(page.contains("cannot prove goal (strict)"));
     assert!(page.contains("b-timeout\">timed out"));
     assert!(page.contains("[J1 J2]"));
-    assert!(page.contains(
-        "(* domino: J3 invariant; domino-verified-ec-failed *)"
-    ));
+    assert!(page.contains("(* domino: J3 invariant; domino-verified-ec-failed *)"));
     assert!(page.contains("st-admitted\">admitted"));
     // the summary lists the admit with its reason
     assert!(page.contains("<td>J3</td><td>domino-verified-ec-failed</td>"));
@@ -297,6 +303,22 @@ fn only_the_last_step_of_a_goal_has_its_goal_text_embedded() {
     assert!(page.contains("goal text not embedded"));
 }
 
+/// Story 61: a failed sentence's answer carries no goal; its step shows the goal Domino has,
+/// read by the step before.
+#[test]
+fn a_failed_step_shows_the_goal_from_before() {
+    let mut rig = Rig::new();
+    rig.one_oracle();
+    rig.live.node_entered("N0", "determined", vec![], Some(0));
+    rig.answer("sp 1 1.", "ok", None, &["GOAL-BEFORE-THE-FAILURE"], 1);
+    rig.answer("smt().", "error", Some("no"), &["NOT-SENT"], 1);
+    rig.live.node_left();
+    rig.live.finish();
+    let page = rig.page();
+    assert!(page.contains("GOAL-BEFORE-THE-FAILURE"), "{page}");
+    assert!(!page.contains("no goal left"));
+}
+
 #[test]
 fn while_running_the_goal_being_worked_on_is_embedded() {
     let mut rig = Rig::new();
@@ -334,7 +356,9 @@ fn the_conclusion_comes_first_and_the_hypotheses_are_folded() {
     rig.live.finish();
     let page = rig.page();
     let judgment = page.find("<pre>&amp;1 (left ) : {x : int}").unwrap();
-    let hyps = page.find("<details class=\"hyps\"><summary>hypotheses (").unwrap();
+    let hyps = page
+        .find("<details class=\"hyps\"><summary>hypotheses (")
+        .unwrap();
     assert!(judgment < hyps);
     assert!(page.contains("POST-CONDITION"));
     assert!(page.contains(" characters cut here: the full goal is in ec-transcript.jsonl, transcript record 0, with --ec-transcript full …"));
@@ -421,7 +445,10 @@ fn a_session_whose_capped_transcript_fails_goes_on_and_the_page_renders() {
     rig.one_oracle();
     rig.live.node_entered("N0", "determined", vec![], Some(0));
     for sentence in ["sp 1 1.", "if.", "auto.", "smt()."] {
-        assert_eq!(session.send(sentence).unwrap().status, Status::Ok);
+        assert_eq!(
+            session.send(sentence, Want::Full).unwrap().status,
+            Status::Ok
+        );
     }
     rig.live.node_left();
     rig.live.finish();
@@ -464,7 +491,10 @@ fn event_records_are_no_steps_and_every_step_finds_its_record() {
     rig.live.node_entered("N0", "determined", vec![], Some(0));
     let sentences = ["sp 1 1.", "if.", "auto.", "smt()."];
     for sentence in sentences {
-        assert_eq!(session.send(sentence).unwrap().status, Status::Ok);
+        assert_eq!(
+            session.send(sentence, Want::Full).unwrap().status,
+            Status::Ok
+        );
         // Domino's own work: a `between` record before the next sentence
         std::thread::sleep(Duration::from_millis(120));
     }
@@ -483,10 +513,16 @@ fn event_records_are_no_steps_and_every_step_finds_its_record() {
         // the records alternate: sentence, between, sentence, …
         let line = 2 * step;
         assert_eq!(lines[line]["sentence"], *sentence);
-        assert!(page.contains(&format!("transcript record {line} (")), "{sentence}");
+        assert!(
+            page.contains(&format!("transcript record {line} (")),
+            "{sentence}"
+        );
     }
     for line in (1..lines.len()).step_by(2) {
-        assert!(!page.contains(&format!("transcript record {line} (")), "{line}");
+        assert!(
+            !page.contains(&format!("transcript record {line} (")),
+            "{line}"
+        );
     }
 }
 
@@ -545,7 +581,10 @@ fn a_node_closed_by_its_quick_close_says_so() {
     rig.live.node_left();
     rig.live.finish();
     let page = rig.page();
-    assert!(page.contains("closed by quick close: auto =&gt; /#"), "{page}");
+    assert!(
+        page.contains("closed by quick close: auto =&gt; /#"),
+        "{page}"
+    );
     assert!(page.contains("closing attempts (1)"));
     assert!(page.contains("✓ closed"));
 }
@@ -578,7 +617,8 @@ fn every_attempt_is_listed_in_order_and_the_last_closing_one_is_on_the_chip() {
     rig.sending("auto => /#.");
     rig.answer("auto => /#.", "error", Some("cannot close"), &["g"], 1);
     rig.live.attempt_ended(false);
-    rig.live.attempt(Closing::Fallback { k: 1, of: 4 }, "smt()", TWO_S);
+    rig.live
+        .attempt(Closing::Fallback { k: 1, of: 4 }, "smt()", TWO_S);
     rig.sending("smt().");
     rig.answer("smt().", "ok", None, &[], 1);
     rig.live.attempt_ended(true);
@@ -597,8 +637,11 @@ fn the_attempt_in_flight_is_on_the_chip() {
     let rig = Rig::new();
     rig.one_oracle();
     rig.live.node_entered("N0", "determined", vec![], Some(0));
-    rig.live
-        .attempt(Closing::Fallback { k: 2, of: 4 }, "smt() (premise unfolded)", TWO_S);
+    rig.live.attempt(
+        Closing::Fallback { k: 2, of: 4 },
+        "smt() (premise unfolded)",
+        TWO_S,
+    );
     assert!(rig
         .page()
         .contains("trying fallback 2/4: smt() (premise unfolded)"));

@@ -664,7 +664,7 @@ fn answer_with(messages: &[&str]) -> crate::easycrypt::json::Response {
         .map(|m| format!(r#"{{"level":"warning","text":{}}}"#, serde_json::Value::from(*m)))
         .collect();
     crate::easycrypt::json::parse_response(&format!(
-        r#"{{"version":"domino-json/2","state":3,"status":"error","messages":[{}]}}"#,
+        r#"{{"version":"domino-json/3","state":3,"status":"error","messages":[{}]}}"#,
         messages.join(",")
     ))
     .unwrap()
@@ -997,7 +997,7 @@ mod live {
             let v: serde_json::Value = serde_json::from_str(line).unwrap();
             assert!(v["ctx"]["role"].is_string(), "{v}");
             if v.get("event").is_none() {
-                assert!(v["response"]["version"] == "domino-json/2");
+                assert!(v["response"]["version"] == "domino-json/3");
                 assert!(v["bytes"].as_u64().unwrap() > 0);
             }
         }
@@ -1874,8 +1874,9 @@ while :; do
     break
   fi
   [ $after -ge 0 ] && after=$((after+1))
-  case "$line" in "call ("*) opened=1;; esac
-  if [ $opened = 1 ] && [ "$line" = "proc; inline." ]; then
+  s=$(printf '%s\n' "$line" | sed -e 's/^."sentence":"\(.*\)","want":"[a-z]*".$/\1/' -e 's/\\"/"/g' -e 's/\\\\/\\/g')
+  case "$s" in "call ("*) opened=1;; esac
+  if [ $opened = 1 ] && [ "$s" = "proc; inline." ]; then
     n=$(($(cat '{walked}')+1))
     echo $n > '{walked}'
     case " {hang} " in *" $n "*) after=0;; *) after=-1;; esac
@@ -2654,9 +2655,10 @@ fn each_record_says_why_the_driver_sent_its_sentence() {
         format!(
             r#"#!/bin/sh
 d='{}'; n=0; g=none
-ans() {{ n=$((n+1)); printf '{{"version":"domino-json/2","state":%s,"status":"ok","messages":[],"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
-err() {{ printf '{{"version":"domino-json/2","state":%s,"status":"error","messages":[],"error":{{"msg":"no"}},"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
-while IFS= read -r line; do
+ans() {{ n=$((n+1)); printf '{{"version":"domino-json/3","state":%s,"status":"ok","messages":[],"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
+err() {{ printf '{{"version":"domino-json/3","state":%s,"status":"error","messages":[],"error":{{"msg":"no"}},"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
+while IFS= read -r req; do
+  line=$(printf '%s\n' "$req" | sed -e 's/^."sentence":"\(.*\)","want":"[a-z]*".$/\1/' -e 's/\\"/"/g' -e 's/\\\\/\\/g')
   case "$line" in
     start.) g=two; ans;;
     admit.) case $g in two) g=prog;; prog) g=none;; two_atoms) g=one_atom;; *) g=none;; esac; ans;;
@@ -2697,7 +2699,7 @@ done
         EcTranscriptMode::Capped,
         "Eq.ec",
     );
-    assert_eq!(session.send("start.").unwrap().status, crate::easycrypt::json::Status::Ok);
+    assert_eq!(session.send("start.", Want::Full).unwrap().status, crate::easycrypt::json::Status::Ok);
     let mut prover = super::driver::Prover {
         session: &mut session,
         script: Default::default(),
@@ -2760,6 +2762,8 @@ done
         "N1 part-fallback smt(). #1 [equal-output+invariant]".to_string(),
         format!("N1 part-fallback {hints} #2 [equal-output+invariant]"),
         format!("N1 part-fallback move: hpre => />; {hints} #3 [equal-output+invariant]"),
+        // story 61: the key scan reads the goal in full; it was read at `head` by `do split.`
+        "N1 split pragma Goals:printall.".to_string(),
         "N1 admit admit.".to_string(),
         "N1 split do split.".to_string(),
         "N1 part-fallback smt(). #1 [equal-output+invariant]".to_string(),
@@ -2834,6 +2838,8 @@ struct LeafRun {
     admits: Vec<Admit>,
     /// The script the leaf left.
     script: String,
+    /// `<want> <sentence>` of every request the fake EasyCrypt read (ADR 0012).
+    requests: Vec<String>,
 }
 
 /// Proves joint node 0, a terminal pair, against a fake EasyCrypt. `goals` are the proof
@@ -2863,9 +2869,11 @@ fn run_leaf(
         format!(
             r#"#!/bin/sh
 d='{}'; n=0; g=none
-ans() {{ n=$((n+1)); eval "g_$n=$g"; printf '{{"version":"domino-json/2","state":%s,"status":"ok","messages":[],"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
-err() {{ printf '{{"version":"domino-json/2","state":%s,"status":"error","messages":[],"error":{{"msg":"no"}},"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
-while IFS= read -r line; do
+ans() {{ n=$((n+1)); eval "g_$n=$g"; printf '{{"version":"domino-json/3","state":%s,"status":"ok","messages":[],"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
+err() {{ printf '{{"version":"domino-json/3","state":%s,"status":"error","messages":[],"error":{{"msg":"no"}},"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
+while IFS= read -r req; do
+  printf '%s\n' "$req" >> "$d/requests"
+  line=$(printf '%s\n' "$req" | sed -e 's/^."sentence":"\(.*\)","want":"[a-z]*".$/\1/' -e 's/\\"/"/g' -e 's/\\\\/\\/g')
   case "$line" in
     start.) g={start}; ans;;
     "undo "*) k=${{line#undo }}; k=${{k%.}}; eval "g=\$g_$k"; n=$((k-1)); ans;;
@@ -2901,7 +2909,7 @@ done
         EcTranscriptMode::Capped,
         "Eq.ec",
     );
-    assert_eq!(session.send("start.").unwrap().status, crate::easycrypt::json::Status::Ok);
+    assert_eq!(session.send("start.", Want::Full).unwrap().status, crate::easycrypt::json::Status::Ok);
     let mut prover = super::driver::Prover {
         session: &mut session,
         script: Default::default(),
@@ -2949,11 +2957,49 @@ done
             s
         })
         .collect();
+    let requests = std::fs::read_to_string(dir.path().join("requests"))
+        .unwrap()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .map(|r| format!("{} {}", r["want"].as_str().unwrap(), r["sentence"].as_str().unwrap()))
+        .collect();
     LeafRun {
         said,
         admits,
         script,
+        requests,
     }
+}
+
+/// Story 61: each sentence asks for what its caller reads. The part fallbacks and the admit ask
+/// for no goal (`status`), the reduction to a formula for its head; the key case split reads the
+/// goal in full first, with the probe.
+#[test]
+fn fallbacks_and_admits_ask_for_status_and_the_opening_for_the_head() {
+    let goals = [
+        ("start", proof_of(&program_with_ifs(&[], &[]), 1)),
+        ("atom", proof_of(&formula(r#"{"kind":"app","pp":"a","op":"Top.a"}"#), 1)),
+    ];
+    let arms = r#"
+    "auto => &1 &2 hpre.") g=atom; ans;;
+    "pragma Goals:printall.") n=$((n-1)); ans;;
+    admit.) g=none; ans;;"#;
+    let run = run_leaf(&goals, "start", arms, vec![leaf_pair(false, Verdict::Verified, &[])], &[]);
+    let hints = "smt(get_setE mem_set emptyE).";
+    assert_eq!(
+        run.requests,
+        [
+            "full start.".to_string(),
+            "head auto => &1 &2 hpre.".to_string(),
+            "head do split.".to_string(),
+            "status smt().".to_string(),
+            format!("status {hints}"),
+            format!("status move: hpre => />; {hints}"),
+            "full pragma Goals:printall.".to_string(),
+            "status admit.".to_string(),
+        ]
+    );
+    assert_eq!(run.admits.len(), 1);
 }
 
 /// A proof state whose front goal is `front` (goal JSON), with `open` goals of its kind.
@@ -3100,7 +3146,7 @@ fn the_leaf_is_opened_until_only_parts_are_left_and_no_split_is_sent() {
     ]
     .map(String::from)
     .to_vec();
-    for _ in 0..3 {
+    for i in 0..3 {
         expected.push("split do split.".into());
         // story 65: the part fallback sequence, the premises in the order of introduction
         for f in [
@@ -3109,6 +3155,11 @@ fn the_leaf_is_opened_until_only_parts_are_left_and_no_split_is_sent() {
             "move: hpre hpre => />; smt(get_setE mem_set emptyE).",
         ] {
             expected.push(format!("part-fallback {f} [{part}]"));
+        }
+        // story 61: the key scan reads in full the goal `do split.` read at `head` (the fake
+        // sends the next ones in full with the admit)
+        if i == 0 {
+            expected.push("split pragma Goals:printall.".into());
         }
         expected.push(format!("admit admit. [{part}]"));
     }
@@ -3132,7 +3183,7 @@ fn the_leaf_is_opened_until_only_parts_are_left_and_no_split_is_sent() {
 fn the_smt_outcome_is_timeout_then_unknown_then_error() {
     let answer = |status: &str, smt: &str| -> crate::easycrypt::json::Response {
         serde_json::from_str(&format!(
-            r#"{{"version":"domino-json/2","state":1,"status":"{status}","messages":[],
+            r#"{{"version":"domino-json/3","state":1,"status":"{status}","messages":[],
                "timing":{{"tactic_ms":1,"serialize_ms":0{smt}}}}}"#
         ))
         .unwrap()

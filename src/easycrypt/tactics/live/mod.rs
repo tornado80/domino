@@ -36,7 +36,7 @@
 //! ignored (a page is a convenience, not a result).
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -45,7 +45,7 @@ mod page;
 
 use serde_derive::Deserialize;
 
-use crate::easycrypt::json::Status;
+use crate::easycrypt::json::{Response, Status};
 use crate::easycrypt::session::SessionEvent;
 use crate::easycrypt::transcript::{GoalParts, GOAL_CONCL_CAP, GOAL_HYPS_CAP};
 use crate::debug::progress::DebugObserver;
@@ -86,6 +86,10 @@ pub(super) struct RecordSpan {
 pub(super) struct Step {
     /// `None` when no record was written for it (the transcript was dropped).
     pub record: Option<RecordSpan>,
+    /// The record whose front goal is the goal Domino has after this step: its own, or, when
+    /// its answer carried none (a failed sentence, a `status` answer, an `undo`), the last one
+    /// read at the same EasyCrypt depth (ADR 0012). `None` when no record has it.
+    pub goal_record: Option<RecordSpan>,
     pub sentence: String,
     pub status: StepStatus,
     /// Accepted, and later undone (by `undo N.` in the session).
@@ -251,6 +255,9 @@ pub(super) struct Live {
     pub last_answered: Option<usize>,
     /// Accepted, not undone steps of the current session, oldest first.
     live_steps: Vec<usize>,
+    /// The record holding the front goal of each depth of the current session, as
+    /// [`Step::goal_record`] reads it.
+    goal_records: BTreeMap<u64, RecordSpan>,
     offset: u64,
     lines: usize,
     last_flush: Option<Instant>,
@@ -301,6 +308,7 @@ impl LiveHandle {
             activity: String::new(),
             last_answered: None,
             live_steps: Vec::new(),
+            goal_records: BTreeMap::new(),
             offset: 0,
             lines: 0,
             last_flush: None,
@@ -357,6 +365,7 @@ impl LiveHandle {
         live.cur_oracle = None;
         live.node_stack.clear();
         live.live_steps.clear();
+        live.goal_records.clear();
         live.oracle_index = 0;
         live.oracle_total = oracles.len();
         live.progress.on_event(&ExportEvent::PhaseStarted {
@@ -661,6 +670,7 @@ impl LiveHandle {
             oracle.unanswered = Some(u.to_string());
         }
         live.live_steps.clear();
+        live.goal_records.clear();
         live.pending = None;
         live.touch(true);
     }
@@ -709,6 +719,7 @@ impl Live {
                 response,
                 elapsed,
                 record_bytes,
+                front_in_record,
                 stopped,
                 interrupts,
             } => {
@@ -723,8 +734,17 @@ impl Live {
                     self.offset += span.len as u64;
                 }
                 let undo_to = parse_undo(sentence);
+                let goals_left = response.proof.as_ref().map_or(0, |p| p.kinds.len());
+                let goal_record = self.goal_record(
+                    record,
+                    response,
+                    *front_in_record,
+                    undo_to.is_some(),
+                    goals_left,
+                );
                 let step = Step {
                     record,
+                    goal_record,
                     sentence: (*sentence).to_string(),
                     status: match response.status {
                         Status::Ok => StepStatus::Accepted,
@@ -744,7 +764,7 @@ impl Live {
                     ms: elapsed.as_millis() as u64,
                     interrupts: *interrupts,
                     state: response.state,
-                    goals_left: response.proof.as_ref().map_or(0, |p| p.kinds.len()),
+                    goals_left,
                 };
                 let id = self.steps.len();
                 if let Some(to) = undo_to {
@@ -775,6 +795,39 @@ impl Live {
                 self.offset += *record_bytes as u64;
             }
         }
+    }
+
+    /// The [`Step::goal_record`] of an answer whose record is `record`, keeping
+    /// [`Self::goal_records`] as the session keeps its front goals: an accepted sentence forgets
+    /// the depths above its own; its record holds the goal of its depth if it carries one, and
+    /// a new depth whose answer carries none has no record. With no goal open, the step's own
+    /// record says so.
+    fn goal_record(
+        &mut self,
+        record: Option<RecordSpan>,
+        response: &Response,
+        front_in_record: bool,
+        is_undo: bool,
+        goals_left: usize,
+    ) -> Option<RecordSpan> {
+        let state = response.state;
+        if response.status == Status::Ok {
+            let before = self.last_answered.map_or(0, |id| self.steps[id].state);
+            self.goal_records.split_off(&(state + 1));
+            match record {
+                Some(span) if front_in_record => {
+                    self.goal_records.insert(state, span);
+                }
+                _ if !is_undo && state > before => {
+                    self.goal_records.remove(&state);
+                }
+                _ => {}
+            }
+        }
+        if goals_left == 0 {
+            return record;
+        }
+        self.goal_records.get(&state).copied()
     }
 
     /// Puts a step in the goal being worked on, or counts it as set-up.
@@ -835,7 +888,7 @@ impl Live {
         let spans: Vec<(usize, u64, usize)> = shown
             .iter()
             .filter(|id| !self.texts.contains_key(id))
-            .filter_map(|&id| self.steps[id].record.map(|r| (id, r.offset, r.len)))
+            .filter_map(|&id| self.steps[id].goal_record.map(|r| (id, r.offset, r.len)))
             .collect();
         if spans.is_empty() {
             return;

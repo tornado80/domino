@@ -2,9 +2,19 @@
 
 //! A live `easycrypt cli -json` process (story 26 §3.1).
 //!
-//! [`Session::send`] writes one sentence and reads the one JSON line EasyCrypt answers with
+//! [`Session::send`] writes one request (a sentence and what its answer must carry, a [`Want`],
+//! ADR 0012) and reads the one JSON line EasyCrypt answers with
 //! (`easycrypt/doc/json-output.md`). The state of the session after the sentence is the
-//! returned [`Response`]; [`Session::undo_to`] goes back to an earlier one in O(1). Every
+//! returned [`Response`]; [`Session::undo_to`] goes back to an earlier one in O(1).
+//!
+//! **The front goal is the session's, not the answer's.** An answer carries the front goal only
+//! when it asked for one and the sentence was accepted. The session keeps the last front goal it
+//! read for each EasyCrypt state the run can still undo to ([`Session::front`]): after a
+//! failed sentence it is the one from before, after an `undo` the one of that state. When an
+//! accepted sentence leaves open goals and no front goal is known for the new state (a
+//! [`Want::Status`] answer), the session reads it at once with one more exchange
+//! ([`PROBE_SENTENCE`] at [`Want::Full`]), so [`Session::front`] is always the true front goal,
+//! at the depth it was read at. Every
 //! exchange is kept in [`Session::transcript`]; with a transcript sink it is also written to
 //! `ec-transcript.jsonl` as it happens ([`Session::set_transcript_sink`], module [`transcript`]).
 //!
@@ -13,7 +23,7 @@
 //! [`FORMAT_VERSION`] is refused with a message naming both versions, the variable and the
 //! branch of the EasyCrypt clone that adds the format.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -57,8 +67,43 @@ const REREAD_TIMEOUT: Duration = Duration::from_secs(120);
 /// How often a running sentence looks at the stop flag ([`Session::set_stop`]).
 const STOP_POLL: Duration = Duration::from_millis(100);
 
-/// The startup check's sentence: it changes no state and is answered with one line.
+/// The startup check's sentence, and the sentence that reads the front goal again: it changes
+/// no state and is answered with one line.
 const PROBE_SENTENCE: &str = "pragma Goals:printall.";
+
+/// How many EasyCrypt states keep their front goal ([`Session::front`]): the newest ones. An
+/// `undo` to an older state reads its front goal again.
+const FRONTS_KEPT: usize = 64;
+
+/// What the answer to a sentence carries of the front goal (ADR 0012). Each caller asks for what
+/// it reads; the order is "carries less than".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Want {
+    /// No front goal: the status, the kinds of the open goals, the messages and the timing. For
+    /// a sentence whose caller reads only whether it was accepted and how many goals are open.
+    Status,
+    /// The front goal with its formulas cut at depth 4: enough for the head of the conclusion
+    /// and the names of the hypotheses.
+    Head,
+    /// The front goal in full.
+    Full,
+}
+
+impl Want {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Want::Status => "status",
+            Want::Head => "head",
+            Want::Full => "full",
+        }
+    }
+}
+
+/// A front goal the session read, and how deep ([`Session::front`]).
+struct KnownFront {
+    goal: Box<Goal>,
+    want: Want,
+}
 
 #[derive(Debug, Error)]
 pub enum SessionError {
@@ -71,7 +116,9 @@ pub enum SessionError {
     NotJsonCapable { binary: PathBuf, detail: String },
     #[error("EasyCrypt closed its output while answering `{sentence}`")]
     Closed { sentence: String },
-    #[error("EasyCrypt answered `{sentence}` with something that is not `{FORMAT_VERSION}`: {source}")]
+    #[error(
+        "EasyCrypt answered `{sentence}` with something that is not `{FORMAT_VERSION}`: {source}"
+    )]
     BadAnswer {
         sentence: String,
         source: serde_json::Error,
@@ -125,9 +172,14 @@ const READER_STACK: usize = 1 << 30;
 /// it is still running, and its answer.
 #[derive(Debug)]
 pub enum SessionEvent<'a> {
-    Sending { sentence: &'a str },
+    Sending {
+        sentence: &'a str,
+    },
     /// EasyCrypt has not answered yet; sent every [`WAIT_TICK`].
-    Waiting { sentence: &'a str, elapsed: Duration },
+    Waiting {
+        sentence: &'a str,
+        elapsed: Duration,
+    },
     /// The answer. `record_bytes` is the size of the transcript record just written, if there
     /// is a transcript sink (the record is on disk already). `stopped`: the sentence was
     /// interrupted because the run was asked to stop ([`Session::set_stop`]), not by the timeout.
@@ -136,16 +188,24 @@ pub enum SessionEvent<'a> {
         response: &'a Response,
         elapsed: Duration,
         record_bytes: Option<usize>,
+        /// The answer (and so its record) carries the front goal: an accepted sentence that asked
+        /// for one. `response` itself never does: the session keeps it ([`Session::front`]).
+        front_in_record: bool,
         stopped: bool,
         /// How many interrupts were sent before the answer came (0: none was needed).
         interrupts: usize,
     },
     /// Writing the transcript failed under [`EcTranscriptMode::Capped`]: no record is written
     /// from this sentence on (story 31 §3.3). Sent once, before that sentence's `Answered`.
-    TranscriptDropped { path: &'a Path, cause: &'a str },
+    TranscriptDropped {
+        path: &'a Path,
+        cause: &'a str,
+    },
     /// An event record of `record_bytes` was written ([`transcript::event`]): it is in the
     /// file, between the sentence records, and is not a sentence.
-    EventRecorded { record_bytes: usize },
+    EventRecorded {
+        record_bytes: usize,
+    },
 }
 
 /// How often a running sentence is reported to the observer as [`SessionEvent::Waiting`].
@@ -159,6 +219,9 @@ pub struct Session {
     transcript: Vec<Exchange>,
     /// The state before the first sentence: no proof, depth 0.
     empty: Option<Response>,
+    /// The front goal of each EasyCrypt state the run can undo to, as far as it was read: see
+    /// the module documentation. At most [`FRONTS_KEPT`].
+    fronts: BTreeMap<u64, KnownFront>,
     timeout: Duration,
     sink: Option<TranscriptSink>,
     /// A capped transcript's write failed and the sink was dropped.
@@ -316,6 +379,7 @@ impl Session {
             binary: binary.to_path_buf(),
             transcript: Vec::new(),
             empty: None,
+            fronts: BTreeMap::new(),
             timeout: DEFAULT_TIMEOUT,
             sink: None,
             sink_dropped: false,
@@ -331,13 +395,17 @@ impl Session {
         Ok(session)
     }
 
+    /// Sends the bare probe sentence, not a request: every `-json` EasyCrypt answers it with
+    /// its version, a `domino-json/3` one with an error answer (the line is not a request) and
+    /// an older one by running the sentence, so an older binary is told apart without waiting
+    /// on it.
     fn check_capability(&mut self) -> Result<(), SessionError> {
         let binary = self.binary.clone();
         let not_json = |detail: String| SessionError::NotJsonCapable {
             binary: binary.clone(),
             detail,
         };
-        self.write_line(PROBE_SENTENCE)?;
+        self.write_raw(PROBE_SENTENCE)?;
         let line = match self.lines.recv_timeout(Duration::from_secs(120)) {
             Ok(Ok(line)) => line,
             Ok(Err(e)) => return Err(not_json(e.to_string())),
@@ -428,7 +496,9 @@ impl Session {
 
     /// Whether the run has been asked to stop ([`Session::set_stop`]).
     pub fn stop_requested(&self) -> bool {
-        self.stop.as_ref().is_some_and(|s| s.load(Ordering::Relaxed))
+        self.stop
+            .as_ref()
+            .is_some_and(|s| s.load(Ordering::Relaxed))
     }
 
     /// Waits for the next line, up to the timeout, reporting [`SessionEvent::Waiting`] on the
@@ -451,7 +521,10 @@ impl Session {
             if stoppable {
                 until = until.min(now + STOP_POLL);
             }
-            match self.lines.recv_timeout(until.saturating_duration_since(now)) {
+            match self
+                .lines
+                .recv_timeout(until.saturating_duration_since(now))
+            {
                 Ok(line) => return Wait::Line(line),
                 Err(RecvTimeoutError::Disconnected) => return Wait::Closed,
                 Err(RecvTimeoutError::Timeout) => {
@@ -496,27 +569,61 @@ impl Session {
         &self.binary
     }
 
-    fn write_line(&mut self, sentence: &str) -> Result<(), SessionError> {
+    /// Writes the request for `sentence`: one line, `{"sentence": …, "want": …}`.
+    fn write_line(&mut self, sentence: &str, want: Want) -> Result<(), SessionError> {
+        let request = format!(
+            "{{\"sentence\":{},\"want\":\"{}\"}}",
+            serde_json::Value::from(sentence),
+            want.as_str()
+        );
+        self.write_raw(&request)
+    }
+
+    /// Writes `line` and a line break.
+    fn write_raw(&mut self, line: &str) -> Result<(), SessionError> {
         let stdin = self.stdin.as_mut().ok_or_else(|| SessionError::Closed {
-            sentence: sentence.to_string(),
+            sentence: line.to_string(),
         })?;
-        // A sentence is one line for EasyCrypt: its own line breaks are whitespace.
-        let flat = sentence.replace('\n', " ");
-        stdin.write_all(flat.as_bytes())?;
+        stdin.write_all(line.as_bytes())?;
         stdin.write_all(b"\n")?;
         stdin.flush()?;
         Ok(())
     }
 
-    /// Sends one sentence and returns EasyCrypt's answer. A sentence still running after the
-    /// timeout, or when the run is asked to stop ([`Session::set_stop`]), is interrupted, and
-    /// the answer is then `Status::Interrupted`.
-    pub fn send(&mut self, sentence: &str) -> Result<&Response, SessionError> {
-        self.exchange(sentence, true)
+    /// Sends one sentence, its answer carrying what `want` asks for, and returns EasyCrypt's
+    /// answer. A sentence still running after the timeout, or when the run is asked to stop
+    /// ([`Session::set_stop`]), is interrupted, and the answer is then `Status::Interrupted`.
+    ///
+    /// The answer's front goal moves into the session ([`Session::front`]): the returned
+    /// answer has none. When the sentence was accepted, leaves goals open and its answer had
+    /// no front goal, the front goal is read with one more exchange (not when the run is asked
+    /// to stop).
+    pub fn send(&mut self, sentence: &str, want: Want) -> Result<&Response, SessionError> {
+        let at = self.exchange(sentence, want, true)?;
+        if self.transcript[at].response.status == Status::Ok && !self.stop_requested() {
+            self.ensure_front(Want::Head)?;
+        }
+        Ok(&self.transcript[at].response)
     }
 
-    /// [`Session::send`]; `stoppable`: a stop request interrupts the sentence.
-    fn exchange(&mut self, sentence: &str, stoppable: bool) -> Result<&Response, SessionError> {
+    /// Reads the front goal again, at [`Want::Full`], when the session knows it shallower than
+    /// `want` or not at all ([`PROBE_SENTENCE`], an exchange like any other). Nothing when no
+    /// goal is open.
+    pub fn ensure_front(&mut self, want: Want) -> Result<(), SessionError> {
+        if self.count() == 0 || self.known_front().is_some_and(|k| k.want >= want) {
+            return Ok(());
+        }
+        self.exchange(PROBE_SENTENCE, Want::Full, false).map(|_| ())
+    }
+
+    /// [`Session::send`] without the read of a missing front goal; `stoppable`: a stop request
+    /// interrupts the sentence. The index of the exchange in [`Session::transcript`].
+    fn exchange(
+        &mut self,
+        sentence: &str,
+        want: Want,
+        stoppable: bool,
+    ) -> Result<usize, SessionError> {
         let began = Instant::now();
         if let Some(gap) = self.clock.between(began) {
             self.write_event(Event::Between, gap)?;
@@ -524,7 +631,7 @@ impl Session {
         // a stop known before the sentence was sent is the caller's to act on
         let stoppable = stoppable && !self.stop_requested();
         self.notify(&SessionEvent::Sending { sentence });
-        self.write_line(sentence)?;
+        self.write_line(sentence, want)?;
         let (line, timed_out, interrupts, ran) = match self.wait_line(sentence, began, stoppable) {
             Wait::Line(line) => (line, false, 0, began.elapsed()),
             Wait::TimedOut | Wait::Stopped => {
@@ -557,16 +664,16 @@ impl Session {
                 timing: response.timing.as_deref(),
             });
         }
+        let front_in_record = response.status == Status::Ok
+            && response.proof.as_ref().is_some_and(|p| p.front.is_some());
         // an interrupt that landed while EasyCrypt printed the goals: read them again, unless
         // this is the sentence a stop interrupted (the caller stops, and knows the goals from
         // before it; reading them costs as much as printing them did)
         if response.goals_lost() && !(stoppable && self.stop_requested()) {
             response.proof = self.reread_goals(sentence)?;
         }
-        // A goal is hundreds of kilobytes of JSON: only the newest answer keeps its goals.
-        if let Some(previous) = self.transcript.last_mut() {
-            previous.response.proof = None;
-        }
+        let before = self.last().map_or(0, |r| r.state);
+        self.learn_front(&mut response, want, before);
         // a Ctrl-C reaches EasyCrypt itself too, so its answer can come before the flag is seen
         let stopped = response.status == Status::Interrupted && !timed_out && self.stop_requested();
         self.transcript.push(Exchange {
@@ -580,6 +687,7 @@ impl Session {
                 response: &exchange.response,
                 elapsed: began.elapsed(),
                 record_bytes,
+                front_in_record,
                 stopped,
                 interrupts,
             };
@@ -589,7 +697,44 @@ impl Session {
                 self.observer = Some(observer);
             }
         }
-        Ok(&self.transcript.last().expect("just pushed").response)
+        Ok(self.transcript.len() - 1)
+    }
+
+    /// Moves the front goal of `response`, the answer to a sentence sent at state `before` with
+    /// `want`, into [`Self::fronts`]. A failed sentence changes no goal: what is known stays.
+    /// An accepted one forgets the states above its own (an `undo`, or states not reached yet);
+    /// with no front goal in the answer, a new state's front goal is unknown, and a state the
+    /// run had already (an `undo`, a `pragma`) keeps its own.
+    fn learn_front(&mut self, response: &mut Response, want: Want, before: u64) {
+        let front = response.proof.as_mut().and_then(|p| p.front.take());
+        if response.status != Status::Ok {
+            return;
+        }
+        let state = response.state;
+        self.fronts.split_off(&(state + 1));
+        match front {
+            Some(goal) => {
+                // a goal sent although none was asked for is a full one
+                let want = if want == Want::Status {
+                    Want::Full
+                } else {
+                    want
+                };
+                self.fronts.insert(state, KnownFront { goal, want });
+                while self.fronts.len() > FRONTS_KEPT {
+                    self.fronts.pop_first();
+                }
+            }
+            None if state > before => {
+                self.fronts.remove(&state);
+            }
+            None => {}
+        }
+    }
+
+    /// The front goal known for the current state.
+    fn known_front(&self) -> Option<&KnownFront> {
+        self.fronts.get(&self.last()?.state)
     }
 
     /// Interrupts the running sentence and waits for its answer, sending the interrupt again
@@ -608,7 +753,10 @@ impl Session {
             signals += 1;
             let now = Instant::now();
             let until = (now + self.interrupt_resend).min(deadline);
-            match self.lines.recv_timeout(until.saturating_duration_since(now)) {
+            match self
+                .lines
+                .recv_timeout(until.saturating_duration_since(now))
+            {
                 Ok(line) => break Some(line),
                 Err(RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
                 // an EasyCrypt that died on the interrupt did not answer it either
@@ -616,7 +764,12 @@ impl Session {
             }
         };
         let waited = began.elapsed();
-        self.write_event(Event::Interrupt { resends: signals - 1 }, waited)?;
+        self.write_event(
+            Event::Interrupt {
+                resends: signals - 1,
+            },
+            waited,
+        )?;
         match line {
             Some(line) => Ok((line, signals)),
             None => Err(SessionError::Unresponsive {
@@ -634,7 +787,7 @@ impl Session {
         let lost = || SessionError::GoalsLost {
             sentence: sentence.to_string(),
         };
-        self.write_line(PROBE_SENTENCE)?;
+        self.write_line(PROBE_SENTENCE, Want::Full)?;
         let line = self
             .lines
             .recv_timeout(REREAD_TIMEOUT)
@@ -740,13 +893,17 @@ impl Session {
     /// Returns to the state whose answer said `state` (`undo <state>.`). A stop request does
     /// not interrupt it: rolling back is how a caller gets to a consistent state to stop in.
     ///
-    /// Its record's role is `undo`, with the node of the context it takes back.
+    /// Its record's role is `undo`, with the node of the context it takes back. Its answer
+    /// asks for [`Want::Status`]: the front goal is the one the session kept for that state,
+    /// read again only if it was not kept.
     pub fn undo_to(&mut self, state: u64) -> Result<&Response, SessionError> {
         let context = self.context.with_role(Role::Undo);
         let saved = std::mem::replace(&mut self.context, context);
-        let answered = self.exchange(&format!("undo {state}."), false).map(|_| ());
+        let answered = self
+            .exchange(&format!("undo {state}."), Want::Status, false)
+            .and_then(|at| self.ensure_front(Want::Head).map(|()| at));
         self.context = saved;
-        answered.map(|()| &self.transcript.last().expect("just answered").response)
+        answered.map(|at| &self.transcript[at].response)
     }
 
     /// Sends one `SIGINT` to the process: the running sentence is answered `interrupted` and the
@@ -770,10 +927,15 @@ impl Session {
             .or(self.empty.as_ref())
     }
 
-    /// The first open goal after the last sentence, the only one EasyCrypt prints in full
-    /// (ADR 0009). `None` with no proof, or with no goal open.
+    /// The first open goal after the last sentence, the only one EasyCrypt prints (ADR 0009),
+    /// as deep as it was last read (ADR 0012): cut at depth 4 if it was read with
+    /// [`Want::Head`] ([`Session::ensure_front`] reads it in full). `None` with no proof, or
+    /// with no goal open.
     pub fn front(&self) -> Option<&Goal> {
-        self.proof().and_then(|p| p.front.as_deref())
+        if self.count() == 0 {
+            return None;
+        }
+        self.known_front().map(|k| &*k.goal)
     }
 
     /// The number of open goals after the last sentence; 0 with no proof.
@@ -790,9 +952,10 @@ impl Session {
         self.last().and_then(|r| r.proof.as_ref())
     }
 
-    /// Every sentence sent since the start, with its answer, in order (an `undo` included). Only
-    /// the last answer still carries its goals (`proof`); earlier ones keep status, state, error
-    /// and messages, which is what a transcript file needs.
+    /// Every sentence sent since the start, with its answer, in order (an `undo` and the reads of
+    /// a front goal included). No answer carries its front goal (it is [`Session::front`]): they
+    /// keep status, state, error, messages and the kinds of the open goals, which is what a
+    /// transcript file needs.
     pub fn transcript(&self) -> &[Exchange] {
         &self.transcript
     }
@@ -903,7 +1066,9 @@ pub(crate) mod tests {
     fn a_binary_that_does_not_speak_json_is_refused_naming_the_variable() {
         let dir = tempfile::tempdir().unwrap();
         // `cat` echoes the probe sentence back, which is not a JSON answer
-        let err = Session::start_with(Path::new("cat"), dir.path()).err().unwrap();
+        let err = Session::start_with(Path::new("cat"), dir.path())
+            .err()
+            .unwrap();
         assert!(matches!(err, SessionError::NotJsonCapable { .. }), "{err}");
         assert!(err.to_string().contains(ENV_VAR));
         let err = Session::start_with(Path::new("/nonexistent/easycrypt"), dir.path())
@@ -914,22 +1079,160 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_domino_json_1_binary_is_refused_naming_both_versions() {
+    fn an_older_binary_is_refused_naming_both_versions() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("fake-easycrypt");
+        for old in ["domino-json/1", "domino-json/2"] {
+            let dir = tempfile::tempdir().unwrap();
+            let script = dir.path().join("fake-easycrypt");
+            std::fs::write(
+                &script,
+                format!("#!/bin/sh\nwhile IFS= read -r line; do\n  echo '{{\"version\":\"{old}\",\"state\":1,\"status\":\"ok\",\"messages\":[],\"proof\":null}}'\ndone\n"),
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let err = Session::start_with(&script, dir.path()).err().unwrap();
+            assert!(matches!(err, SessionError::NotJsonCapable { .. }), "{err}");
+            let text = err.to_string();
+            for needle in [old, "domino-json/3", ENV_VAR] {
+                assert!(text.contains(needle), "{needle}: {text}");
+            }
+        }
+    }
+
+    /// A stand-in `domino-json/3` EasyCrypt that keeps a goal per depth: `<x>.` is accepted with
+    /// the goal `x` at one more depth, `bad.` is refused, `undo k.` goes back to depth `k`, the
+    /// probe answers at the same depth. An answer carries its front goal only when it is
+    /// accepted and its request did not ask for `status`. Every request line is logged in
+    /// `requests`.
+    fn goal_keeping_easycrypt(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join("fake-easycrypt");
         std::fs::write(
             &script,
-            "#!/bin/sh\nwhile IFS= read -r line; do\n  echo '{\"version\":\"domino-json/1\",\"state\":1,\"status\":\"ok\",\"messages\":[],\"proof\":null}'\ndone\n",
+            format!(
+                r#"#!/bin/sh
+log='{log}'; n=0; g_0=none
+ans() {{
+  if [ "$1" = ok ] && [ "$w" != status ]; then eval "g=\$g_$n"
+    f="{{\"id\":1,\"concl\":{{\"kind\":\"app\",\"pp\":\"$g\"}},\"text\":\"$g\"}}"
+  else f=null; fi
+  echo "{{\"version\":\"domino-json/3\",\"state\":$n,\"status\":\"$1\",\"messages\":[],\"proof\":{{\"front\":$f,\"kinds\":[\"formula\"]}}}}"
+}}
+while IFS= read -r req; do
+  printf '%s\n' "$req" >> "$log"
+  w=$(printf '%s\n' "$req" | sed -n 's/.*"want":"\([a-z]*\)".*/\1/p')
+  s=$(printf '%s\n' "$req" | sed -n 's/^."sentence":"\(.*\)","want".*/\1/p')
+  case "$s" in
+    "") w=status; ans error;;
+    bad.) ans error;;
+    pragma*) ans ok;;
+    "undo "*) k=${{s#undo }}; n=${{k%.}}; ans ok;;
+    *) n=$((n+1)); eval "g_$n=${{s%.}}"; ans ok;;
+  esac
+done
+"#,
+                log = dir.join("requests").display()
+            ),
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let err = Session::start_with(&script, dir.path()).err().unwrap();
-        assert!(matches!(err, SessionError::NotJsonCapable { .. }), "{err}");
-        let text = err.to_string();
-        for needle in ["domino-json/1", "domino-json/2", ENV_VAR] {
-            assert!(text.contains(needle), "{needle}: {text}");
-        }
+        script
+    }
+
+    fn requests(dir: &Path) -> Vec<String> {
+        std::fs::read_to_string(dir.join("requests"))
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn front_pp(session: &Session) -> &str {
+        &session.front().expect("a front goal").concl.pp
+    }
+
+    /// Story 61: each request is one JSON line that says what its answer carries.
+    #[test]
+    fn each_request_is_one_json_line_with_its_want() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session =
+            Session::start_with(&goal_keeping_easycrypt(dir.path()), dir.path()).unwrap();
+        session.send("a.", Want::Full).unwrap();
+        session.send("say \"x\"\nand y.", Want::Head).unwrap();
+        let lines = requests(dir.path());
+        // the startup probe is the bare sentence: an older EasyCrypt answers it with its version
+        assert_eq!(lines[0], PROBE_SENTENCE);
+        assert_eq!(lines[1], r#"{"sentence":"a.","want":"full"}"#);
+        assert_eq!(
+            lines[2],
+            r#"{"sentence":"say \"x\"\nand y.","want":"head"}"#
+        );
+    }
+
+    /// Story 61: after a failed sentence, the front goal is the one from before; after an
+    /// `undo`, the one of that depth; after an accepted `status` sentence that leaves a goal
+    /// open, the session reads it with the probe.
+    #[test]
+    fn the_front_goal_survives_a_failure_and_comes_back_with_an_undo() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session =
+            Session::start_with(&goal_keeping_easycrypt(dir.path()), dir.path()).unwrap();
+        session.send("a.", Want::Full).unwrap();
+        assert_eq!(front_pp(&session), "a");
+        let r = session.send("bad.", Want::Full).unwrap();
+        assert_eq!(r.status, Status::Error);
+        assert_eq!(front_pp(&session), "a", "a failure changes no goal");
+
+        session.send("b.", Want::Head).unwrap();
+        assert_eq!(front_pp(&session), "b");
+        // accepted, no goal in the answer: read at once, at `full`
+        session.send("c.", Want::Status).unwrap();
+        assert_eq!(front_pp(&session), "c");
+        let lines = requests(dir.path());
+        assert_eq!(
+            lines[lines.len() - 2..],
+            [
+                r#"{"sentence":"c.","want":"status"}"#.to_string(),
+                format!(r#"{{"sentence":"{PROBE_SENTENCE}","want":"full"}}"#),
+            ]
+        );
+        let sent = lines.len();
+        session.send("bad.", Want::Status).unwrap();
+        assert_eq!(front_pp(&session), "c");
+        assert_eq!(
+            requests(dir.path()).len(),
+            sent + 1,
+            "a failure is not read again"
+        );
+
+        // the goal of depth 1 was kept: the undo asks for no goal and nothing is read again
+        let r = session.undo_to(1).unwrap();
+        assert_eq!((r.status, r.state), (Status::Ok, 1));
+        assert_eq!(front_pp(&session), "a");
+        let lines = requests(dir.path());
+        assert_eq!(lines.len(), sent + 2);
+        assert_eq!(
+            lines.last().unwrap(),
+            r#"{"sentence":"undo 1.","want":"status"}"#
+        );
+
+        // depth 2 is a new one now: its goal is not the `b` of before
+        session.send("d.", Want::Full).unwrap();
+        assert_eq!(front_pp(&session), "d");
+        session.undo_to(1).unwrap();
+        session.send("e.", Want::Status).unwrap();
+        assert_eq!(front_pp(&session), "e");
+
+        // `head` is read again in full on demand, and only then
+        session.send("f.", Want::Head).unwrap();
+        let sent = requests(dir.path()).len();
+        session.ensure_front(Want::Head).unwrap();
+        assert_eq!(requests(dir.path()).len(), sent);
+        session.ensure_front(Want::Full).unwrap();
+        assert_eq!(requests(dir.path()).len(), sent + 1);
+        session.ensure_front(Want::Full).unwrap();
+        assert_eq!(requests(dir.path()).len(), sent + 1);
+        assert_eq!(front_pp(&session), "f");
     }
 
     /// A stand-in EasyCrypt that answers every line `ok` and takes 2.3 s over "slow" ones.
@@ -940,7 +1243,7 @@ pub(crate) mod tests {
         let script = dir.path().join("fake-easycrypt");
         std::fs::write(
             &script,
-            "#!/bin/sh\nwhile IFS= read -r line; do\n  case \"$line\" in *slow*) sleep 2.3;; esac\n  echo '{\"version\":\"domino-json/2\",\"state\":1,\"status\":\"ok\",\"messages\":[]}'\ndone\n",
+            "#!/bin/sh\nwhile IFS= read -r line; do\n  case \"$line\" in *slow*) sleep 2.3;; esac\n  echo '{\"version\":\"domino-json/3\",\"state\":1,\"status\":\"ok\",\"messages\":[]}'\ndone\n",
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -951,19 +1254,26 @@ pub(crate) mod tests {
             seen.borrow_mut().push(match e {
                 SessionEvent::Sending { sentence } => format!("sending {sentence}"),
                 SessionEvent::Waiting { sentence, .. } => format!("waiting {sentence}"),
-                SessionEvent::Answered { sentence, record_bytes, .. } => {
+                SessionEvent::Answered {
+                    sentence,
+                    record_bytes,
+                    ..
+                } => {
                     format!("answered {sentence} {}", record_bytes.is_some())
                 }
                 SessionEvent::TranscriptDropped { .. } => "dropped".to_string(),
                 SessionEvent::EventRecorded { .. } => "event".to_string(),
             })
         }));
-        session.send("quick.").unwrap();
-        session.send("slow.").unwrap();
+        session.send("quick.", Want::Full).unwrap();
+        session.send("slow.", Want::Full).unwrap();
         let events = events.borrow();
         assert_eq!(events[..2], ["sending quick.", "answered quick. false"]);
         assert_eq!(events[2], "sending slow.");
-        let waits = events.iter().filter(|e| e.starts_with("waiting slow.")).count();
+        let waits = events
+            .iter()
+            .filter(|e| e.starts_with("waiting slow."))
+            .count();
         assert_eq!(waits, 2, "a tick each second of the 2.3 s: {events:?}");
         assert_eq!(events.last().unwrap(), "answered slow. false");
     }
@@ -979,8 +1289,9 @@ pub(crate) mod tests {
             r#"#!/bin/sh
 int=0
 trap 'int=1' INT
-ans() { echo "{\"version\":\"domino-json/2\",\"state\":1,\"status\":\"$1\",\"messages\":[]}"; }
-while IFS= read -r line; do
+ans() { echo "{\"version\":\"domino-json/3\",\"state\":1,\"status\":\"$1\",\"messages\":[]}"; }
+while IFS= read -r req; do
+  line=$(printf '%s\n' "$req" | sed -e 's/^."sentence":"\(.*\)","want":"[a-z]*".$/\1/' -e 's/\\"/"/g' -e 's/\\\\/\\/g')
   case "$line" in
     *slow*|undo*)
       int=0; n=0
@@ -1034,9 +1345,13 @@ done
         assert!(!session.stop_requested());
         stop_after(&stop, Duration::from_millis(300));
         let began = std::time::Instant::now();
-        let status = session.send("slow.").unwrap().status;
+        let status = session.send("slow.", Want::Full).unwrap().status;
         assert_eq!(status, Status::Interrupted);
-        assert!(began.elapsed() < Duration::from_millis(1500), "{:?}", began.elapsed());
+        assert!(
+            began.elapsed() < Duration::from_millis(1500),
+            "{:?}",
+            began.elapsed()
+        );
         assert!(session.stop_requested());
         assert_eq!(*stopped.borrow(), [true], "the answer is to the stop");
     }
@@ -1046,7 +1361,10 @@ done
         let dir = tempfile::tempdir().unwrap();
         let (mut session, _stop, stopped) = stoppable_session(dir.path());
         session.set_timeout(Duration::from_millis(300));
-        assert_eq!(session.send("slow.").unwrap().status, Status::Interrupted);
+        assert_eq!(
+            session.send("slow.", Want::Full).unwrap().status,
+            Status::Interrupted
+        );
         assert_eq!(*stopped.borrow(), [false]);
     }
 
@@ -1058,7 +1376,10 @@ done
         stop_after(&stop, Duration::from_millis(300));
         assert_eq!(session.undo_to(1).unwrap().status, Status::Ok);
         // a sentence sent once the stop is known runs to its end
-        assert_eq!(session.send("slow.").unwrap().status, Status::Ok);
+        assert_eq!(
+            session.send("slow.", Want::Full).unwrap().status,
+            Status::Ok
+        );
         assert_eq!(*stopped.borrow(), [false, false]);
     }
 
@@ -1074,10 +1395,11 @@ done
             &script,
             r#"#!/bin/sh
 goal='{"id":1,"concl":{"kind":"app","pp":"c"},"text":"g"}'
-while IFS= read -r line; do
+while IFS= read -r req; do
+  line=$(printf '%s\n' "$req" | sed -e 's/^."sentence":"\(.*\)","want":"[a-z]*".$/\1/' -e 's/\\"/"/g' -e 's/\\\\/\\/g')
   case "$line" in
-    pragma*) echo "{\"version\":\"domino-json/2\",\"state\":2,\"status\":\"ok\",\"messages\":[],\"proof\":{\"front\":$goal,\"kinds\":[\"formula\",\"program\"]}}";;
-    *) echo '{"version":"domino-json/2","state":2,"status":"ok","messages":[{"level":"critical","text":"cannot serialize the goals: Sys.Break"}],"proof":null}';;
+    pragma*) echo "{\"version\":\"domino-json/3\",\"state\":2,\"status\":\"ok\",\"messages\":[],\"proof\":{\"front\":$goal,\"kinds\":[\"formula\",\"program\"]}}";;
+    *) echo '{"version":"domino-json/3","state":2,"status":"ok","messages":[{"level":"critical","text":"cannot serialize the goals: Sys.Break"}],"proof":null}';;
   esac
 done
 "#,
@@ -1085,13 +1407,17 @@ done
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut session = Session::start_with(&script, dir.path()).unwrap();
-        let r = session.send("rewrite /inv in hpre.").unwrap();
+        let r = session.send("rewrite /inv in hpre.", Want::Full).unwrap();
         assert_eq!((r.status, r.state), (Status::Ok, 2));
         assert_eq!(session.count(), 2);
         assert_eq!(session.front().unwrap().concl.pp, "c");
         assert_eq!(session.kind(1), Some(GoalKind::Program));
         assert_eq!(session.kind(2), None);
-        assert_eq!(session.transcript().len(), 1, "the re-read is not an exchange");
+        assert_eq!(
+            session.transcript().len(),
+            1,
+            "the re-read is not an exchange"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1111,8 +1437,9 @@ done
                 r#"#!/bin/sh
 trap '' INT
 n=0
-ans() {{ echo "{{\"version\":\"domino-json/2\",\"state\":$n,\"status\":\"$1\",\"messages\":[]}}"; }}
-while IFS= read -r line; do
+ans() {{ echo "{{\"version\":\"domino-json/3\",\"state\":$n,\"status\":\"$1\",\"messages\":[]}}"; }}
+while IFS= read -r req; do
+  line=$(printf '%s\n' "$req" | sed -e 's/^."sentence":"\(.*\)","want":"[a-z]*".$/\1/' -e 's/\\"/"/g' -e 's/\\\\/\\/g')
   n=$((n+1))
   case "$line" in
     slow.) k=0; trap 'k=$((k+1))' INT
@@ -1161,8 +1488,14 @@ done
             "      while [ $k -lt 3 ]; do sleep 0.02; done; ans interrupted",
         );
         let (mut session, sink) = interrupt_session(&script, dir.path());
-        assert_eq!(session.send("quick.").unwrap().status, Status::Ok);
-        assert_eq!(session.send("slow.").unwrap().status, Status::Interrupted);
+        assert_eq!(
+            session.send("quick.", Want::Full).unwrap().status,
+            Status::Ok
+        );
+        assert_eq!(
+            session.send("slow.", Want::Full).unwrap().status,
+            Status::Interrupted
+        );
         let records = records(&sink);
         let events: Vec<_> = records
             .iter()
@@ -1194,7 +1527,7 @@ done
         );
         assert!(interrupt["ms"].as_u64().unwrap() >= 400, "{interrupt:?}");
         // and the session goes on
-        assert_eq!(session.send("quick.").unwrap().state, 4);
+        assert_eq!(session.send("quick.", Want::Full).unwrap().state, 4);
     }
 
     #[test]
@@ -1203,7 +1536,7 @@ done
         let script = interrupt_fake(dir.path(), "      while :; do sleep 0.02; done");
         let (mut session, sink) = interrupt_session(&script, dir.path());
         let began = Instant::now();
-        let err = session.send("slow.").err().unwrap();
+        let err = session.send("slow.", Want::Full).err().unwrap();
         let waited = began.elapsed();
         let SessionError::Unresponsive { signals, .. } = &err else {
             panic!("{err}");
@@ -1235,12 +1568,12 @@ done
             "      while [ $k -lt 1 ]; do sleep 0.02; done; ans ok",
         );
         let (mut session, sink) = interrupt_session(&script, dir.path());
-        let r = session.send("slow.").unwrap();
+        let r = session.send("slow.", Want::Full).unwrap();
         assert_eq!((r.status, r.state), (Status::Ok, 2));
         // the next sentence gets its own answer, not a second one to `slow.`
-        let r = session.send("quick.").unwrap();
+        let r = session.send("quick.", Want::Full).unwrap();
         assert_eq!((r.status, r.state), (Status::Ok, 3));
-        let r = session.send("quick.").unwrap();
+        let r = session.send("quick.", Want::Full).unwrap();
         assert_eq!((r.status, r.state), (Status::Ok, 4));
         let records = records(&sink);
         let slow = records.iter().find(|r| r["sentence"] == "slow.").unwrap();
@@ -1261,18 +1594,14 @@ done
             role,
         };
         session.set_context(at(Role::Structure)).unwrap();
-        session.send("a.").unwrap();
+        session.send("a.", Want::Full).unwrap();
         std::thread::sleep(Duration::from_millis(60));
-        session.send("b.").unwrap();
+        session.send("b.", Want::Full).unwrap();
         std::thread::sleep(Duration::from_millis(60));
         session.set_context(at(Role::ExitPath)).unwrap();
-        session.send("c.").unwrap();
+        session.send("c.", Want::Full).unwrap();
         session.undo_to(1).unwrap();
-        assert_eq!(
-            session.context(),
-            &at(Role::ExitPath),
-            "the role is back"
-        );
+        assert_eq!(session.context(), &at(Role::ExitPath), "the role is back");
         let records = records(&sink);
         let kinds: Vec<String> = records
             .iter()
@@ -1307,9 +1636,9 @@ done
             .unwrap();
         let began = Instant::now();
         for _ in 0..3 {
-            session.send("quick.").unwrap();
+            session.send("quick.", Want::Full).unwrap();
             std::thread::sleep(Duration::from_millis(150));
-            session.send("slow.").unwrap();
+            session.send("slow.", Want::Full).unwrap();
         }
         // Domino's work after the last answer is the oracle's too, up to the next oracle
         std::thread::sleep(Duration::from_millis(80));
@@ -1317,10 +1646,7 @@ done
         let wall = began.elapsed().as_millis() as u64;
         let records = records(&sink);
         assert_eq!(records.last().unwrap()["event"], "between", "{records:?}");
-        let sum: u64 = records
-            .iter()
-            .map(|r| r["ms"].as_u64().unwrap())
-            .sum();
+        let sum: u64 = records.iter().map(|r| r["ms"].as_u64().unwrap()).sum();
         assert!(
             sum <= wall && sum * 100 >= wall * 98,
             "sum {sum} ms, wall {wall} ms"
@@ -1369,7 +1695,9 @@ done
 
     impl Write for TestSink {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            let n = self.writes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let n = self
+                .writes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if n >= self.fail_at {
                 return Err(std::io::Error::other("No space left on device"));
             }
@@ -1406,8 +1734,12 @@ done
                 role: Role::Reduce,
             })
             .unwrap();
-        let response = session.send("auto.").unwrap();
-        assert_eq!(response.proof.as_ref().unwrap().kinds.len(), 10, "the session sees them all");
+        let response = session.send("auto.", Want::Full).unwrap();
+        assert_eq!(
+            response.proof.as_ref().unwrap().kinds.len(),
+            10,
+            "the session sees them all"
+        );
         let text = sink.text();
         assert_eq!(text.lines().count(), 1);
         let record: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -1418,7 +1750,10 @@ done
         );
         assert_eq!(record["bytes"], answer.trim_end().len());
         assert_eq!(record["sentence"], "auto.");
-        let (capped, full) = (&record["response"], serde_json::from_str::<serde_json::Value>(&answer).unwrap());
+        let (capped, full) = (
+            &record["response"],
+            serde_json::from_str::<serde_json::Value>(&answer).unwrap(),
+        );
         for key in ["version", "state", "status", "error", "messages"] {
             assert_eq!(capped[key], full[key], "{key}");
         }
@@ -1435,7 +1770,7 @@ done
             std::fs::read_to_string("testdata/easycrypt/story31/answer-two-goals.json").unwrap();
         let sink = TestSink::new(usize::MAX);
         let mut session = fake_session(dir.path(), &answer, &sink, EcTranscriptMode::Full);
-        session.send("split.").unwrap();
+        session.send("split.", Want::Full).unwrap();
         let text = sink.text();
         let ms: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(
@@ -1462,13 +1797,16 @@ done
             SessionEvent::TranscriptDropped { path, cause } => seen
                 .borrow_mut()
                 .push(format!("dropped {} {cause}", path.display())),
-            SessionEvent::Answered { record_bytes, .. } => {
-                seen.borrow_mut().push(format!("answered {}", record_bytes.is_some()))
-            }
+            SessionEvent::Answered { record_bytes, .. } => seen
+                .borrow_mut()
+                .push(format!("answered {}", record_bytes.is_some())),
             _ => {}
         }));
         for _ in 0..5 {
-            assert_eq!(session.send("auto.").unwrap().status, Status::Error);
+            assert_eq!(
+                session.send("auto.", Want::Full).unwrap().status,
+                Status::Error
+            );
         }
         assert_eq!(sink.text().lines().count(), 2);
         assert_eq!(
@@ -1499,18 +1837,21 @@ done
             role,
         };
         session.set_context(in_oracle(Role::QuickClose)).unwrap();
-        session.send("smt().").unwrap();
+        session.send("smt().", Want::Full).unwrap();
         session.set_context(in_oracle(Role::Structure)).unwrap();
-        session.send("wp.").unwrap();
-        session.send("skip.").unwrap();
+        session.send("wp.", Want::Full).unwrap();
+        session.send("skip.", Want::Full).unwrap();
         session.set_context(SentenceCtx::default()).unwrap();
-        session.send("admit.").unwrap();
+        session.send("admit.", Want::Full).unwrap();
         assert!(session.transcript_dropped());
 
         let time = session.take_time_by_role("O").render(Duration::ZERO);
         assert!(time.contains("      quick close             1"), "{time}");
         assert!(time.contains("      structure               2"), "{time}");
-        assert!(!time.contains("admit"), "a sentence of no oracle is in no table: {time}");
+        assert!(
+            !time.contains("admit"),
+            "a sentence of no oracle is in no table: {time}"
+        );
         assert!(session.take_time_by_role("O").is_empty(), "taken");
     }
 
@@ -1520,8 +1861,8 @@ done
         let answer = crate::easycrypt::transcript::tests::answer_with_goals(1, 10);
         let sink = TestSink::new(1);
         let mut session = fake_session(dir.path(), &answer, &sink, EcTranscriptMode::Full);
-        session.send("auto.").unwrap();
-        let err = session.send("auto.").err().unwrap();
+        session.send("auto.", Want::Full).unwrap();
+        let err = session.send("auto.", Want::Full).err().unwrap();
         assert!(matches!(err, SessionError::Transcript { .. }), "{err}");
         let text = err.to_string();
         assert!(text.contains("/out/progress/ec-transcript.jsonl"), "{text}");
@@ -1542,14 +1883,21 @@ done
         let Some(mut ec) = session_in(dir.path()) else {
             return;
         };
-        ec.send("require import AllCore.").unwrap();
-        let r = ec.send("lemma t (x : int) : x + 0 = x.").unwrap();
+        ec.send("require import AllCore.", Want::Full).unwrap();
+        let r = ec
+            .send("lemma t (x : int) : x + 0 = x.", Want::Full)
+            .unwrap();
         let timing = r.timing.as_deref().expect("every answer has timing");
         assert!(timing.smt.is_none(), "no prover was called");
-        ec.send("proof.").unwrap();
-        let r = ec.send("smt().").unwrap();
+        ec.send("proof.", Want::Full).unwrap();
+        let r = ec.send("smt().", Want::Full).unwrap();
         assert_eq!(r.status, Status::Ok);
-        let smt = r.timing.as_deref().unwrap().smt.expect("smt() calls a prover");
+        let smt = r
+            .timing
+            .as_deref()
+            .unwrap()
+            .smt
+            .expect("smt() calls a prover");
         assert!(smt.calls >= 1);
         assert_eq!(smt.valid + smt.timeout + smt.unknown, smt.calls);
         assert!(smt.valid >= 1);
@@ -1564,39 +1912,51 @@ done
         assert!(ec.front().is_none());
 
         // send
-        let r = ec.send("lemma l (x : int) : x = x.").unwrap().clone();
+        let r = ec
+            .send("lemma l (x : int) : x = x.", Want::Full)
+            .unwrap()
+            .clone();
         assert_eq!(r.status, Status::Ok);
         let opened = r.state;
         assert_eq!(ec.count(), 1);
         assert_eq!(ec.front().unwrap().concl.pp, "x = x");
 
         // error: the goals stay, no undo level is pushed
-        let r = ec.send("by exact foo.").unwrap();
+        let r = ec.send("by exact foo.", Want::Full).unwrap();
         assert_eq!(r.status, Status::Error);
         assert!(r.error.is_some());
         assert_eq!(r.state, opened);
         assert_eq!(ec.count(), 1);
+        assert_eq!(
+            ec.front().unwrap().concl.pp,
+            "x = x",
+            "the goal from before"
+        );
 
         // a success, then undo to before it
-        let r = ec.send("proof.").unwrap();
+        let r = ec.send("proof.", Want::Full).unwrap();
         assert_eq!(r.status, Status::Ok);
-        let r = ec.send("trivial.").unwrap();
+        let r = ec.send("trivial.", Want::Full).unwrap();
         assert!(r.proof.as_ref().unwrap().kinds.is_empty());
         let r = ec.undo_to(opened).unwrap();
         assert_eq!(r.state, opened);
         assert_eq!(ec.count(), 1);
+        // the undo asked for no goal: the session kept the one of that state
         assert_eq!(ec.transcript().len(), 5);
+        assert_eq!(ec.front().unwrap().concl.pp, "x = x");
 
         // interrupt: `do !` on a tactic that always succeeds never ends, so the timeout fires
         ec.set_timeout(Duration::from_millis(500));
-        let r = ec.send("by do ! (have _ : true by trivial); trivial.").unwrap();
+        let r = ec
+            .send("by do ! (have _ : true by trivial); trivial.", Want::Full)
+            .unwrap();
         assert_eq!(r.status, Status::Interrupted);
         assert_eq!(r.state, opened);
         assert_eq!(ec.count(), 1, "the goals are kept");
 
         // and the session goes on
         ec.set_timeout(Duration::from_secs(60));
-        let r = ec.send("trivial.").unwrap();
+        let r = ec.send("trivial.", Want::Full).unwrap();
         assert_eq!(r.status, Status::Ok);
         assert!(r.proof.as_ref().unwrap().kinds.is_empty());
     }

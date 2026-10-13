@@ -100,7 +100,7 @@ pub(super) fn as_conjunction(form: &Form) -> Option<(&Form, &Form)> {
 ///
 /// No binder is skipped. `move =>` must name every binder, and a goal of Domino's never binds a
 /// type. A filter on the kind would drop a value binder (kind `"var"`; `"type"` before
-/// `domino-json/2`). A memory binder's name already has its `&` (`&m`).
+/// `domino-json/3`). A memory binder's name already has its `&` (`&m`).
 pub(super) fn as_forall(form: &Form) -> Option<(Vec<&str>, &Form)> {
     if form.kind == "quant" && form.quantifier.as_deref() == Some("forall") {
         let names = form.binders.iter().map(|b| b.name.as_str()).collect();

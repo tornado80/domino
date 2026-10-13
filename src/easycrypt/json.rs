@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The Rust mirror of `easycrypt cli -json` (format `domino-json/2`, specified in
+//! The Rust mirror of `easycrypt cli -json` (format `domino-json/3`, specified in
 //! `easycrypt/doc/json-output.md`).
 //!
 //! The mirror is lenient on purpose: every field a consumer does not read is left out, every
@@ -13,7 +13,7 @@ use serde::Deserialize as _;
 use serde_derive::Deserialize;
 
 /// The only format version this module understands.
-pub const FORMAT_VERSION: &str = "domino-json/2";
+pub const FORMAT_VERSION: &str = "domino-json/3";
 
 /// The answer to one sentence.
 #[derive(Debug, Clone, Deserialize)]
@@ -118,10 +118,13 @@ pub struct Message {
     pub text: String,
 }
 
-/// The open goals of a proof: the front goal in full, and the kind of each open goal (ADR 0009).
+/// The open goals of a proof: the front goal, and the kind of each open goal (ADR 0009). The
+/// front goal is what the request asked for (ADR 0012): absent for a `status` request and after
+/// a failed sentence, cut at depth 4 for `head`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Proof {
-    /// The first open goal; `None` when no goal is open and `qed.` is due.
+    /// The first open goal; `None` when no goal is open and `qed.` is due, and when the answer
+    /// does not carry it.
     pub front: Option<Box<Goal>>,
     /// One entry for each open goal, in order, the front goal included.
     pub kinds: Vec<GoalKind>,
@@ -149,6 +152,26 @@ pub struct Goal {
     /// The goal as `cli` prints it.
     #[serde(default)]
     pub text: String,
+    /// The type table: each distinct type of the goal one time. A type anywhere else in the goal
+    /// is an index into it ([`Goal::ty`]).
+    #[serde(default)]
+    pub types: Vec<TypeEntry>,
+}
+
+impl Goal {
+    /// The entry of the type table at `index` (a [`Hyp::ty`], a node's `ty`).
+    pub fn ty(&self, index: usize) -> Option<&TypeEntry> {
+        self.types.get(index)
+    }
+}
+
+/// An entry of a goal's type table. `kind` is `constr`, `tuple`, `fun`, `var`, `glob` or `univar`;
+/// its subtypes are indices into the same table, and are not read.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TypeEntry {
+    pub kind: String,
+    #[serde(default)]
+    pub pp: String,
 }
 
 /// A hypothesis. `kind` is `var`, `mem`, `modty`, `hyp` or `abs_st`.
@@ -158,8 +181,9 @@ pub struct Hyp {
     pub kind: String,
     #[serde(default)]
     pub ident: Option<Ident>,
+    /// `var`: the type, an index into the goal's type table ([`Goal::ty`]).
     #[serde(default, rename = "type")]
-    pub ty: Option<Node>,
+    pub ty: Option<usize>,
     #[serde(default)]
     pub form: Option<Form>,
 }
@@ -182,10 +206,17 @@ pub struct Node {
 
 /// A formula. Which fields are present depends on `kind` (`equivS`, `equivF`, `app`, `quant`, …);
 /// see `json-output.md`. Only a root formula (a conclusion, a hypothesis) has `pp`; a subnode's
-/// `pp` is empty.
+/// `pp` is empty. In a goal read with `head`, a node deeper than 4 is a stub: its `kind`, and
+/// its `op` for an `app`, nothing else.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Form {
     pub kind: String,
+    /// A node past the depth of a `head` answer.
+    #[serde(default)]
+    pub stub: bool,
+    /// The type, an index into the goal's type table ([`Goal::ty`]).
+    #[serde(default)]
+    pub ty: Option<usize>,
     #[serde(default)]
     pub pp: String,
     /// `app`: the operator path if the head is an operator.
@@ -353,7 +384,7 @@ mod tests {
     use super::*;
 
     const HEAD: &str =
-        r#""version":"domino-json/2","state":1,"status":"ok","messages":[],"proof":null"#;
+        r#""version":"domino-json/3","state":1,"status":"ok","messages":[],"proof":null"#;
 
     #[test]
     fn an_answer_without_timing_parses() {

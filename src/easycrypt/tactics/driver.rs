@@ -23,7 +23,7 @@ use crate::debug::lockstep::{
     EQUAL_OUTPUT,
 };
 use crate::easycrypt::json::{Goal, GoalKind, Status};
-use crate::easycrypt::session::{Session, SessionError};
+use crate::easycrypt::session::{Session, SessionError, Want};
 use crate::easycrypt::time_by_role::TimeByRole;
 use crate::easycrypt::transcript::{Role, SentenceCtx};
 
@@ -760,6 +760,14 @@ impl Prover<'_> {
         self.session.front()
     }
 
+    /// Makes [`Self::front`] the front goal in full: after sentences that asked for
+    /// [`Want::Head`], it is cut at depth 4 ([`Session::ensure_front`]).
+    fn full_front(&mut self) -> R<()> {
+        self.session
+            .ensure_front(Want::Full)
+            .map_err(|e| self.session_failed(e))
+    }
+
     fn is_if_split(&self) -> bool {
         goals::is_if_split(self.front(), |i| self.session.kind(i))
     }
@@ -794,15 +802,16 @@ impl Prover<'_> {
         Ok(())
     }
 
-    /// Sends one sentence; an accepted one goes into the script. `Ok(false)` if EasyCrypt
-    /// refused it (or it was interrupted): the session is then where it was.
-    pub(super) fn send(&mut self, sentence: &str) -> R<bool> {
+    /// Sends one sentence, its answer carrying what `want` asks for (ADR 0012: what the caller
+    /// reads next); an accepted one goes into the script. `Ok(false)` if EasyCrypt refused it (or
+    /// it was interrupted): the session is then where it was, front goal included.
+    pub(super) fn send(&mut self, sentence: &str, want: Want) -> R<bool> {
         self.stop_point()?;
         if let Some(live) = &self.live {
             live.sentence_sent(sentence);
         }
         let before = self.count();
-        let ok = match self.session.send(sentence) {
+        let ok = match self.session.send(sentence, want) {
             // the sentence a stop interrupted lost its goals: stop as if it had not been sent
             Ok(response) if response.goals_lost() => return Err(self.stop_with(before)),
             Ok(response) => {
@@ -827,40 +836,46 @@ impl Prover<'_> {
     /// Sends `sentence` without writing it into the script, the live line showing `shown`:
     /// whether EasyCrypt accepted it. A stop and an unanswered interrupt seal and unwind as in
     /// [`Self::send`].
-    fn send_unscripted(&mut self, sentence: &str, shown: &str) -> R<bool> {
+    fn send_unscripted(&mut self, sentence: &str, shown: &str, want: Want) -> R<bool> {
         self.stop_point()?;
         if let Some(live) = &self.live {
             live.sentence_sent(shown);
         }
         let before = self.count();
-        match self.session.send(sentence) {
+        match self.session.send(sentence, want) {
             Ok(response) if response.goals_lost() => Err(self.stop_with(before)),
             Ok(response) => Ok(response.status == Status::Ok),
             Err(e) => Err(self.session_failed(e)),
         }
     }
 
-    /// Sends the sentences in order and keeps them if all are accepted and `want` holds at the
-    /// end; otherwise everything is undone.
-    fn attempt(&mut self, sentences: &[&str], want: impl Fn(&Self) -> bool) -> R<bool> {
+    /// Sends the sentences in order, each asking for `want`, and keeps them if all are accepted
+    /// and `holds` at the end; otherwise everything is undone.
+    fn attempt(
+        &mut self,
+        sentences: &[&str],
+        want: Want,
+        holds: impl Fn(&Self) -> bool,
+    ) -> R<bool> {
         let snap = self.snap();
         for sentence in sentences {
-            if !self.send(sentence)? {
+            if !self.send(sentence, want)? {
                 self.rollback(snap)?;
                 return Ok(false);
             }
         }
-        if !want(self) {
+        if !holds(self) {
             self.rollback(snap)?;
             return Ok(false);
         }
         Ok(true)
     }
 
-    /// An attempt that must close the front goal.
+    /// An attempt that must close the front goal. Its answers carry no goal ([`Want::Status`]):
+    /// it is read only from the count of open goals.
     fn try_close(&mut self, sentences: &[&str]) -> R<bool> {
         let before = self.count();
-        self.attempt(sentences, |p| p.count() + 1 == before)
+        self.attempt(sentences, Want::Status, |p| p.count() + 1 == before)
     }
 
     fn with_timeout<T>(&mut self, timeout: Duration, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
@@ -952,7 +967,7 @@ impl Prover<'_> {
         let label = admit.label();
         self.stop_point()?;
         let before = self.count();
-        let response = match self.session.send("admit.") {
+        let response = match self.session.send("admit.", Want::Status) {
             Ok(response) if response.goals_lost() => return Err(self.stop_with(before)),
             Ok(response) => response,
             Err(e) => return Err(self.session_failed(e)),
@@ -1038,7 +1053,7 @@ impl Prover<'_> {
             };
             let Some(sentence) = step else { return Ok(()) };
             let before = self.count();
-            if !self.attempt(&[&sentence], |p| p.count() == before)? {
+            if !self.attempt(&[&sentence], Want::Head, |p| p.count() == before)? {
                 return Ok(());
             }
         }
@@ -1062,7 +1077,7 @@ impl Prover<'_> {
         }
         let all: String = self.unfold_ops.iter().map(|o| format!(" /{o}")).collect();
         for ops in [all.as_str(), " /inv"] {
-            if self.send(&format!("rewrite{ops} in {name}."))? {
+            if self.send(&format!("rewrite{ops} in {name}."), Want::Head)? {
                 return Ok(true);
             }
         }
@@ -1087,9 +1102,9 @@ impl Prover<'_> {
         };
         let before = self.count();
         let snap = self.snap();
-        if self.send(&format!("move => {names} {premise}."))? {
+        if self.send(&format!("move => {names} {premise}."), Want::Head)? {
             self.unfold_premise(&premise)?;
-            if self.send(tail)? && self.count() + 1 == before {
+            if self.send(tail, Want::Status)? && self.count() + 1 == before {
                 return Ok(true);
             }
         }
@@ -1270,7 +1285,7 @@ impl Prover<'_> {
         let kept = self.as_role(Role::Resume, |p| match mode {
             ResumeMode::Replay => p.replay(idx, &closed),
             ResumeMode::Trust => {
-                if !p.send_unscripted("admit.", "kept")? {
+                if !p.send_unscripted("admit.", "kept", Want::Status)? {
                     // interrupted by a stop request
                     p.stop_point()?;
                     // `admit.` closes any goal: a refusal means there is none, and the walk is lost
@@ -1318,7 +1333,7 @@ impl Prover<'_> {
     fn replay_sentences(&mut self, idx: usize, closed: &ClosedNode, before: usize) -> R<bool> {
         let state = self.state();
         for line in &closed.script {
-            if self.send_unscripted(&line.sentence, &line.sentence)? {
+            if self.send_unscripted(&line.sentence, &line.sentence, Want::Full)? {
                 continue;
             }
             // interrupted by a stop request, not rejected
@@ -1430,7 +1445,7 @@ impl Prover<'_> {
         if k + l == 0 {
             return Ok(true);
         }
-        self.send(&format!("sp {k} {l}."))
+        self.send(&format!("sp {k} {l}."), Want::Full)
     }
 
     /// The tactic of a non-terminal, non-stuck node and its children. `Ok(false)` if the
@@ -1508,7 +1523,7 @@ impl Prover<'_> {
             };
             let before = self.count();
             let closing = format!("{tactic}{{{side}}} ^if; 1: auto => /#.");
-            if self.send(&closing)? {
+            if self.send(&closing, Want::Status)? {
                 // the side goal closed in the same sentence: the main goal is in front
                 if self.count() != before {
                     return Ok(false);
@@ -1517,7 +1532,7 @@ impl Prover<'_> {
             }
             // the side goal did not close in one step: take it on its own
             let plain = format!("{tactic}{{{side}}} ^if.");
-            if !self.send(&plain)? || self.count() != before + 1 {
+            if !self.send(&plain, Want::Full)? || self.count() != before + 1 {
                 return Ok(false);
             }
             if !self
@@ -1538,7 +1553,7 @@ impl Prover<'_> {
             return Ok(false);
         }
         let before = self.count();
-        if !self.send("if.")? {
+        if !self.send("if.", Want::Full)? {
             return Ok(false);
         }
         // the condition, then the two arms: told apart by kind
@@ -1563,13 +1578,13 @@ impl Prover<'_> {
             if node.children.len() != 4 {
                 return Ok(false);
             }
-            if !self.send("if{1}.")? || !self.two_programs_in_front(before) {
+            if !self.send("if{1}.", Want::Full)? || !self.two_programs_in_front(before) {
                 return Ok(false);
             }
             for a in 0..2 {
                 self.bullet(|p| {
                     let here = p.count();
-                    if !p.send("if{2}.")? || !p.two_programs_in_front(here) {
+                    if !p.send("if{2}.", Want::Full)? || !p.two_programs_in_front(here) {
                         // an arm EasyCrypt would not split further
                         return p.admit_ec_failed(idx, &Part::Whole, "split");
                     }
@@ -1590,7 +1605,7 @@ impl Prover<'_> {
             c if c.right.is_some() => 2,
             _ => return Ok(false),
         };
-        if !self.send(&format!("if{{{side}}}."))? || !self.two_programs_in_front(before) {
+        if !self.send(&format!("if{{{side}}}."), Want::Full)? || !self.two_programs_in_front(before) {
             return Ok(false);
         }
         for child in &node.children {
@@ -1649,7 +1664,7 @@ impl Prover<'_> {
         };
         let mut applied = false;
         for sentence in &sentences {
-            if self.attempt(&[sentence], |p| {
+            if self.attempt(&[sentence], Want::Full, |p| {
                 p.count() == before && p.front().is_some_and(goals::is_program)
             })? {
                 applied = true;
@@ -1695,7 +1710,10 @@ impl Prover<'_> {
         self.deadline = leaf_deadline(self.leaf_budget, std::time::Instant::now());
         let result = self.as_role(Role::Split, |p| p.open_part(node, pair, Part::Whole));
         self.deadline = None;
-        result
+        result?;
+        // the opening read goals at `head` depth: the walk after the leaf reads programs in full
+        self.full_front()?;
+        Ok(())
     }
 
     /// The side (1 or 2) of the first `if` left in the front goal's programs, side 1 first,
@@ -1740,7 +1758,7 @@ impl Prover<'_> {
         for tactic in exit_decisions(cond, aborts) {
             let before = self.count();
             let sentence = format!("{tactic}{{{side}}} ^if; 1: by auto.");
-            if self.attempt(&[&sentence], |p| {
+            if self.attempt(&[&sentence], Want::Status, |p| {
                 p.count() == before && p.front().is_some_and(goals::is_program)
             })? {
                 return Ok(true);
@@ -1754,7 +1772,7 @@ impl Prover<'_> {
     /// if `auto` failed or left a program goal.
     fn reduce_leaf(&mut self, premise: &str) -> R<bool> {
         let before = self.count();
-        let reduced = self.attempt(&[&format!("auto => &1 &2 {premise}.")], |p| {
+        let reduced = self.attempt(&[&format!("auto => &1 &2 {premise}.")], Want::Head, |p| {
             p.count() < before || (p.count() == before && p.front().is_some_and(goals::is_ambient))
         })?;
         if reduced && self.count() == before {
@@ -1812,14 +1830,14 @@ impl Prover<'_> {
     fn open_step(&mut self, step: Step) -> R<bool> {
         match step {
             Step::Intro(names) => {
-                let sent = self.send(&format!("move => {names} /=."))?;
+                let sent = self.send(&format!("move => {names} /=."), Want::Head)?;
                 if sent {
                     self.binders.extend(names.split_whitespace().map(String::from));
                 }
                 Ok(sent)
             }
             Step::Premise(name) => {
-                let sent = self.send(&format!("move => {name} /=."))?;
+                let sent = self.send(&format!("move => {name} /=."), Want::Head)?;
                 if sent {
                     self.premises.push(name.clone());
                     // let the solver see through the invariant in the premise just introduced
@@ -1827,7 +1845,7 @@ impl Prover<'_> {
                 }
                 Ok(sent)
             }
-            Step::Unfold(op) => self.send(&format!("rewrite /{op} /=.")),
+            Step::Unfold(op) => self.send(&format!("rewrite /{op} /=."), Want::Head),
             Step::Split => Ok(false),
         }
     }
@@ -1836,7 +1854,7 @@ impl Prover<'_> {
     /// goal (or is refused), nothing is kept and the goal is a leaf part.
     fn split_part(&mut self, node: usize, pair: Option<&PairRecord>, part: &Part) -> R<()> {
         let before = self.count();
-        if !self.attempt(&["do split."], |p| p.count() > before)? {
+        if !self.attempt(&["do split."], Want::Head, |p| p.count() > before)? {
             return self.atom(node, pair, part);
         }
         // a premise a bullet introduces is that bullet's own
@@ -1895,6 +1913,8 @@ impl Prover<'_> {
     /// `last_smt` is the outcome of its last `smt`.
     fn key_case_split(&mut self, part: &Part, hints: &str) -> R<bool> {
         self.last_smt = None;
+        // the opening read the goal at `head` depth: the keys are deep in it
+        self.full_front()?;
         let pairs = self
             .front()
             .map(|g| goals::key_pairs(&g.concl, &self.binders))
@@ -1930,11 +1950,14 @@ impl Prover<'_> {
     fn split_cases(&mut self, pairs: &[goals::KeyPair], hints: &str) -> R<bool> {
         let Some((first, rest)) = pairs.split_first() else {
             let before = self.count();
-            return Ok(self.send(hints)? && self.count() < before);
+            return Ok(self.send(hints, Want::Status)? && self.count() < before);
         };
         let before = self.count();
         let outcome = self.last_smt;
-        let sent = self.send(&format!("case ({} = {}) => [->|?].", first.binder, first.key))?;
+        let sent = self.send(
+            &format!("case ({} = {}) => [->|?].", first.binder, first.key),
+            Want::Head,
+        )?;
         self.last_smt = outcome;
         if !sent || self.count() != before + 1 {
             return Ok(false);
@@ -2000,7 +2023,7 @@ impl Prover<'_> {
     }
 
     fn oracle_inner(&mut self, align: impl FnOnce(&Goal) -> Vec<String>) -> R<()> {
-        if !self.send("proc; inline.")? {
+        if !self.send("proc; inline.", Want::Full)? {
             self.admit(
                 AdmitReason::ProgramMismatch,
                 "N0",
@@ -2015,7 +2038,7 @@ impl Prover<'_> {
         let after_inline = self.snap();
         let before = self.count();
         let prelude = self.sp_front()?
-            && self.send("if.")?
+            && self.send("if.", Want::Full)?
             && self.count() == before + 2
             && self.is_if_split();
         if !prelude {
@@ -2091,14 +2114,14 @@ impl Prover<'_> {
             }
         }
         for (sentence, _) in &trials {
-            if self.attempt(&[sentence], |p| p.count() == before)? {
+            if self.attempt(&[sentence], Want::Full, |p| p.count() == before)? {
                 return self.prove_blind(node, budget - 1);
             }
         }
         // 3. `if`: condition, then, else
         if hl.as_deref() == Some("if") && hr.as_deref() == Some("if") {
             let snap = self.snap();
-            if self.send("if.")?
+            if self.send("if.", Want::Full)?
                 && self.count() == before + 2
                 && self.front().is_some_and(goals::is_ambient)
             {
@@ -2114,7 +2137,7 @@ impl Prover<'_> {
                 continue;
             }
             let snap = self.snap();
-            if self.send(&format!("if{{{side}}}."))? && self.two_programs_in_front(before) {
+            if self.send(&format!("if{{{side}}}."), Want::Full)? && self.two_programs_in_front(before) {
                 self.bullet(|p| p.prove_blind(node, budget - 1))?;
                 return self.bullet(|p| p.prove_blind(node, budget - 1));
             }
@@ -2132,7 +2155,7 @@ impl Prover<'_> {
             _ => vec![],
         };
         for sentence in &seqs {
-            if self.attempt(&[sentence], |p| p.count() == before)? {
+            if self.attempt(&[sentence], Want::Full, |p| p.count() == before)? {
                 return self.prove_blind(node, budget - 1);
             }
         }
