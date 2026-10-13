@@ -33,5 +33,7 @@ because a lemma's statement is known without its proof.
 
 - The lock, the session record, sealing, respawn and resume work per oracle.
 - The batch compile of each oracle file can also run in parallel, and EasyCrypt caches each one.
+- The glue closes each oracle with `by conseq <lemma> => /#.`: the `call` goal names the
+  oracle's parameters where the lemma says `={arg}` (story 68).
 - A name rule must reject an oracle whose file name would collide with another file of the
   export (for example an oracle called `Invariants`).

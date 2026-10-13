@@ -108,6 +108,7 @@ fn render_item(item: &EcItem) -> String {
         }
         EcItem::Module(m) => render_module(m),
         EcItem::Section(s) => render_section(s),
+        EcItem::Lemma(lemma) => render_lemma(lemma),
     }
 }
 
@@ -445,9 +446,15 @@ fn render_proof_line(line: &ProofLine) -> String {
 /// puts one field per line.
 fn render_invariant_call(inv: &EcExpr) -> String {
     const OPEN: &str = "call (: ";
-    let text = match inv {
+    format!("{OPEN}{}); last first.", render_invariant_block(inv, OPEN.len()))
+}
+
+/// `inv` applied to its arguments, with `inv` itself at column `col`: each argument starts a
+/// line two spaces further in, laid out by [`render_record_block`].
+fn render_invariant_block(inv: &EcExpr, col: usize) -> String {
+    match inv {
         EcExpr::App { head, args } if !args.is_empty() => {
-            let arg_col = OPEN.len() + INDENT.len();
+            let arg_col = col + INDENT.len();
             let mut out = head.clone();
             for arg in args {
                 let rendered = if prec(arg) < ATOM_PREC {
@@ -460,8 +467,29 @@ fn render_invariant_call(inv: &EcExpr) -> String {
             out
         }
         _ => render_expr(inv),
-    };
-    format!("{OPEN}{text}); last first.")
+    }
+}
+
+/// The statement of an oracle lemma (story 68): the pre- and the postcondition each start a
+/// line of their own, and `inv` is laid out as in the `call`.
+///
+/// ```text
+/// equiv[L.p ~ R.p :
+///       ={arg} /\ inv
+///         {| … |}
+///         {| … |}
+///       ==> ={res} /\ inv
+///         …]
+/// ```
+fn render_oracle_equiv(left: &str, right: &str, inv: &EcExpr) -> String {
+    const PAD: &str = "      ";
+    const PRE: &str = "={arg} /\\ ";
+    const POST: &str = "==> ={res} /\\ ";
+    format!(
+        "equiv[{left} ~ {right} :\n{PAD}{PRE}{}\n{PAD}{POST}{}]",
+        render_invariant_block(inv, PAD.len() + PRE.len()),
+        render_invariant_block(inv, PAD.len() + POST.len()),
+    )
 }
 
 /// Renders the `byequiv` induction-start precondition (story 13 §3.2): one
@@ -650,7 +678,8 @@ fn prec(e: &EcExpr) -> i8 {
         | EcExpr::MapSet { .. }
         | EcExpr::MapEmpty
         | EcExpr::Pr { .. }
-        | EcExpr::GlobEq(_) => ATOM_PREC,
+        | EcExpr::GlobEq(_)
+        | EcExpr::OracleEquiv { .. } => ATOM_PREC,
         EcExpr::App { args, .. } if args.is_empty() => ATOM_PREC,
         EcExpr::App { .. } | EcExpr::Some_(_) | EcExpr::Oget(_) | EcExpr::MapRem { .. } => {
             APP_PREC
@@ -853,5 +882,6 @@ fn render_expr_inner(e: &EcExpr) -> String {
             )
         }
         EcExpr::GlobEq(module) => format!("={{glob {module}}}"),
+        EcExpr::OracleEquiv { left, right, inv } => render_oracle_equiv(left, right, inv),
     }
 }

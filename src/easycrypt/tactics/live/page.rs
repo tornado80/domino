@@ -214,12 +214,9 @@ impl Live {
                 esc(&eq.right)
             );
             let mut notes = vec![format!(
-                "{} sentence(s) outside any oracle (proof opening, base case, goals not asked for)",
+                "{} sentence(s) outside the walk (the lemma's opening)",
                 eq.setup_steps
             )];
-            if eq.base_case_admitted {
-                notes.push("the base case did not close and was admitted".to_string());
-            }
             if let Some(report) = &eq.report_file {
                 notes.push(format!("report: <code>{}</code>", esc(report)));
             }

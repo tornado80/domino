@@ -504,7 +504,7 @@ qed.
         use crate::project::Project;
         let theorem = project.get_theorem("Proof").unwrap();
         let exported = super::super::export::export_theorem(theorem, &project).unwrap();
-        let eq = &exported.files[Path::new("Eq_medium_composition_small_composition.ec")];
+        let eq = &exported.files[Path::new("Eq_medium_composition_small_composition_UsefulOracle.ec")];
         assert_eq!(
             proof_progress(eq),
             OracleCounts {

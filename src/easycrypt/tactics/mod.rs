@@ -2,28 +2,31 @@
 
 //! `domino easycrypt prove`: proofs from lockstep execution (story 27).
 //!
-//! For each selected oracle of each equivalence: run lockstep execution on the oracle
-//! (`domino debug --easycrypt`'s engine, its artifacts written the same way), then walk the
-//! joint tree alongside a live EasyCrypt session ([`driver`]), send each step, read the goals
-//! back as JSON, and write down what EasyCrypt accepted as the oracle's bullet in `Eq_*.ec`.
-//! What could not be closed is an `admit` labelled with the claim, the invariant relation, the
-//! `J`/`S` id and what Domino itself concluded.
+//! Each oracle is a lemma of its own, `Eq_<L>_<R>_<O>.ec` (story 68, ADR 0013), proved by its
+//! own EasyCrypt process; up to [`TacticsOptions::jobs`] oracles of an equivalence at once
+//! ([`oracles`]). For each selected oracle: run lockstep execution on the oracle (`domino debug
+//! --easycrypt`'s engine, its artifacts written the same way), then walk the joint tree alongside
+//! a live EasyCrypt session ([`driver`]), send each step, read the goals back as JSON, and write
+//! down what EasyCrypt accepted as the proof of the oracle lemma. What could not be closed is an
+//! `admit` labelled with the claim, the invariant relation, the `J`/`S` id and what Domino itself
+//! concluded. The equivalence's own `Eq_<L>_<R>.ec` only joins the oracle lemmas; it is a
+//! translation file, and no proof job touches it.
 //!
-//! **The file on disk is what has been proved so far** (story 33): `Eq_*.ec` and its report are
-//! rewritten together, atomically, after every oracle (or, with [`WriteGranularity::Node`],
-//! after every joint node, or, with [`WriteGranularity::Tactic`], the default, after every accepted
-//! sentence, the oracle in flight **sealed**). Nothing compiles the written file
-//! during a run (ADR 0005): every sentence in it was accepted by the live session.
+//! **The file on disk is what has been proved so far** (story 33): the oracle file and its
+//! report are rewritten together, atomically, after the oracle (or, with
+//! [`WriteGranularity::Node`], after every joint node, or, with [`WriteGranularity::Tactic`], the
+//! default, after every accepted sentence, the oracle **sealed**). Nothing compiles the written
+//! file during a run (ADR 0005): every sentence in it was accepted by the live session.
 //!
 //! **Ctrl-C** (story 34, [`TacticsOptions::stop`]) stops the run where it stands: the running
-//! EasyCrypt sentence is interrupted, lockstep execution stops at its next node, the oracle in
-//! flight is sealed and written, and the result says so ([`Interrupted`]).
+//! EasyCrypt sentences are interrupted, lockstep execution stops at its next node, the oracles in
+//! flight are sealed and written, no other oracle is started, and the result says so
+//! ([`Interrupted`]).
 //!
 //! **An unanswered interrupt** (`SessionError::Unresponsive`: EasyCrypt did not answer the
-//! interrupts [`Session::send`] kept sending) seals the oracle in flight like a Ctrl-C, but the
-//! job goes on: the stuck EasyCrypt is replaced by a fresh one opened at the same proof (a
-//! **respawn**, [`respawn`]), the oracles already in the file are admitted there, and the walk
-//! carries on with the next oracle. After [`MAX_RESPAWNS`] respawns the next one ends the job
+//! interrupts [`Session::send`] kept sending) seals the oracle in flight like a Ctrl-C and gives
+//! its EasyCrypt up, but the job goes on: its next oracle has a fresh EasyCrypt anyway (a
+//! **respawn**). After [`MAX_RESPAWNS`] of them the next one ends the job
 //! ([`EquivalenceTactics::ended_early`]). An answer that shows EasyCrypt *swallowed* an interrupt
 //! is warned about once per run ([`SwallowWatch`]).
 //!
@@ -35,13 +38,17 @@
 //! - [`script`]: the accepted sentences, bullets and indentation.
 //! - [`goals`]: reading goals from the JSON.
 //! - [`driver`]: the prover.
-//! - [`live`], `live::page`: the live translation page, `progress/Eq_<L>_<R>/index.html` (story 28, 36).
+//! - [`oracles`]: the proof job of one equivalence, its workers, and its page with one row for
+//!   each oracle, `progress/Eq_<L>_<R>/index.html`.
+//! - [`live`], `live::page`: the live page of one oracle, `progress/Eq_<L>_<R>/<O>/index.html`
+//!   (story 28, 36).
 //!
 //! `domino easycrypt export` never gets here.
 
 mod driver;
 mod goals;
 mod live;
+mod oracles;
 mod script;
 
 use std::fmt::Write as _;
@@ -69,17 +76,16 @@ use crate::writers::easycrypt::invariant::{invariant_ops, leaf_part_ops};
 use crate::writers::easycrypt::lower::inline_oracle_ec;
 
 use super::check::{
-    describe_mismatch, equivalence_setup, ok_or_reject, sentences_until_call, CheckError,
-    EquivalenceSetup,
+    describe_mismatch, ok_or_reject, sentences_until_proof, CheckError, EquivalenceSetup,
 };
 use super::job::{
-    create_if_absent, ensure_translation_files, is_proof_file, old_saved_tree_path,
-    old_session_record_path, path_to_read, progress_dir, saved_tree_path, session_record_path,
-    ClosedNode, LockError, LockstepRecord, OracleRecord, OracleStatus,
-    ProofLock, SavedTree, SessionRecord, SessionRecordError,
+    equivalence_record_path, is_oracle_file, old_saved_tree_path, old_session_record_path,
+    oracle_record_path, path_to_read, saved_tree_path, split_equivalence_record, ClosedNode,
+    LockError, LockstepRecord, OracleRecord, OracleStatus, SavedTree, SessionRecord,
+    SessionRecordError,
 };
 use super::json::Goal;
-use super::session::{split_sentences, Session, SessionError, SessionEvent, Want, JSON_BRANCH};
+use super::session::{Session, SessionError, SessionEvent, Want, JSON_BRANCH};
 use super::transcript::{Role, SentenceCtx};
 
 pub use super::transcript::{EcTranscriptMode, GOAL_CONCL_CAP, GOAL_HYPS_CAP};
@@ -140,6 +146,9 @@ pub struct TacticsOptions {
     /// Whether the run says, on stderr, which translation files it wrote for each equivalence it
     /// proves (story 44). Off for `--progress none`, and in library use.
     pub announce_stages: bool,
+    /// `prove --jobs N` (story 68): how many oracles of an equivalence are proved at once, each
+    /// in an EasyCrypt process of its own. 0 counts as 1.
+    pub jobs: usize,
 }
 
 /// How a proof job resumes an oracle the session record holds as `interrupted` (`--resume`,
@@ -209,12 +218,14 @@ impl std::fmt::Display for Interrupted {
     }
 }
 
-/// The most times one proof job replaces an EasyCrypt that left an interrupt unanswered (a
-/// **respawn**). The next unanswered interrupt ends the job, as a Ctrl-C would.
+/// The most times one proof job goes on, with a fresh EasyCrypt for its next oracle, after an
+/// EasyCrypt left an interrupt unanswered (a **respawn**). The next unanswered interrupt ends the
+/// job, as a Ctrl-C would.
 const MAX_RESPAWNS: usize = 2;
 
 /// EasyCrypt left an interrupt unanswered while an oracle was proved: the oracle was sealed where
-/// the walk stood, and EasyCrypt was respawned (or the job ended there).
+/// the walk stood and its EasyCrypt given up; the job's next oracle gets a fresh one (or the job
+/// ended there).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unanswered {
     pub oracle: String,
@@ -223,9 +234,8 @@ pub struct Unanswered {
     /// How many `SIGINT`s went unanswered, and over how long.
     pub signals: usize,
     pub waited: Duration,
-    /// How long starting a fresh EasyCrypt and opening the proof again took. `None`: there was
-    /// no respawn, the job ended here ([`EquivalenceTactics::ended_early`]).
-    pub respawn: Option<Duration>,
+    /// The job ended here ([`EquivalenceTactics::ended_early`]): no oracle was started after it.
+    pub ended_job: bool,
 }
 
 impl std::fmt::Display for Unanswered {
@@ -237,9 +247,10 @@ impl std::fmt::Display for Unanswered {
             self.signals,
             self.waited.as_secs()
         )?;
-        match self.respawn {
-            Some(took) => write!(f, "EasyCrypt respawned (proof opened again in {})", secs(took)),
-            None => write!(f, "EasyCrypt not respawned"),
+        if self.ended_job {
+            write!(f, "EasyCrypt not respawned, the job ends")
+        } else {
+            write!(f, "EasyCrypt given up, the next oracle gets a fresh one")
         }
     }
 }
@@ -259,21 +270,23 @@ fn swallow_warning(head: &str) -> String {
 /// stderr the first time. The answer itself is left as it is: `ok` and `error` are truthful about
 /// EasyCrypt's state.
 #[derive(Clone, Default)]
-struct SwallowWatch(std::rc::Rc<std::cell::RefCell<Option<String>>>);
+struct SwallowWatch(Arc<std::sync::Mutex<Option<String>>>);
 
 impl SwallowWatch {
     /// The warning, the first time an answer shows a swallowed interrupt; `None` after that.
     fn see(&self, response: &super::json::Response) -> Option<String> {
-        if self.0.borrow().is_some() {
+        let head = response.swallowed_interrupt()?;
+        let mut seen = self.0.lock().unwrap();
+        if seen.is_some() {
             return None;
         }
-        let warning = swallow_warning(&response.swallowed_interrupt()?);
-        *self.0.borrow_mut() = Some(warning.clone());
+        let warning = swallow_warning(&head);
+        *seen = Some(warning.clone());
         Some(warning)
     }
 
     fn warning(&self) -> Option<String> {
-        self.0.borrow().clone()
+        self.0.lock().unwrap().clone()
     }
 }
 
@@ -307,6 +320,7 @@ impl Default for TacticsOptions {
             force: false,
             resume: ResumeMode::Trust,
             announce_stages: false,
+            jobs: 1,
         }
     }
 }
@@ -378,6 +392,9 @@ pub struct OracleTactics {
     pub resumed: bool,
     /// Walked again from the session record's closed nodes on the saved joint tree.
     pub resumed_at: Option<ResumedAt>,
+    /// The oracle's transcript, `progress/Eq_<L>_<R>/<O>/ec-transcript.jsonl` (story 68); `None`
+    /// when this run did not prove it.
+    pub transcript: Option<PathBuf>,
 }
 
 /// Where an interrupted oracle was resumed, and with what (ADR 0008).
@@ -411,6 +428,7 @@ impl OracleTactics {
             tree_id: None,
             resumed: false,
             resumed_at: None,
+            transcript: None,
         }
     }
 
@@ -445,6 +463,7 @@ impl OracleTactics {
             tree_id: None,
             resumed: true,
             resumed_at: None,
+            transcript: None,
         })
     }
 
@@ -499,26 +518,24 @@ pub struct EquivalenceTactics {
     pub proof_file: String,
     pub left: String,
     pub right: String,
+    /// In oracle order, whatever order they finished in.
     pub oracles: Vec<OracleTactics>,
-    /// The base case did not close and was admitted.
-    pub base_case_admitted: bool,
     pub elapsed: Duration,
-    /// The written report, `progress/Eq_<L>_<R>/report.txt`, relative to the theorem's output
-    /// directory.
+    /// The written report, relative to the theorem's output directory:
+    /// `progress/Eq_<L>_<R>/report.txt`, or with `--oracle O` the oracle's own
+    /// `progress/Eq_<L>_<R>/<O>/report.txt`.
     pub report_file: String,
     /// The run was stopped by Ctrl-C while on this equivalence (story 34), or the job ended
     /// early ([`Self::ended_early`]): where.
     pub interrupted: Option<Interrupted>,
     /// Why the job ended before its last oracle although nobody pressed Ctrl-C: EasyCrypt left
-    /// more interrupts unanswered than a job respawns it for, or a respawn failed.
+    /// more interrupts unanswered than a job respawns it for.
     /// [`Self::interrupted`] says where.
     pub ended_early: Option<String>,
     /// Every interrupt EasyCrypt left unanswered in this job, in order.
     pub unanswered: Vec<Unanswered>,
-    /// How many times the file was written, at the last write (story 38).
+    /// How many times the oracle files were written, at the last write (story 38).
     pub writes: usize,
-    /// This job's transcript, `progress/Eq_<L>_<R>/ec-transcript.jsonl` (story 36).
-    pub transcript: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -568,8 +585,8 @@ pub fn run_tactics<P, B>(
     options: &TacticsOptions,
 ) -> Result<TheoremTactics, TacticsError>
 where
-    P: Project,
-    B: SmtSolverBackend,
+    P: Project + Sync,
+    B: SmtSolverBackend + Sync,
 {
     run_tactics_observed(
         theorem,
@@ -582,13 +599,14 @@ where
     )
 }
 
-/// [`run_tactics`], reporting the `tactics` phase to an observer per equivalence (per oracle
-/// and per goal): `progress` is called once for each equivalence that is proved.
+/// [`run_tactics`], reporting the `tactics` phase to an observer per oracle (per goal):
+/// `progress` is called once for each oracle a worker proves on this thread (`--jobs 1`); with
+/// more workers, their oracles report to no observer.
 ///
-/// Each selected equivalence is one **proof job** (story 36): it takes the lock of
-/// `progress/Eq_<L>_<R>/` first, refusing if another live process holds it, and keeps its page
-/// and transcript there, so jobs on different equivalences share nothing they write. The lock
-/// is released when the equivalence ends, however it ends.
+/// Each selected equivalence is one **proof job** ([`oracles::prove_equivalence`], story 68): its
+/// oracles are proved by up to [`TacticsOptions::jobs`] workers at once, each oracle under its
+/// own lock, `progress/Eq_<L>_<R>/<O>.lock`, so jobs on different oracles share nothing they
+/// write.
 pub fn run_tactics_observed<P, B>(
     theorem: &Theorem<'_>,
     project: &P,
@@ -599,8 +617,8 @@ pub fn run_tactics_observed<P, B>(
     progress: &mut dyn FnMut() -> Box<dyn ExportObserver>,
 ) -> Result<TheoremTactics, TacticsError>
 where
-    P: Project,
-    B: SmtSolverBackend,
+    P: Project + Sync,
+    B: SmtSolverBackend + Sync,
 {
     std::fs::create_dir_all(out_dir)?;
     let out_dir = std::fs::canonicalize(out_dir).unwrap_or_else(|_| out_dir.to_path_buf());
@@ -613,62 +631,23 @@ where
         if options.proofstep.is_some_and(|p| p != eq.proofstep) {
             continue;
         }
-        let stem = eq.proof_file.trim_end_matches(".ec").to_string();
-        let dir = progress_dir(&out_dir, &stem);
-        std::fs::create_dir_all(&dir)?;
-        // before anything else (story 36 §3.2): one job per equivalence, and only for as long
-        // as this equivalence takes, so a job on a later one is not blocked for the whole run
-        let lock = ProofLock::acquire(&dir, &stem)?;
-        // story 35: an equivalence that already has a session record is skipped, before
-        // anything is created or truncated (its transcript and page stay)
-        let prior = match plan_job(eq, &out_dir, options)? {
-            JobPlan::Prove { prior } => prior,
-            JobPlan::Skip => {
-                drop(lock);
-                let _ = std::fs::remove_dir(&dir); // only if the skip left it empty
-                continue;
-            }
-        };
-        // what translation owns: created if missing, never read or rewritten (ADR 0006)
-        let created = ensure_translation_files(exported, &out_dir)?;
-        let transcript_path = dir.join("ec-transcript.jsonl");
-        // `None` once a capped write failed (story 31 §3.3)
-        let mut transcript = Some(File::create(&transcript_path)?);
-        let live = LiveHandle::new(LiveConfig {
-            theorem: theorem.name.clone(),
-            page: Some(dir.join("index.html")),
-            transcript: transcript_path.clone(),
-            translation: translation_line(exported, &created),
-            progress: progress(),
-        });
-        let result = tactics_for_equivalence(
+        let job = oracles::EquivalenceJob {
             theorem,
-            &theorem_ec,
+            theorem_ec: &theorem_ec,
             project,
             exported,
             eq,
-            &out_dir,
-            &dir,
-            &created,
-            prior.as_ref(),
+            out_dir: &out_dir,
             backend,
             options,
-            &mut transcript,
-            &transcript_path,
-            &live,
-            &swallow,
-        );
-        // the last write always happens: the page on disk matches the end state
-        match &result {
-            Ok(tactics) => match (&tactics.interrupted, &tactics.ended_early) {
-                (Some(at), Some(why)) => live.ended_early(&format!("{at}: {why}")),
-                (Some(at), None) => live.interrupted(&at.to_string()),
-                (None, _) => live.finish(),
-            },
-            Err(e) => live.fail(&e.to_string()),
-        }
-        drop(lock);
-        let tactics = result?;
+            swallow: &swallow,
+            #[cfg(test)]
+            fake: tests::TEST_EASYCRYPT.with(|t| t.borrow().clone()),
+        };
+        // `None`: skipped, the reason on stderr
+        let Some(tactics) = oracles::prove_equivalence(&job, progress)? else {
+            continue;
+        };
         // a job that ended early is not a stop: the next equivalence is a job of its own
         let interrupted = tactics.interrupted.is_some() && tactics.ended_early.is_none();
         equivalences.push(tactics);
@@ -687,7 +666,11 @@ where
 /// The one line the page shows in place of the export's phases: which translation files were
 /// trusted and which this job created.
 fn translation_line(exported: &ExportedTheorem, created: &[PathBuf]) -> String {
-    let total = exported.files.keys().filter(|p| !is_proof_file(p)).count();
+    let total = exported
+        .files
+        .keys()
+        .filter(|p| !is_oracle_file(exported, p))
+        .count();
     if created.is_empty() {
         format!("translation files: all {total} present, trusted as they are")
     } else {
@@ -701,8 +684,8 @@ fn translation_line(exported: &ExportedTheorem, created: &[PathBuf]) -> String {
 }
 
 /// The stage line of an equivalence that is proved: what this process wrote of the translation
-/// (the shared files it found missing and the equivalence's own `Eq_*.ec`), named when there are
-/// fewer than [`NAMED_FILES_LIMIT`] and counted otherwise.
+/// (the files it found missing), named when there are fewer than [`NAMED_FILES_LIMIT`] and
+/// counted otherwise.
 fn translation_files_line(stem: &str, wrote: &[String]) -> String {
     if wrote.is_empty() {
         format!("easycrypt prove: {stem} — translation files already on disk")
@@ -725,52 +708,57 @@ const NAMED_FILES_LIMIT: usize = 6;
 /// What a proof job does with an equivalence.
 #[derive(Debug)]
 enum JobPlan {
-    /// Nothing: the record says it is proved (the reason is on stderr).
+    /// Nothing: the records say it is proved (the reason is on stderr).
     Skip,
-    /// Prove what is not done. `prior` is the record whose done oracles are resumed and whose
-    /// other entries are kept (`None`: from scratch).
+    /// Prove what is not done. `prior` is the oracles' records joined
+    /// ([`SessionRecord::join`]): its done oracles are resumed (`None`: from scratch).
     Prove { prior: Option<SessionRecord> },
 }
 
-/// Decides what this proof job does for `eq` from its session record (story 37 §3.2), before
-/// anything is created or truncated (its transcript and page stay when it skips).
+/// Decides what this proof job does for `eq`, whose oracles are `oracles`, from the oracles'
+/// session records (story 37 §3.2, story 68), before anything is created or truncated. A record
+/// of the whole equivalence, from before story 68, is split first.
 ///
-/// | record | without `--force` | with `--force` |
+/// | records | without `--force` | with `--force` |
 /// |---|---|---|
 /// | none | prove | prove |
-/// | complete | skip | from scratch |
-/// | partial | resume | from scratch |
+/// | all done | skip | from scratch |
+/// | some done | resume | from scratch |
 ///
-/// With `--oracle O`: `O` done skips; with `--force`, `O` alone is re-proved and every other
-/// entry is kept.
+/// With `--oracle O`: `O` done skips; with `--force`, `O` alone is re-proved (its record is
+/// deleted) and every other record is kept.
 fn plan_job(
     eq: &EquivalenceReport,
     out_dir: &Path,
     options: &TacticsOptions,
+    oracles: &[String],
 ) -> Result<JobPlan, TacticsError> {
-    let record_path = path_to_read(
-        session_record_path(out_dir, &eq.proof_file),
-        old_session_record_path(out_dir, &eq.proof_file),
-    );
-    let Some(mut record) = SessionRecord::read(&record_path)? else {
+    let file = &eq.proof_file;
+    let remove = |path: PathBuf| match std::fs::remove_file(&path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    };
+    if options.force && options.oracle.is_none() {
+        // every record goes: the oracles' and the old ones of the whole equivalence
+        for oracle in oracles {
+            remove(oracle_record_path(out_dir, file, oracle))?;
+        }
+        remove(equivalence_record_path(out_dir, file))?;
+        remove(old_session_record_path(out_dir, file))?;
+        return Ok(JobPlan::Prove { prior: None });
+    }
+    split_equivalence_record(out_dir, file)?;
+    let mut records = Vec::new();
+    for oracle in oracles {
+        records.extend(SessionRecord::read(&oracle_record_path(out_dir, file, oracle))?);
+    }
+    let Some(mut record) = SessionRecord::join(&records, oracles) else {
         return Ok(JobPlan::Prove { prior: None });
     };
-    let file = &eq.proof_file;
     if options.force {
-        let Some(oracle) = &options.oracle else {
-            // the old and the new record both go (story 67)
-            for path in [
-                session_record_path(out_dir, file),
-                old_session_record_path(out_dir, file),
-            ] {
-                match std::fs::remove_file(&path) {
-                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-                    _ => {}
-                }
-            }
-            return Ok(JobPlan::Prove { prior: None });
-        };
-        // this oracle alone is proved again: its entry goes, the others stay
+        let oracle = options.oracle.as_ref().expect("checked above");
+        // this oracle alone is proved again: its record goes, the others stay
+        remove(oracle_record_path(out_dir, file, oracle))?;
         if let Some(entry) = record.oracles.iter_mut().find(|o| &o.name == oracle) {
             *entry = OracleRecord::new(oracle, OracleStatus::Pending);
         }
@@ -805,231 +793,6 @@ fn plan_job(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn tactics_for_equivalence<P, B>(
-    theorem: &Theorem<'_>,
-    theorem_ec: &Theorem<'_>,
-    project: &P,
-    exported: &ExportedTheorem,
-    eq: &EquivalenceReport,
-    out_dir: &Path,
-    progress_dir: &Path,
-    created: &[PathBuf],
-    prior: Option<&SessionRecord>,
-    backend: &B,
-    options: &TacticsOptions,
-    transcript: &mut Option<File>,
-    transcript_path: &Path,
-    live: &LiveHandle,
-    swallow: &SwallowWatch,
-) -> Result<EquivalenceTactics, TacticsError>
-where
-    P: Project,
-    B: SmtSolverBackend,
-{
-    let started = Instant::now();
-    let file = eq.proof_file.clone();
-    let source = exported
-        .files
-        .get(Path::new(&file))
-        .ok_or_else(|| CheckError::MissingFile { file: file.clone() })?;
-    let setup = equivalence_setup(theorem_ec, eq)?;
-    let selected = |name: &str| options.oracle.as_deref().is_none_or(|w| w == name);
-    if let Some(wanted) = &options.oracle {
-        if !setup.oracles.iter().any(|(name, _)| name == wanted) {
-            return Err(CheckError::NoSuchOracle {
-                oracle: wanted.clone(),
-                file,
-            }
-            .into());
-        }
-    }
-
-    // this equivalence's own file: created from the skeleton when missing, restarted from it
-    // with `--force`; otherwise the run rewrites it at its first checkpoint
-    let proof_path = out_dir.join(&file);
-    let wrote_proof = if options.force && prior.is_none() {
-        write_atomically(&proof_path, progress_dir, source)?;
-        false // restarted from the skeleton, which is not a missing file
-    } else {
-        create_if_absent(&proof_path, source)?
-    };
-    if options.announce_stages {
-        let mut wrote: Vec<String> = created.iter().map(|p| p.display().to_string()).collect();
-        if wrote_proof {
-            wrote.push(file.clone());
-        }
-        eprintln_above_bars(&translation_files_line(file.trim_end_matches(".ec"), &wrote));
-    }
-    // open the proof: everything up to `call (…); last first.`, then the base case
-    let sentences = split_sentences(source);
-    let call_prefix = sentences_until_call(&file, source)?;
-    // oracles the session record has proved: not walked, not re-sent (ADR 0006)
-    let resumed: Vec<OracleTactics> = setup
-        .oracles
-        .iter()
-        .filter_map(|(name, _)| prior?.oracle(name).and_then(OracleTactics::from_record))
-        .collect();
-    let is_resumed = |name: &str| resumed.iter().any(|r| r.oracle == name);
-    let selected_oracles: Vec<String> = setup
-        .oracles
-        .iter()
-        .map(|(name, _)| name.clone())
-        .filter(|name| selected(name) || is_resumed(name))
-        .collect();
-    live.equivalence_started(&file, eq.proofstep, &eq.left_name, &eq.right_name, &selected_oracles);
-    let report_file = format!("progress/{}/report.txt", file.trim_end_matches(".ec"));
-    let mut proof = ProofFile {
-        theorem: &theorem.name,
-        source,
-        procs: &setup.oracles,
-        out_dir,
-        progress_dir,
-        prior,
-        started,
-        tactics: EquivalenceTactics {
-            transcript: transcript_path.to_path_buf(),
-            proofstep: eq.proofstep,
-            proof_file: file.clone(),
-            left: eq.left_name.clone(),
-            right: eq.right_name.clone(),
-            oracles: Vec::new(),
-            base_case_admitted: false,
-            elapsed: Duration::ZERO,
-            report_file,
-            interrupted: None,
-            ended_early: None,
-            unanswered: Vec::new(),
-            writes: 0,
-        },
-        writes: std::cell::Cell::new(0),
-    };
-    // their scripts are in every write from the first one on, in the file's order
-    for result in &resumed {
-        live.oracle_finished(result);
-        proof.tactics.oracles.push(result.clone());
-    }
-    let base = sentences.get(call_prefix.len()).map(String::as_str);
-    let job = SessionSetup {
-        out_dir,
-        transcript_path,
-        options,
-        file: &file,
-        live,
-        swallow,
-    };
-    // Ctrl-C (story 34): the equivalence ends where it stands, with what is written
-    let interrupted = 'run: {
-        if options.stop_requested() {
-            break 'run Some(Interrupted::NoOracleInFlight);
-        }
-        live.activity("starting EasyCrypt and opening the proof");
-        let mut session = job.start(transcript.as_ref(), None)?;
-        match open_proof(&mut session, &call_prefix, base, false, &file, options)? {
-            Opened::Stopped => break 'run Some(Interrupted::NoOracleInFlight),
-            Opened::Open { base_case_admitted } => {
-                proof.tactics.base_case_admitted = base_case_admitted;
-            }
-        }
-
-        let mut interrupted = None;
-        while let Some(goal) = session.front() {
-            if options.stop_requested() {
-                interrupted = Some(Interrupted::NoOracleInFlight);
-                break;
-            }
-            let target = setup.oracle_of_goal(goal);
-            let in_file = |name: &str| proof.tactics.oracles.iter().any(|o| o.oracle == name);
-            if target.as_deref().is_some_and(in_file) {
-                // proved in an earlier session or before a respawn, and its script is in the
-                // file already
-                admit_outside(&mut session, None)?;
-                continue;
-            }
-            match target.filter(|o| selected(o)) {
-                Some(oracle) => {
-                    let end = tactics_for_oracle(
-                        &mut session,
-                        project,
-                        theorem,
-                        eq,
-                        &setup,
-                        &oracle,
-                        backend,
-                        options,
-                        live,
-                        &mut proof,
-                    )?;
-                    let (result, stopped, unanswered) = match end {
-                        OracleEnd::Done(result) => (Some(result), None, None),
-                        OracleEnd::Stopped { sealed, at } => (sealed, Some(at), None),
-                        OracleEnd::Unanswered { sealed, unanswered } => {
-                            (Some(sealed), None, Some(unanswered))
-                        }
-                    };
-                    if let Some(u) = &unanswered {
-                        proof.tactics.unanswered.push(u.clone());
-                    }
-                    if let Some(result) = result {
-                        proof.tactics.oracles.push(result);
-                        proof.write(None)?;
-                        live.oracle_finished(proof.tactics.oracles.last().expect("just pushed"));
-                    }
-                    if stopped.is_some() {
-                        interrupted = stopped;
-                        break;
-                    }
-                    if unanswered.is_some() {
-                        // the oracle is sealed and written; the session is lost
-                        if session.transcript_dropped() {
-                            *transcript = None;
-                        }
-                        let respawned = respawn(
-                            session,
-                            &job,
-                            transcript.as_ref(),
-                            &call_prefix,
-                            base,
-                            &mut proof.tactics,
-                        );
-                        match respawned {
-                            Ok(fresh) => session = fresh,
-                            // the job ends here, its transcript checked above
-                            Err(at) => break 'run Some(at),
-                        }
-                    }
-                }
-                None => {
-                    // the base case (admitted above), or an oracle that was not asked for
-                    admit_outside(&mut session, None)?;
-                }
-            }
-        }
-        if interrupted.is_none() {
-            for (name, _) in &setup.oracles {
-                if selected(name) && !proof.tactics.oracles.iter().any(|r| &r.oracle == name) {
-                    let empty = OracleTactics::empty(
-                        name,
-                        "no goal for this oracle after `call (…); last first.`",
-                    );
-                    live.oracle_finished(&empty);
-                    proof.tactics.oracles.push(empty);
-                }
-            }
-        }
-        if session.transcript_dropped() {
-            // a later record would start at an offset the live page does not know
-            *transcript = None;
-        }
-        interrupted
-    };
-    proof.tactics.interrupted = interrupted;
-
-    let tactics = proof.write(None)?;
-    live.equivalence_finished(&tactics);
-    Ok(tactics)
-}
-
 /// Closes the front goal with `admit.` outside the walk of an oracle: for `oracle`, or for none.
 fn admit_outside(session: &mut Session, oracle: Option<&str>) -> Result<(), SessionError> {
     session.set_context(SentenceCtx {
@@ -1040,36 +803,35 @@ fn admit_outside(session: &mut Session, oracle: Option<&str>) -> Result<(), Sess
     session.send("admit.", Want::Status).map(|_| ())
 }
 
-/// What every EasyCrypt of a proof job is started with: the first one and each respawn.
+/// What the EasyCrypt of one oracle is started with.
 struct SessionSetup<'a> {
     /// The theorem's output directory: EasyCrypt's working directory and `-I`.
     out_dir: &'a Path,
     transcript_path: &'a Path,
     options: &'a TacticsOptions,
-    /// The proof file, the tag of every transcript record.
+    /// The oracle lemma file, the tag of every transcript record.
     file: &'a str,
     live: &'a LiveHandle,
     swallow: &'a SwallowWatch,
+    #[cfg(test)]
+    fake: Option<&'a tests::FakeEasyCrypt>,
 }
 
 impl SessionSetup<'_> {
-    /// A fresh EasyCrypt for the job. Its records are appended to the job's transcript
-    /// (`transcript`; `None`: dropped after a failed write), tagged with the proof file and, for
-    /// the `n`th respawn, `(respawn n)`. Its answers go to the live page and are watched for a
-    /// swallowed interrupt. The per-sentence timeout and the stop flag are set.
-    fn start(&self, transcript: Option<&File>, respawn: Option<usize>) -> Result<Session, TacticsError> {
+    /// A fresh EasyCrypt for the oracle. Its records go to the oracle's transcript (`transcript`;
+    /// `None`: none), tagged with the file. Its answers go to the live page and are watched for
+    /// a swallowed interrupt. The per-sentence timeout and the stop flag are set.
+    fn start(&self, transcript: Option<&File>) -> Result<Session, TacticsError> {
+        #[cfg(test)]
+        let mut session = spawn_easycrypt(self.out_dir, self.fake)?;
+        #[cfg(not(test))]
         let mut session = spawn_easycrypt(self.out_dir)?;
         if let Some(transcript) = transcript {
-            let tag = match respawn {
-                None => self.file.to_string(),
-                Some(n) => format!("{} (respawn {n})", self.file),
-            };
-            // a clone shares the file's offset: the records of every session follow each other
             session.set_transcript_sink(
                 Box::new(transcript.try_clone()?),
                 self.transcript_path,
                 self.options.ec_transcript,
-                &tag,
+                self.file,
             );
         }
         let mut page = self.live.session_observer();
@@ -1090,11 +852,14 @@ impl SessionSetup<'_> {
     }
 }
 
-/// [`Session::start`]; in a test that set [`tests::TEST_EASYCRYPT`], that EasyCrypt with its
-/// interrupt timing.
-fn spawn_easycrypt(dir: &Path) -> Result<Session, SessionError> {
+/// [`Session::start`]; in a test that set [`tests::TEST_EASYCRYPT`] (passed down as `fake`, since
+/// workers run on threads of their own), that EasyCrypt with its interrupt timing.
+fn spawn_easycrypt(
+    dir: &Path,
+    #[cfg(test)] fake: Option<&tests::FakeEasyCrypt>,
+) -> Result<Session, SessionError> {
     #[cfg(test)]
-    if let Some(fake) = tests::TEST_EASYCRYPT.with(|t| t.borrow().clone()) {
+    if let Some(fake) = fake {
         let mut session = Session::start_with(&fake.binary, dir)?;
         session.set_interrupt_timing(fake.grace, fake.resend);
         return Ok(session);
@@ -1102,139 +867,22 @@ fn spawn_easycrypt(dir: &Path) -> Result<Session, SessionError> {
     Session::start(dir)
 }
 
-/// How opening the proof ended.
-enum Opened {
-    /// The oracles' goals are in front. `base_case_admitted`: the base case did not close.
-    Open { base_case_admitted: bool },
-    /// The run was asked to stop (Ctrl-C) on the way.
-    Stopped,
-}
-
-/// Opens the proof in a fresh session: every sentence up to `call (…); last first.`, then the
-/// base case `base`. `admitted`: an earlier session of the job admitted the base case, so it is
-/// admitted again without being tried.
-fn open_proof(
+/// Opens the oracle lemma `file` in a fresh session: every sentence up to `proof.`, after which
+/// the oracle's goal is in front. `false`: the run was asked to stop (Ctrl-C) on the way.
+fn open_lemma(
     session: &mut Session,
-    call_prefix: &[String],
-    base: Option<&str>,
-    admitted: bool,
     file: &str,
+    source: &str,
     options: &TacticsOptions,
-) -> Result<Opened, TacticsError> {
-    for sentence in call_prefix {
-        let response = session.send(sentence, Want::Full)?;
+) -> Result<bool, TacticsError> {
+    for sentence in sentences_until_proof(file, source)? {
+        let response = session.send(&sentence, Want::Full)?;
         if options.stop_requested() {
-            return Ok(Opened::Stopped);
+            return Ok(false);
         }
-        ok_or_reject(response, file, sentence)?;
+        ok_or_reject(response, file, &sentence)?;
     }
-    let Some(base) = base else {
-        return Ok(Opened::Open {
-            base_case_admitted: false,
-        });
-    };
-    if !admitted && session.send(base, Want::Status)?.status == super::json::Status::Ok {
-        return Ok(Opened::Open {
-            base_case_admitted: false,
-        });
-    }
-    if options.stop_requested() {
-        return Ok(Opened::Stopped);
-    }
-    session.send("admit.", Want::Status)?;
-    Ok(Opened::Open {
-        base_case_admitted: true,
-    })
-}
-
-/// Replaces `old`, the EasyCrypt that left the interrupt of `tactics.unanswered`'s last entry
-/// unanswered, with a fresh one opened at the same proof (a **respawn**). The oracle in flight
-/// is sealed and in `tactics.oracles` already; the goal loop closes it, and every oracle before
-/// it, with `admit.`.
-///
-/// `Err` is where the job ends instead: after [`MAX_RESPAWNS`] respawns, or when the respawn
-/// fails, with the sealed oracle and [`EquivalenceTactics::ended_early`]; on a Ctrl-C, as a
-/// Ctrl-C.
-fn respawn(
-    old: Session,
-    job: &SessionSetup<'_>,
-    transcript: Option<&File>,
-    call_prefix: &[String],
-    base: Option<&str>,
-    tactics: &mut EquivalenceTactics,
-) -> Result<Session, Interrupted> {
-    let given_up = Instant::now();
-    // `Drop` kills the child without waiting on it: it may be stuck in a prover
-    drop(old);
-    let respawns = tactics.unanswered.len() - 1;
-    let last = tactics.unanswered.last().expect("an unanswered interrupt").clone();
-    let sealed = Interrupted::Sealed {
-        admits: tactics
-            .oracles
-            .iter()
-            .filter(|o| o.oracle == last.oracle)
-            .flat_map(|o| o.stats.admits.iter())
-            .filter(|a| a.reason == AdmitReason::Interrupted)
-            .count(),
-        oracle: last.oracle.clone(),
-        node: last.node.clone(),
-    };
-    let fresh = 'fresh: {
-        if respawns == MAX_RESPAWNS {
-            tactics.ended_early = Some(format!(
-                "EasyCrypt left {} interrupts unanswered, and a proof job respawns it at most \
-                 {MAX_RESPAWNS} times",
-                respawns + 1
-            ));
-            break 'fresh Err(sealed);
-        }
-        if job.options.stop_requested() {
-            break 'fresh Err(Interrupted::NoOracleInFlight);
-        }
-        let began = Instant::now();
-        job.live
-            .activity("respawning EasyCrypt and opening the proof again");
-        let opened = job.start(transcript, Some(respawns + 1)).and_then(|mut session| {
-            // the respawn and the sentences sent again are the time of the oracle that caused
-            // them (story 56)
-            session.set_context(SentenceCtx {
-                oracle: Some(last.oracle.clone()),
-                node: None,
-                role: Role::Resume,
-            })?;
-            session.record_respawn(given_up.elapsed())?;
-            let admitted = tactics.base_case_admitted;
-            let opened = open_proof(&mut session, call_prefix, base, admitted, job.file, job.options)?;
-            session.set_context(SentenceCtx::default())?;
-            Ok((session, opened))
-        });
-        match opened {
-            Ok((mut session, Opened::Open { base_case_admitted })) => {
-                tactics.base_case_admitted |= base_case_admitted;
-                if let Some(u) = tactics.unanswered.last_mut() {
-                    u.respawn = Some(began.elapsed());
-                }
-                if let Some(o) = tactics
-                    .oracles
-                    .iter_mut()
-                    .rfind(|o| o.oracle == last.oracle)
-                {
-                    o.easycrypt_time += given_up.elapsed();
-                    o.stats.time.merge(&session.take_time_by_role(&last.oracle));
-                }
-                Ok(session)
-            }
-            Ok((_, Opened::Stopped)) => Err(Interrupted::NoOracleInFlight),
-            Err(_) if job.options.stop_requested() => Err(Interrupted::NoOracleInFlight),
-            Err(e) => {
-                tactics.ended_early = Some(format!("respawning EasyCrypt failed: {e}"));
-                Err(sealed)
-            }
-        }
-    };
-    job.live
-        .unanswered(tactics.unanswered.last().expect("an unanswered interrupt"));
-    fresh
+    Ok(true)
 }
 
 /// Where lockstep execution of `oracle` writes its artifacts: beside the export it describes,
@@ -1246,65 +894,64 @@ pub fn debug_dir(theorem_out: &Path, left: &str, right: &str, oracle: &str) -> P
         .join(oracle)
 }
 
-/// `Eq_*.ec` and its report as a tactics run goes (story 33): both are rewritten on every
-/// write, each atomically, so the file on disk is what has been proved so far and the report
-/// next to it describes that file. No `easycrypt compile` (ADR 0005).
+/// One oracle lemma file and its report as a tactics run goes (story 33, story 68): both are
+/// rewritten on every write, each atomically, so the file on disk is what has been proved so far
+/// and the report next to it describes that file. No `easycrypt compile` (ADR 0005).
 struct ProofFile<'a> {
     /// The theorem's name, for the session record.
     theorem: &'a str,
-    /// The exported file: every oracle `+ proc; inline. admit.`.
+    /// The exported file: `+ proc; inline. admit.`.
     source: &'a str,
-    /// The record this run resumes: its entries for oracles this run does not prove stay.
+    /// The oracle's record this run resumes from.
     prior: Option<&'a SessionRecord>,
-    /// `(exported name, EasyCrypt's procedure name)` of every oracle, in the file's order.
+    /// `(exported name, EasyCrypt's procedure name)` of the oracle.
     procs: &'a [(String, String)],
-    /// The theorem's output directory: the file, the report and the record.
+    /// The theorem's output directory: the file and the report.
     out_dir: &'a Path,
-    /// This equivalence's `progress/Eq_<L>_<R>/`, for the temporary files (story 36).
+    /// The oracle's `progress/Eq_<L>_<R>/<O>/`, for the temporary files.
     progress_dir: &'a Path,
-    /// When the equivalence started: the report's elapsed time.
+    /// The oracle's session record, `session/Eq_<L>_<R>/<O>.record.json`.
+    record_path: PathBuf,
+    /// When the oracle started: the report's elapsed time.
     started: Instant,
-    /// The equivalence so far: its finished oracles, in the order they finished.
+    /// The oracle so far (`proof_file` is the oracle lemma file).
     tactics: EquivalenceTactics,
     /// How many times [`Self::write`] has written (story 38).
     writes: std::cell::Cell<usize>,
 }
 
 impl ProofFile<'_> {
-    /// Writes the file and its report: the finished oracles and `in_flight`, an oracle sealed
-    /// part way through. Oracles not reached keep `+ proc; inline. admit.`. Returns what was
-    /// written, the oracles in the file's order.
+    /// Writes the file and its report: the finished oracle, or `in_flight`, the oracle sealed
+    /// part way through. Returns what was written.
     fn write(&self, in_flight: Option<&OracleTactics>) -> std::io::Result<EquivalenceTactics> {
         let mut now = self.tactics.clone();
         now.oracles.extend(in_flight.cloned());
-        now.oracles
-            .sort_by_key(|o| self.procs.iter().position(|(n, _)| *n == o.oracle));
         now.elapsed = self.started.elapsed();
         self.writes.set(self.writes.get() + 1);
         now.writes = self.writes.get();
         // the report first: a reader who sees the file finds a report at least as new
         let tmp_dir = self.progress_dir;
         write_atomically(&self.out_dir.join(&now.report_file), tmp_dir, &now.render())?;
-        write_atomically(
-            &self.out_dir.join(&now.proof_file),
-            tmp_dir,
-            &self.text(&now.oracles),
-        )?;
+        let mut text = self.source.to_string();
+        for o in now.oracles.iter().filter(|o| !o.script.is_empty()) {
+            let (_, proc_name) = self
+                .procs
+                .iter()
+                .find(|(n, _)| *n == o.oracle)
+                .expect("a result names an exported oracle");
+            text = with_script(&text, proc_name, &o.script);
+        }
+        write_atomically(&self.out_dir.join(&now.proof_file), tmp_dir, &text)?;
         // the record last (story 35 §3.4): a crash between the two leaves a record that claims
         // less than the file holds, which costs a re-proof and never claims a missing proof
         let record = self.record(&now);
         if record.oracles.iter().any(|o| o.status != OracleStatus::Pending) {
-            write_atomically(
-                &session_record_path(self.out_dir, &now.proof_file),
-                tmp_dir,
-                &record.to_json(),
-            )?;
+            write_atomically(&self.record_path, tmp_dir, &record.to_json())?;
         }
         Ok(now)
     }
 
-    /// The session record of `now`: every exported oracle's entry, in the file's order. An
-    /// oracle this run has not got to keeps the entry it had.
+    /// The session record of `now`. An oracle this run has not got to keeps the entry it had.
     fn record(&self, now: &EquivalenceTactics) -> SessionRecord {
         let oracles = self
             .procs
@@ -1320,22 +967,14 @@ impl ProofFile<'_> {
             .collect();
         SessionRecord::new(self.theorem, &now.left, &now.right, oracles)
     }
+}
 
-    /// The exported file with each oracle's script in place of its `+ proc; inline. admit.`.
-    fn text(&self, oracles: &[OracleTactics]) -> String {
-        let mut text = self.source.to_string();
-        for o in oracles.iter().filter(|o| !o.script.is_empty()) {
-            let (_, proc_name) = self
-                .procs
-                .iter()
-                .find(|(n, _)| *n == o.oracle)
-                .expect("a result names an exported oracle");
-            let marker = format!("(* {proc_name} *)\n+ proc; inline. admit.");
-            let replacement = format!("(* {proc_name} *)\n{}", o.script.trim_end());
-            text = text.replacen(&marker, &replacement, 1);
-        }
-        text
-    }
+/// `text`, an exported oracle lemma file, with `script` in place of the oracle's
+/// `+ proc; inline. admit.`.
+fn with_script(text: &str, proc_name: &str, script: &str) -> String {
+    let marker = format!("(* {proc_name} *)\n+ proc; inline. admit.");
+    let replacement = format!("(* {proc_name} *)\n{}", script.trim_end());
+    text.replacen(&marker, &replacement, 1)
 }
 
 /// Writes `text` to `path` through a temporary file in `tmp_dir` (on the same file system) and
@@ -1703,6 +1342,7 @@ where
         tree_id: walked.id.clone(),
         resumed: false,
         resumed_at: resumed_at(sealed.kept),
+        transcript: None,
     };
     // `--write-granularity node`: seal, write, continue. A failed write stops the writes; the
     // last good one stays on disk and the error ends the run after the oracle.
@@ -1780,7 +1420,7 @@ where
                 node: sealed.node.clone(),
                 signals,
                 waited,
-                respawn: None,
+                ended_job: false,
             };
             (Some(sealed), Some(unanswered))
         }
@@ -1835,9 +1475,6 @@ impl EquivalenceTactics {
             "tactics for {} (proofstep {}: {} ~ {})",
             self.proof_file, self.proofstep, self.left, self.right
         );
-        if self.base_case_admitted {
-            let _ = writeln!(out, "  the base case did not close and was admitted");
-        }
         for o in &self.oracles {
             if o.resumed {
                 let _ = writeln!(
@@ -1942,8 +1579,10 @@ impl TheoremTactics {
         for eq in &self.equivalences {
             out.push_str(&eq.render());
         }
-        for eq in &self.equivalences {
-            let _ = writeln!(out, "transcript: {}", eq.transcript.display());
+        for o in self.oracles() {
+            if let Some(transcript) = &o.transcript {
+                let _ = writeln!(out, "transcript: {}", transcript.display());
+            }
         }
         if let Some(warning) = &self.swallowed_interrupt {
             let _ = writeln!(out, "warning: {warning}");

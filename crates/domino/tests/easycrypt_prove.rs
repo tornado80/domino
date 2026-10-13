@@ -98,16 +98,17 @@ fn a_proof_job_touches_only_its_own_files_skips_a_done_equivalence_and_recreates
     for (name, was) in &before {
         if [".ec"]
             .iter()
-            .any(|s| name == &format!("{EQ}{s}"))
+            .any(|s| name == &format!("{EQ}_UsefulOracle{s}"))
         {
             continue;
         }
         assert_eq!(after.get(name), Some(was), "{name} was touched");
     }
     assert!(
-        !String::from_utf8_lossy(&after[&format!("{EQ}.ec")].0).contains("+ proc; inline. admit.")
+        !String::from_utf8_lossy(&after[&format!("{EQ}_UsefulOracle.ec")].0)
+            .contains("+ proc; inline. admit.")
     );
-    assert!(theorem.join("session").join(EQ).join("record.json").is_file());
+    assert!(theorem.join("session").join(EQ).join("UsefulOracle.record.json").is_file());
     // story 67: no record, tree or report at the top level
     assert!(after
         .keys()
@@ -288,17 +289,27 @@ fn two_proof_jobs_on_different_equivalences_run_at_once() {
     for stem in ["Eq_CPA_PKE_H0", "Eq_H1_H2"] {
         let proof = std::fs::read_to_string(dir.join(format!("{stem}.ec"))).unwrap();
         assert!(proof.contains("call ("), "{stem}: {proof}");
-        assert!(dir.join("session").join(stem).join("record.json").is_file());
+        // story 68: one record, lock and transcript for each oracle
+        let records = std::fs::read_dir(dir.join("session").join(stem)).unwrap();
+        assert!(records
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .any(|n| n.ends_with(".record.json")));
         let job = dir.join("progress").join(stem);
         assert!(job.join("index.html").is_file());
-        assert!(!job.join("lock").exists(), "{stem}: lock left behind");
-        let transcript = std::fs::read_to_string(job.join("ec-transcript.jsonl")).unwrap();
-        assert!(!transcript.is_empty());
-        for line in transcript.lines() {
-            assert!(
-                line.starts_with(&format!("{{\"file\":\"{stem}.ec\"")),
-                "{stem}: {line:.200}"
-            );
+        for entry in std::fs::read_dir(&job).unwrap() {
+            let path = entry.unwrap().path();
+            assert!(!path.to_string_lossy().ends_with(".lock"), "{stem}: lock left behind");
+            if !path.is_dir() {
+                continue;
+            }
+            let transcript = std::fs::read_to_string(path.join("ec-transcript.jsonl")).unwrap();
+            assert!(!transcript.is_empty());
+            for line in transcript.lines() {
+                assert!(
+                    line.starts_with(&format!("{{\"file\":\"{stem}_")),
+                    "{stem}: {line:.200}"
+                );
+            }
         }
     }
     let _ = std::fs::remove_dir_all(&out);

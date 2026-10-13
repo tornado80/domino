@@ -45,6 +45,25 @@ impl SmtSolverBackend for ProcessSmtSolverBackend {
     }
 }
 
+/// cvc5 as an incremental process: a backend for lockstep execution where the native cvc5
+/// (`cvc5-lib`) is not built, as in the live tests of `easycrypt prove`.
+pub struct IncrementalCvc5Backend;
+
+impl SmtSolverBackend for IncrementalCvc5Backend {
+    type Solver = Communicator;
+
+    fn new_smtsolver(&self) -> Result<Self::Solver> {
+        Communicator::new_cvc5_incremental::<std::io::Sink>(None)
+    }
+
+    fn new_smtsolver_with_transcript<W: std::io::Write + Send + Sync + 'static>(
+        &self,
+        writer: W,
+    ) -> Result<Self::Solver> {
+        Communicator::new_cvc5_incremental(Some(writer))
+    }
+}
+
 impl Communicator {
     pub fn new(backend: SolverVariant) -> Result<Self> {
         match backend {
@@ -154,6 +173,18 @@ impl Communicator {
             cmd,
             Some(transcript),
         )?))
+    }
+
+    /// cvc5 with `--incremental`, which `push`/`pop` need (lockstep execution).
+    pub fn new_cvc5_incremental<W: std::io::Write + Send + Sync + 'static>(
+        transcript: Option<W>,
+    ) -> Result<Self> {
+        let mut cmd = std::process::Command::new("cvc5");
+        cmd.args(["--lang=smt2", "--produce-models", "--arrays-exp", "--incremental"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit());
+        Ok(Self(process::Communicator::new_from_cmd(cmd, transcript)?))
     }
 
     pub fn read_until_end(&mut self) -> Result<String> {

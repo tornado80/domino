@@ -774,7 +774,7 @@ fn proof_job_theorem<P: project::Project>(project: &P, name: &str) -> Result<Vec
 
 /// `domino easycrypt prove` (story 35): one proof job per selected equivalence, one after the
 /// other. Translation's files are created if missing and otherwise not touched (ADR 0006).
-fn easycrypt_prove<P: project::Project>(
+fn easycrypt_prove<P: project::Project + Sync>(
     p: &EcProve,
     project: &P,
     project_root: &std::path::Path,
@@ -832,6 +832,7 @@ fn easycrypt_prove<P: project::Project>(
             )),
             force: p.force,
             announce_stages: p.progress != ProgressMode::None,
+            jobs: p.jobs,
             resume: match p.resume {
                 ResumeArg::Trust => ResumeMode::Trust,
                 ResumeArg::Replay => ResumeMode::Replay,

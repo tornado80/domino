@@ -10,13 +10,17 @@
 //! still absent, so two jobs racing to create it cannot tear it.
 //!
 //! - [`create_if_absent`]: the create-if-absent helper.
-//! - [`ensure_translation_files`]: every file of the export except the `Eq_*.ec`.
-//! - [`SessionRecord`]: `session/Eq_<L>_<R>/record.json`: statuses, and (story 37) the scripts that
-//!   let a job resume the equivalence; (version 3) the closed nodes of interrupted oracles.
+//! - [`ensure_translation_files`]: every file of the export except the oracle lemma files
+//!   `Eq_<L>_<R>_<O>.ec` (story 68; the glue `Eq_<L>_<R>.ec` is a translation file).
+//! - [`SessionRecord`]: `session/Eq_<L>_<R>/<O>.record.json`, one for each oracle (story 68):
+//!   its status, and (story 37) the script that lets a job resume it; (version 3) the closed
+//!   nodes of an interrupted oracle. [`split_equivalence_record`] splits a record of the whole
+//!   equivalence, as jobs wrote it before story 68.
 //! - [`SavedTree`]: `session/Eq_<L>_<R>/<oracle>.tree.json`, the joint tree an interrupted oracle is
 //!   resumed on (ADR 0008).
 //! - [`remove_records_and_trees`]: what `domino easycrypt --force` does to both.
-//! - [`ProofLock`], [`progress_dir`], [`check_no_live_jobs`] (story 36): one job per equivalence.
+//! - [`ProofLock`], [`progress_dir`], [`check_no_live_jobs`] (story 36): one job per oracle
+//!   (story 68).
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -62,24 +66,27 @@ pub fn create_if_absent(path: &Path, text: &str) -> std::io::Result<bool> {
     }
 }
 
-/// Whether `rel` is one equivalence's proof file, which its own job owns. The equivalence's
-/// `Eq_<L>_<R>_Invariants.ec` is not: it is a translation file, and is created when missing.
-pub fn is_proof_file(rel: &Path) -> bool {
-    rel.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-        n.starts_with("Eq_") && n.ends_with(".ec") && !n.ends_with("_Invariants.ec")
-    })
+/// Whether `rel` is an oracle lemma file of `exported` (story 68), which the proof job of the
+/// oracle owns. Every other file, the equivalence's glue `Eq_<L>_<R>.ec` and its
+/// `Eq_<L>_<R>_Invariants.ec` included, is a translation file, created when missing.
+pub fn is_oracle_file(exported: &ExportedTheorem, rel: &Path) -> bool {
+    exported
+        .equivalences
+        .iter()
+        .flat_map(|eq| eq.oracle_files.iter())
+        .any(|(_, file)| Path::new(file) == rel)
 }
 
 /// Creates, in `theorem_out`, every file of `exported` that translation owns (all but the
-/// `Eq_*.ec` proof files) and that is missing. Files that exist are not read. Says nothing:
-/// the caller reports the paths it gets back (story 44).
+/// oracle lemma files) and that is missing. Files that exist are not read. Says nothing: the
+/// caller reports the paths it gets back (story 44).
 pub fn ensure_translation_files(
     exported: &ExportedTheorem,
     theorem_out: &Path,
 ) -> std::io::Result<Vec<PathBuf>> {
     let mut created = Vec::new();
     for (rel, text) in &exported.files {
-        if is_proof_file(rel) {
+        if is_oracle_file(exported, rel) {
             continue;
         }
         if create_if_absent(&theorem_out.join(rel), text)? {
@@ -98,8 +105,14 @@ pub fn session_dir(theorem_out: &Path, proof_file: &str) -> PathBuf {
         .join(proof_file.trim_end_matches(".ec"))
 }
 
-/// Where the session record of a proof file is written: `session/Eq_L_R/record.json`.
-pub fn session_record_path(theorem_out: &Path, proof_file: &str) -> PathBuf {
+/// Where the session record of one oracle is written (story 68): `session/Eq_L_R/PKENC.record.json`.
+pub fn oracle_record_path(theorem_out: &Path, proof_file: &str, oracle: &str) -> PathBuf {
+    session_dir(theorem_out, proof_file).join(format!("{oracle}.record.json"))
+}
+
+/// The record of the whole equivalence, as jobs wrote it from story 67 to story 68:
+/// `session/Eq_L_R/record.json`. Read by [`split_equivalence_record`], never written.
+pub fn equivalence_record_path(theorem_out: &Path, proof_file: &str) -> PathBuf {
     session_dir(theorem_out, proof_file).join("record.json")
 }
 
@@ -109,7 +122,7 @@ pub fn saved_tree_path(theorem_out: &Path, proof_file: &str, oracle: &str) -> Pa
 }
 
 /// The record's path before story 67: `Eq_L_R.session.json` beside the proof file. Read when
-/// the new path is missing, never written.
+/// [`equivalence_record_path`] is missing, never written.
 pub fn old_session_record_path(theorem_out: &Path, proof_file: &str) -> PathBuf {
     theorem_out.join(format!(
         "{}.session.json",
@@ -296,6 +309,40 @@ impl SessionRecord {
         self.oracles.iter().find(|o| o.name == name)
     }
 
+    /// The record of `name` alone, with this record's version: what an oracle's own record
+    /// (story 68) holds. `None` when there is no entry for it.
+    pub fn only(&self, name: &str) -> Option<SessionRecord> {
+        let entry = self.oracle(name)?.clone();
+        Some(SessionRecord {
+            complete: entry.status == OracleStatus::Done,
+            oracles: vec![entry],
+            ..self.clone()
+        })
+    }
+
+    /// The oracles' own records joined into the record of their equivalence, whose oracles are
+    /// `oracles`: one entry for each, in that order, `pending` where no record has one. The
+    /// version is the oldest of `records`. `None` when there are no records.
+    pub fn join(records: &[SessionRecord], oracles: &[String]) -> Option<SessionRecord> {
+        let first = records.first()?;
+        let entries = oracles
+            .iter()
+            .map(|name| {
+                records
+                    .iter()
+                    .find_map(|r| r.oracle(name))
+                    .cloned()
+                    .unwrap_or_else(|| OracleRecord::new(name, OracleStatus::Pending))
+            })
+            .collect::<Vec<_>>();
+        Some(SessionRecord {
+            version: records.iter().map(|r| r.version).min().unwrap_or(first.version),
+            complete: entries.iter().all(|o| o.status == OracleStatus::Done),
+            oracles: entries,
+            ..first.clone()
+        })
+    }
+
     /// Oracles that are done but have no script (a version 1 record): they cannot be resumed.
     pub fn done_without_script(&self) -> usize {
         self.oracles
@@ -403,6 +450,40 @@ pub enum SessionRecordError {
         path.display()
     )]
     Read { path: PathBuf, message: String },
+    #[error("cannot write the session record {}: {message}", path.display())]
+    Write { path: PathBuf, message: String },
+}
+
+/// Splits the record of the whole equivalence `proof_file` (written before story 68, at
+/// [`equivalence_record_path`] or the older [`old_session_record_path`]) into one record for
+/// each oracle, at [`oracle_record_path`]. An oracle that has its own record already keeps it:
+/// each one is created only if absent, so two jobs that split at once write each file once.
+/// The old record is not deleted. Returns how many oracle records were created.
+pub fn split_equivalence_record(
+    theorem_out: &Path,
+    proof_file: &str,
+) -> Result<usize, SessionRecordError> {
+    let new = equivalence_record_path(theorem_out, proof_file);
+    let old = old_session_record_path(theorem_out, proof_file);
+    if !new.exists() && !old.exists() {
+        return Ok(0);
+    }
+    let Some(whole) = SessionRecord::read(&path_to_read(new, old))? else {
+        return Ok(0);
+    };
+    let mut created = 0;
+    for entry in &whole.oracles {
+        let path = oracle_record_path(theorem_out, proof_file, &entry.name);
+        let record = whole.only(&entry.name).expect("an entry of the record");
+        let wrote = create_if_absent(&path, &record.to_json()).map_err(|e| {
+            SessionRecordError::Write {
+                path: path.clone(),
+                message: e.to_string(),
+            }
+        })?;
+        created += usize::from(wrote);
+    }
+    Ok(created)
 }
 
 /// Deletes every file under `<theorem_out>/session/`, and every old-path `*.session.json` and
@@ -528,11 +609,17 @@ pub struct SavedTreeError {
 // Story 36: one job per equivalence
 // ----------------------------------------------------------------------------------------
 
-/// `<theorem_out>/progress/Eq_<L>_<R>`: everything one proof job writes that is not the proof
-/// file, its report or its record: the page, the transcript, the temporary files, the lock.
-/// `stem` is the proof file's name without `.ec`.
+/// `<theorem_out>/progress/Eq_<L>_<R>`: everything the proof jobs of one equivalence write that
+/// is not a proof file or a record: the equivalence's page and report, the oracles' locks
+/// (`<O>.lock`), and one folder for each oracle (`<O>/`: its page, transcript, report and
+/// temporary files). `stem` is the glue's name without `.ec`.
 pub fn progress_dir(theorem_out: &Path, stem: &str) -> PathBuf {
     theorem_out.join("progress").join(stem)
+}
+
+/// The lock of one oracle (story 68): `progress/Eq_<L>_<R>/<O>.lock`.
+pub fn oracle_lock_path(theorem_out: &Path, stem: &str, oracle: &str) -> PathBuf {
+    progress_dir(theorem_out, stem).join(format!("{oracle}.lock"))
 }
 
 /// What a lock file holds: who took it and when (shown to the user, never compared).
@@ -545,20 +632,21 @@ struct LockContent {
 
 impl LockContent {
     /// The job this lock text names, if it parses and its pid is alive.
-    fn live_job(text: &str, equivalence: &str) -> Option<LiveJob> {
+    fn live_job(text: &str, job: &str) -> Option<LiveJob> {
         let c = serde_json::from_str::<LockContent>(text).ok()?;
         pid_is_alive(c.pid).then(|| LiveJob {
-            equivalence: equivalence.to_string(),
+            job: job.to_string(),
             pid: c.pid,
             started: c.started,
         })
     }
 }
 
-/// A running proof job on `equivalence`, as its lock says.
+/// A running proof job on `job`, as its lock says: `Eq_<L>_<R>/<O>` for an oracle's lock,
+/// `Eq_<L>_<R>` for the lock of a whole equivalence (before story 68).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveJob {
-    pub equivalence: String,
+    pub job: String,
     pub pid: u32,
     /// Seconds since the Unix epoch.
     pub started: u64,
@@ -569,7 +657,7 @@ impl std::fmt::Display for LiveJob {
         write!(
             f,
             "{} is being proved by pid {} (since {})",
-            self.equivalence,
+            self.job,
             self.pid,
             clock(self.started)
         )
@@ -598,23 +686,24 @@ pub enum LockError {
 /// handler, without unwinding) can remove them too: [`release_all_locks`].
 static HELD: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
 
-/// The lock of one equivalence, `progress/Eq_<L>_<R>/lock`. Removed when dropped, so on every
-/// way out of the job the process controls: success, error, skip, the first Ctrl-C.
+/// The lock of one oracle, [`oracle_lock_path`] (story 68). Removed when dropped, so on every
+/// way out of the oracle the process controls: success, error, skip, the first Ctrl-C.
 #[derive(Debug)]
 pub struct ProofLock {
     path: PathBuf,
 }
 
 impl ProofLock {
-    /// Takes the lock of `dir` (the equivalence's progress folder, created if missing).
+    /// Takes the lock file `path` (its folder is created if missing) for `job`, the name a
+    /// refusal shows.
     ///
     /// The file is created with [`create_if_absent`], holding this process's pid and the start
     /// time. If it exists and its pid is alive, the job is refused ([`LockError::Held`]). If the
     /// pid is dead the lock is stale (a `kill -9`, a crash) and is taken over silently. A pid
     /// that was reused by another process makes a stale lock look live: the start time in the
     /// message is there for the user to judge, nothing more is tried.
-    pub fn acquire(dir: &Path, equivalence: &str) -> Result<ProofLock, LockError> {
-        let path = dir.join("lock");
+    pub fn acquire(path: &Path, job: &str) -> Result<ProofLock, LockError> {
+        let path = path.to_path_buf();
         let io = |source| LockError::Io {
             path: path.clone(),
             source,
@@ -635,8 +724,8 @@ impl ProofLock {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(io(e)),
             };
-            if let Some(job) = LockContent::live_job(&seen, equivalence) {
-                return Err(LockError::Held(job));
+            if let Some(live) = LockContent::live_job(&seen, job) {
+                return Err(LockError::Held(live));
             }
             // stale (or unreadable): remove it, unless somebody replaced it since it was read
             if std::fs::read_to_string(&path).ok().as_deref() == Some(seen.as_str()) {
@@ -668,7 +757,9 @@ pub fn release_all_locks() {
     }
 }
 
-/// The jobs under `theorem_out` whose lock names a live pid. Stale locks are ignored.
+/// The jobs under `theorem_out` whose lock names a live pid: the oracles' locks
+/// `progress/Eq_<L>_<R>/<O>.lock`, and an equivalence's `progress/Eq_<L>_<R>/lock` of a job
+/// before story 68. Stale locks are ignored.
 pub fn live_jobs(theorem_out: &Path) -> std::io::Result<Vec<LiveJob>> {
     let entries = match std::fs::read_dir(theorem_out.join("progress")) {
         Ok(entries) => entries,
@@ -678,13 +769,24 @@ pub fn live_jobs(theorem_out: &Path) -> std::io::Result<Vec<LiveJob>> {
     let mut jobs = Vec::new();
     for entry in entries {
         let entry = entry?;
-        let Ok(text) = std::fs::read_to_string(entry.path().join("lock")) else {
+        let equivalence = entry.file_name().to_string_lossy().into_owned();
+        let Ok(locks) = std::fs::read_dir(entry.path()) else {
             continue;
         };
-        let name = entry.file_name().to_string_lossy().into_owned();
-        jobs.extend(LockContent::live_job(&text, &name));
+        for lock in locks {
+            let lock = lock?;
+            let name = lock.file_name().to_string_lossy().into_owned();
+            let job = match name.strip_suffix(".lock") {
+                Some(oracle) => format!("{equivalence}/{oracle}"),
+                None if name == "lock" => equivalence.clone(),
+                None => continue,
+            };
+            if let Ok(text) = std::fs::read_to_string(lock.path()) {
+                jobs.extend(LockContent::live_job(&text, &job));
+            }
+        }
     }
-    jobs.sort_by(|a, b| a.equivalence.cmp(&b.equivalence));
+    jobs.sort_by(|a, b| a.job.cmp(&b.job));
     Ok(jobs)
 }
 
@@ -703,7 +805,7 @@ pub fn check_no_live_jobs(theorem_outs: &[PathBuf]) -> Result<(), LockError> {
             source,
         })?;
         all.extend(jobs.into_iter().map(|mut j| {
-            j.equivalence = format!("{theorem}/{}", j.equivalence);
+            j.job = format!("{theorem}/{}", j.job);
             j
         }));
     }
@@ -766,26 +868,53 @@ mod tests {
         dir
     }
 
-    #[test]
-    fn invariants_files_are_translation_files_not_proof_files() {
-        assert!(is_proof_file(Path::new("Eq_L_R.ec")));
-        assert!(!is_proof_file(Path::new("Eq_L_R_Invariants.ec")));
-        assert!(!is_proof_file(Path::new("Types.ec")));
+    /// An export with the files `files` and one equivalence whose oracle `O` has the lemma
+    /// file `Eq_L_R_O.ec`.
+    fn exported_with(files: &[&str]) -> ExportedTheorem {
+        let mut exported = ExportedTheorem::default();
+        for f in files {
+            exported.files.insert(PathBuf::from(f), format!("text of {f}"));
+        }
+        exported.equivalences.push(crate::writers::easycrypt::export::EquivalenceReport {
+            proofstep: 0,
+            left_name: "L".into(),
+            right_name: "R".into(),
+            invariants_file: "Eq_L_R_Invariants.ec".into(),
+            proof_file: "Eq_L_R.ec".into(),
+            oracle_files: vec![("O".into(), "Eq_L_R_O.ec".into())],
+            oracle_count: 1,
+            admit_count: 1,
+            oracle_set_mismatch: None,
+            state_relations: vec![],
+            helpers: vec![],
+        });
+        exported
     }
 
     #[test]
-    fn ensure_translation_files_creates_a_missing_invariants_file_but_not_the_proof() {
+    fn only_the_oracle_lemma_files_are_proof_files() {
+        let exported = exported_with(&[]);
+        assert!(is_oracle_file(&exported, Path::new("Eq_L_R_O.ec")));
+        assert!(!is_oracle_file(&exported, Path::new("Eq_L_R.ec")));
+        assert!(!is_oracle_file(&exported, Path::new("Eq_L_R_Invariants.ec")));
+        assert!(!is_oracle_file(&exported, Path::new("Types.ec")));
+    }
+
+    #[test]
+    fn ensure_translation_files_creates_the_missing_glue_and_invariants_but_not_an_oracle_file() {
         let dir = scratch("invariants");
-        let mut exported = ExportedTheorem::default();
-        for f in ["Eq_L_R.ec", "Eq_L_R_Invariants.ec", "Types.ec"] {
-            exported.files.insert(PathBuf::from(f), format!("text of {f}"));
-        }
+        let exported =
+            exported_with(&["Eq_L_R.ec", "Eq_L_R_O.ec", "Eq_L_R_Invariants.ec", "Types.ec"]);
         let created = ensure_translation_files(&exported, &dir).unwrap();
         assert_eq!(
             created,
-            vec![PathBuf::from("Eq_L_R_Invariants.ec"), PathBuf::from("Types.ec")]
+            vec![
+                PathBuf::from("Eq_L_R.ec"),
+                PathBuf::from("Eq_L_R_Invariants.ec"),
+                PathBuf::from("Types.ec")
+            ]
         );
-        assert!(!dir.join("Eq_L_R.ec").exists());
+        assert!(!dir.join("Eq_L_R_O.ec").exists());
         assert_eq!(
             std::fs::read_to_string(dir.join("Eq_L_R_Invariants.ec")).unwrap(),
             "text of Eq_L_R_Invariants.ec"
@@ -1003,7 +1132,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = saved_tree_path(&dir, "Eq_L_R.ec", "PKENC");
         assert!(path.ends_with("session/Eq_L_R/PKENC.tree.json"));
-        assert!(session_record_path(&dir, "Eq_L_R.ec").ends_with("session/Eq_L_R/record.json"));
+        assert!(oracle_record_path(&dir, "Eq_L_R.ec", "PKENC")
+            .ends_with("session/Eq_L_R/PKENC.record.json"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         assert!(matches!(SavedTree::read(&path), Ok(None)));
         let tree = saved_tree();
@@ -1066,7 +1196,7 @@ mod tests {
     fn the_old_path_is_read_only_when_the_new_one_is_missing() {
         let dir = scratch("old-path");
         std::fs::create_dir_all(&dir).unwrap();
-        let new = session_record_path(&dir, "Eq_A_B.ec");
+        let new = equivalence_record_path(&dir, "Eq_A_B.ec");
         let old = old_session_record_path(&dir, "Eq_A_B.ec");
         assert!(old.ends_with("Eq_A_B.session.json"));
         assert_eq!(path_to_read(new.clone(), old.clone()), new);
@@ -1075,6 +1205,45 @@ mod tests {
         std::fs::create_dir_all(new.parent().unwrap()).unwrap();
         std::fs::write(&new, "x").unwrap();
         assert_eq!(path_to_read(new.clone(), old), new);
+    }
+
+    #[test]
+    fn a_record_of_the_whole_equivalence_is_split_into_one_record_per_oracle_on_first_use() {
+        let dir = scratch("split");
+        let mut a = OracleRecord::new("A", OracleStatus::Done);
+        a.script = Some("+ proc; inline. auto.".into());
+        let b = OracleRecord::new("B", OracleStatus::Interrupted);
+        let whole = SessionRecord::new("T", "L", "R", vec![a.clone(), b]);
+        // story 67's path; B already has a record of its own, which stays
+        let path = equivalence_record_path(&dir, "Eq_L_R.ec");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, whole.to_json()).unwrap();
+        let own_b = SessionRecord::new("T", "L", "R", vec![OracleRecord::new("B", OracleStatus::Done)]);
+        std::fs::write(oracle_record_path(&dir, "Eq_L_R.ec", "B"), own_b.to_json()).unwrap();
+
+        assert_eq!(split_equivalence_record(&dir, "Eq_L_R.ec").unwrap(), 1);
+        let read = |o: &str| {
+            SessionRecord::read(&oracle_record_path(&dir, "Eq_L_R.ec", o))
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(read("A").oracles, vec![a]);
+        assert!(read("A").complete);
+        assert_eq!(read("A").version, whole.version);
+        assert_eq!(read("B"), own_b);
+        // the old record stays, and splitting again creates nothing
+        assert!(path.exists());
+        assert_eq!(split_equivalence_record(&dir, "Eq_L_R.ec").unwrap(), 0);
+        let names = ["A", "B", "C"].map(String::from);
+        let joined = SessionRecord::join(&[read("B"), read("A")], &names[..2]).unwrap();
+        assert_eq!(joined.oracles.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["A", "B"]);
+        assert!(joined.complete);
+        // an oracle without a record is pending, so the equivalence is not complete
+        let joined = SessionRecord::join(&[read("A"), read("B")], &names).unwrap();
+        assert_eq!(joined.oracles[2], OracleRecord::new("C", OracleStatus::Pending));
+        assert!(!joined.complete);
+        assert!(SessionRecord::join(&[], &names).is_none());
+        assert_eq!(split_equivalence_record(&scratch("split-none"), "Eq_L_R.ec").unwrap(), 0);
     }
 
     #[test]
@@ -1119,73 +1288,81 @@ mod tests {
         pid
     }
 
-    fn write_lock(dir: &Path, pid: u32) {
-        std::fs::create_dir_all(dir).unwrap();
+    fn write_lock(path: &Path, pid: u32) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let c = LockContent {
             pid,
             started: now(),
         };
-        std::fs::write(dir.join("lock"), serde_json::to_string(&c).unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_string(&c).unwrap()).unwrap();
     }
 
     #[test]
     fn a_lock_held_by_a_live_pid_refuses_and_names_it() {
-        let dir = scratch("lock-live").join("progress/Eq_L_R");
-        write_lock(&dir, std::process::id());
-        let err = ProofLock::acquire(&dir, "Eq_L_R").unwrap_err();
+        let out = scratch("lock-live");
+        let path = oracle_lock_path(&out, "Eq_L_R", "O");
+        assert!(path.ends_with("progress/Eq_L_R/O.lock"));
+        write_lock(&path, std::process::id());
+        let err = ProofLock::acquire(&path, "Eq_L_R/O").unwrap_err();
         let text = err.to_string();
         assert!(
             text.starts_with(&format!(
-                "Eq_L_R is being proved by pid {} (since ",
+                "Eq_L_R/O is being proved by pid {} (since ",
                 std::process::id()
             )),
             "{text}"
         );
         assert!(text.ends_with("); wait for it or stop it"), "{text}");
         // the refused job leaves the holder's lock alone
-        assert!(dir.join("lock").exists());
+        assert!(path.exists());
     }
 
     #[test]
     fn a_lock_held_by_a_dead_pid_is_taken_over_and_removed_on_drop() {
-        let dir = scratch("lock-dead").join("progress/Eq_L_R");
-        write_lock(&dir, dead_pid());
-        let lock = ProofLock::acquire(&dir, "Eq_L_R").unwrap();
-        let text = std::fs::read_to_string(dir.join("lock")).unwrap();
+        let path = oracle_lock_path(&scratch("lock-dead"), "Eq_L_R", "O");
+        write_lock(&path, dead_pid());
+        let lock = ProofLock::acquire(&path, "Eq_L_R/O").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
         let c: LockContent = serde_json::from_str(&text).unwrap();
         assert_eq!(c.pid, std::process::id());
         // and while it is held, a second job is refused
         assert!(matches!(
-            ProofLock::acquire(&dir, "Eq_L_R"),
+            ProofLock::acquire(&path, "Eq_L_R/O"),
             Err(LockError::Held(_))
         ));
+        // the lock of another oracle of the equivalence is another file
+        let other = oracle_lock_path(&scratch("lock-dead"), "Eq_L_R", "P");
+        drop(ProofLock::acquire(&other, "Eq_L_R/P").unwrap());
         drop(lock);
-        assert!(!dir.join("lock").exists());
+        assert!(!path.exists());
     }
 
     #[test]
     fn an_unreadable_lock_is_stale() {
-        let dir = scratch("lock-junk").join("progress/Eq_L_R");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("lock"), "not json").unwrap();
-        let lock = ProofLock::acquire(&dir, "Eq_L_R").unwrap();
-        assert!(dir.join("lock").exists());
+        let path = oracle_lock_path(&scratch("lock-junk"), "Eq_L_R", "O");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "not json").unwrap();
+        let lock = ProofLock::acquire(&path, "Eq_L_R/O").unwrap();
+        assert!(path.exists());
         drop(lock);
-        assert!(!dir.join("lock").exists());
+        assert!(!path.exists());
     }
 
     #[test]
     fn translation_sees_live_locks_only() {
         let out = scratch("lock-translation");
-        write_lock(&out.join("progress/Eq_A_B"), std::process::id());
-        write_lock(&out.join("progress/Eq_C_D"), dead_pid());
+        write_lock(&oracle_lock_path(&out, "Eq_A_B", "O"), std::process::id());
+        write_lock(&oracle_lock_path(&out, "Eq_C_D", "O"), dead_pid());
+        // the lock of a whole equivalence, as a job before story 68 took it
+        write_lock(&out.join("progress/Eq_E_F/lock"), std::process::id());
         let jobs = live_jobs(&out).unwrap();
-        assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].equivalence, "Eq_A_B");
+        let names: Vec<&str> = jobs.iter().map(|j| j.job.as_str()).collect();
+        assert_eq!(names, ["Eq_A_B/O", "Eq_E_F"]);
         let err = check_no_live_jobs(std::slice::from_ref(&out)).unwrap_err().to_string();
-        assert!(err.contains("Eq_A_B is being proved by pid"), "{err}");
+        assert!(err.contains("Eq_A_B/O is being proved by pid"), "{err}");
         assert!(!err.contains("Eq_C_D"), "{err}");
         std::fs::remove_dir_all(out.join("progress/Eq_A_B")).unwrap();
+        std::fs::remove_dir_all(out.join("progress/Eq_E_F")).unwrap();
         check_no_live_jobs(std::slice::from_ref(&out)).unwrap();
         check_no_live_jobs(&[out.join("missing")]).unwrap();
     }

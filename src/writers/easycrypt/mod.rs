@@ -157,6 +157,15 @@ pub enum EcExportError {
     #[error("the exported file `{file}` would take the name of a directory Domino owns (`session`, `progress` or `!debug!`); rename the package, game or composition")]
     ReservedFileName { file: String },
 
+    /// The name rule of story 68: an oracle's lemma file, `Eq_<L>_<R>_<O>.ec`, would have the
+    /// name (ignoring case) of another file of the export.
+    #[error("{owner} would be written to `{file}`, but {other} has that name; rename the oracle")]
+    OracleFileCollision {
+        file: String,
+        owner: String,
+        other: String,
+    },
+
     /// The transform pipeline (`EasyCryptTransform`, run once per exported
     /// theorem before any translation) failed. The only way a
     /// parser-accepted project can hit this is a sample reachable through a

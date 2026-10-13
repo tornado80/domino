@@ -5,6 +5,7 @@ use super::*;
 use crate::debug::driver::{ClaimVerdict, PartVerdict, TerminalView, Verdict};
 use crate::debug::lockstep::{PairRecord, PairSide, EQUAL_OUTPUT};
 use crate::easycrypt::job::{session_dir, AdmitRecord};
+use crate::easycrypt::session::split_sentences;
 
 fn pair_view_for_tests(p: &PairRecord, part: &Part) -> &'static str {
     pair_view(p, part).slug()
@@ -256,6 +257,7 @@ fn oracle_with(admits: Vec<Admit>) -> OracleTactics {
         tree_id: None,
         resumed: false,
         resumed_at: None,
+        transcript: None,
     }
 }
 
@@ -266,14 +268,12 @@ fn equivalence_with(oracles: Vec<OracleTactics>) -> EquivalenceTactics {
         left: "A".into(),
         right: "B".into(),
         oracles,
-        base_case_admitted: false,
         elapsed: Duration::from_secs(4),
         report_file: "progress/Eq_A_B/report.txt".into(),
         interrupted: None,
         ended_early: None,
         unanswered: vec![],
         writes: 0,
-        transcript: PathBuf::from("progress/Eq_A_B/ec-transcript.jsonl"),
     }
 }
 
@@ -480,6 +480,9 @@ fn eq_report() -> EquivalenceReport {
         right_name: "R".into(),
         invariants_file: "Invariants.ec".into(),
         proof_file: "Eq_L_R.ec".into(),
+        oracle_files: ["A", "B", "C"]
+            .map(|o| (o.to_string(), format!("Eq_L_R_{o}.ec")))
+            .to_vec(),
         oracle_count: 3,
         admit_count: 0,
         oracle_set_mismatch: None,
@@ -494,17 +497,24 @@ fn done(name: &str) -> OracleRecord {
     o
 }
 
-/// Writes a record of oracles A (done), B (interrupted), C (pending) and plans a job on it.
+/// The oracles of [`eq_report`].
+fn names() -> Vec<String> {
+    ["A", "B", "C"].map(String::from).to_vec()
+}
+
+fn record_of(out: &Path, oracle: &str) -> PathBuf {
+    oracle_record_path(out, "Eq_L_R.ec", oracle)
+}
+
+/// Writes one record for each of `oracles` (story 68) and plans a job on them.
 fn plan_of(oracles: Vec<OracleRecord>, options: &TacticsOptions) -> (JobPlan, tempfile::TempDir) {
     let out = tempfile::tempdir().unwrap();
-    let record = SessionRecord::new("T", "L", "R", oracles);
     std::fs::create_dir_all(session_dir(out.path(), "Eq_L_R.ec")).unwrap();
-    std::fs::write(
-        session_record_path(out.path(), "Eq_L_R.ec"),
-        record.to_json(),
-    )
-    .unwrap();
-    let plan = plan_job(&eq_report(), out.path(), options).unwrap();
+    for o in oracles {
+        let record = SessionRecord::new("T", "L", "R", vec![o.clone()]);
+        std::fs::write(record_of(out.path(), &o.name), record.to_json()).unwrap();
+    }
+    let plan = plan_job(&eq_report(), out.path(), options, &names()).unwrap();
     (plan, out)
 }
 
@@ -534,8 +544,34 @@ fn prior(plan: JobPlan) -> Option<SessionRecord> {
 #[test]
 fn without_a_record_a_job_proves_everything() {
     let out = tempfile::tempdir().unwrap();
-    let plan = plan_job(&eq_report(), out.path(), &TacticsOptions::default()).unwrap();
+    let plan = plan_job(&eq_report(), out.path(), &TacticsOptions::default(), &names()).unwrap();
     assert!(prior(plan).is_none());
+}
+
+#[test]
+fn an_oracle_without_a_record_makes_the_equivalence_partial() {
+    let (plan, _out) = plan_of(vec![done("A"), done("B")], &TacticsOptions::default());
+    let record = prior(plan).expect("resumed, not skipped");
+    assert_eq!(record.oracle("C").unwrap().status, OracleStatus::Pending);
+    assert!(!record.complete);
+}
+
+#[test]
+fn a_job_resumes_from_an_old_whole_equivalence_record_split_on_first_use() {
+    let out = tempfile::tempdir().unwrap();
+    let whole = SessionRecord::new("T", "L", "R", partial());
+    let path = crate::easycrypt::job::equivalence_record_path(out.path(), "Eq_L_R.ec");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, whole.to_json()).unwrap();
+    let plan = plan_job(&eq_report(), out.path(), &TacticsOptions::default(), &names()).unwrap();
+    let record = prior(plan).expect("resumed");
+    assert!(record.oracle("A").unwrap().is_resumable());
+    assert_eq!(record.oracle("B").unwrap().status, OracleStatus::Interrupted);
+    // each oracle now has its own record; the old one stays
+    for o in ["A", "B", "C"] {
+        assert!(record_of(out.path(), o).exists(), "{o}");
+    }
+    assert!(path.exists());
 }
 
 #[test]
@@ -558,7 +594,9 @@ fn a_complete_record_skips_and_force_proves_from_scratch_and_deletes_it() {
     };
     let (plan, out) = plan_of(all, &forced);
     assert!(prior(plan).is_none());
-    assert!(!session_record_path(out.path(), "Eq_L_R.ec").exists());
+    for o in ["A", "B", "C"] {
+        assert!(!record_of(out.path(), o).exists(), "{o}");
+    }
 }
 
 #[test]
@@ -593,8 +631,9 @@ fn force_with_an_oracle_reproves_that_oracle_alone_and_keeps_the_rest() {
     assert!(record.oracle("A").unwrap().is_resumable());
     assert!(record.oracle("C").unwrap().is_resumable());
     assert!(!record.complete);
-    // the record on disk stays until the job's first checkpoint replaces it
-    assert!(session_record_path(out.path(), "Eq_L_R.ec").exists());
+    // its record goes, so a crash cannot leave a done record beside a restarted file
+    assert!(!record_of(out.path(), "B").exists());
+    assert!(record_of(out.path(), "A").exists());
 }
 
 #[test]
@@ -602,17 +641,17 @@ fn a_version_1_record_cannot_be_resumed_from() {
     let out = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(session_dir(out.path(), "Eq_L_R.ec")).unwrap();
     std::fs::write(
-        session_record_path(out.path(), "Eq_L_R.ec"),
+        crate::easycrypt::job::equivalence_record_path(out.path(), "Eq_L_R.ec"),
         r#"{"version": 1, "theorem": "T", "left": "L", "right": "R", "complete": false,
             "oracles": [{"name": "A", "status": "done"}, {"name": "B", "status": "pending"}]}"#,
     )
     .unwrap();
-    let plan = plan_job(&eq_report(), out.path(), &TacticsOptions::default()).unwrap();
+    let plan = plan_job(&eq_report(), out.path(), &TacticsOptions::default(), &names()).unwrap();
     let record = prior(plan).expect("read");
     assert_eq!(record.version, 1);
     assert!(OracleTactics::from_record(record.oracle("A").unwrap()).is_none());
     // a done oracle without a script is not skipped by `--oracle` either: it is proved again
-    let plan = plan_job(&eq_report(), out.path(), &oracle_option("A", false)).unwrap();
+    let plan = plan_job(&eq_report(), out.path(), &oracle_option("A", false), &names()).unwrap();
     assert!(prior(plan).is_some());
 }
 
@@ -718,20 +757,20 @@ fn an_unanswered_interrupt_is_its_own_line_in_the_report() {
         node: "N38".into(),
         signals: 6,
         waited: Duration::from_millis(30_200),
-        respawn: Some(Duration::from_millis(3_400)),
+        ended_job: false,
     };
     eq.unanswered = vec![u.clone()];
     let report = eq.render();
     assert!(
         report.contains(
             "\n    EasyCrypt left an interrupt unanswered at N38 (6 signals over 30 s); oracle \
-             sealed, EasyCrypt respawned (proof opened again in 3.4s)\n"
+             sealed, EasyCrypt given up, the next oracle gets a fresh one\n"
         ),
         "{report}"
     );
     assert!(!report.contains("interrupted:"), "not a Ctrl-C: {report}");
     // the third one ends the job, which says why, and is not a Ctrl-C
-    eq.unanswered = vec![u.clone(), u.clone(), Unanswered { respawn: None, ..u }];
+    eq.unanswered = vec![u.clone(), u.clone(), Unanswered { ended_job: true, ..u }];
     eq.interrupted = Some(Interrupted::Sealed {
         oracle: "O".into(),
         admits: 1,
@@ -739,7 +778,7 @@ fn an_unanswered_interrupt_is_its_own_line_in_the_report() {
     });
     eq.ended_early = Some("EasyCrypt left 3 interrupts unanswered".into());
     let report = eq.render();
-    assert!(report.contains("oracle sealed, EasyCrypt not respawned\n"), "{report}");
+    assert!(report.contains("oracle sealed, EasyCrypt not respawned, the job ends\n"), "{report}");
     assert!(
         report.contains(
             "ended early: sealed O with 1 admits at node N38: EasyCrypt left 3 interrupts unanswered\n"
@@ -756,7 +795,8 @@ fn an_unanswered_interrupt_is_its_own_line_in_the_report() {
     assert!(run.ended_early());
 }
 
-#[cfg(feature = "cvc5-lib")]
+/// The live tests: they skip unless `DOMINO_EASYCRYPT` names a `-json` EasyCrypt. Lockstep
+/// execution uses the native cvc5 with `cvc5-lib`, and the `cvc5` binary on `PATH` without it.
 mod live {
     use std::path::PathBuf;
 
@@ -764,7 +804,16 @@ mod live {
     use crate::easycrypt::check::{ok_or_reject, sentences_until_call};
     use crate::easycrypt::session::{json_binary_configured, split_sentences, Session};
     use crate::project::{DirectoryFiles, DirectoryProject};
-    use crate::util::smtsolver::cvc5lib::Cvc5LibBackend;
+
+    #[cfg(feature = "cvc5-lib")]
+    fn backend() -> crate::util::smtsolver::cvc5lib::Cvc5LibBackend {
+        crate::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, None)
+    }
+
+    #[cfg(not(feature = "cvc5-lib"))]
+    fn backend() -> crate::util::smtsolver::process::IncrementalCvc5Backend {
+        crate::util::smtsolver::process::IncrementalCvc5Backend
+    }
     use crate::writers::easycrypt::export::{export_theorem, write_files};
 
     /// The most `easycrypt compile` of one written file may take.
@@ -828,7 +877,10 @@ mod live {
     /// Reads the first equivalence's proof file and report at every tactics event: what a
     /// reader of the files sees while the run goes on.
     struct Capturing {
-        ec: PathBuf,
+        /// The theorem's output directory and the glue of the first equivalence.
+        out: PathBuf,
+        file: String,
+        /// The equivalence's progress folder: [`oracle_reports`] reads the reports under it.
         report: PathBuf,
         captures: std::rc::Rc<std::cell::RefCell<Vec<Capture>>>,
         /// Sets the flag at the first event whose name starts so, as a Ctrl-C would (story 34).
@@ -865,8 +917,8 @@ mod live {
             }
             self.captures.borrow_mut().push(Capture {
                 event,
-                ec: std::fs::read_to_string(&self.ec).unwrap(),
-                report: std::fs::read_to_string(&self.report).ok(),
+                ec: proof_text(&self.out, &self.file),
+                report: oracle_reports(&self.report),
             });
         }
     }
@@ -902,11 +954,11 @@ mod live {
         let proof_file = &exported.equivalences[0].proof_file;
         let captures = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let mut observer: Option<Box<dyn ExportObserver>> = Some(Box::new(Capturing {
-            ec: out.path().join(proof_file),
-            report: out.path().join(format!(
-                "progress/{}/report.txt",
-                proof_file.trim_end_matches(".ec")
-            )),
+            out: out.path().to_path_buf(),
+            file: proof_file.clone(),
+            report: out
+                .path()
+                .join(format!("progress/{}", proof_file.trim_end_matches(".ec"))),
             captures: captures.clone(),
             stop_at: stop_at.map(|at| {
                 let stop = options.stop.clone().expect("a run to stop has a stop flag");
@@ -918,7 +970,7 @@ mod live {
             &project,
             &exported,
             out.path(),
-            &Cvc5LibBackend::new(true, None),
+            &backend(),
             options,
             &mut || {
                 observer
@@ -934,12 +986,66 @@ mod live {
     /// The live page of the first equivalence: beside its transcript (story 36).
     fn page_path(result: &TheoremTactics) -> PathBuf {
         result.equivalences[0]
+            .oracles[0]
             .transcript
+            .as_ref()
+            .expect("a proved oracle")
             .with_file_name("index.html")
     }
 
+    /// The oracle lemma files of the first equivalence, in oracle order, one after another:
+    /// what the one proof file held before story 68.
     fn proof_file(result: &TheoremTactics, out: &Path) -> String {
-        std::fs::read_to_string(out.join(&result.equivalences[0].proof_file)).unwrap()
+        proof_text(out, &result.equivalences[0].proof_file)
+    }
+
+    /// The oracle lemma files the glue `file` joins, in its order.
+    fn oracle_files(out: &Path, file: &str) -> Vec<PathBuf> {
+        let glue = std::fs::read_to_string(out.join(file)).unwrap();
+        glue.lines()
+            .filter_map(|l| l.trim().strip_prefix("+ by conseq "))
+            .map(|rest| out.join(format!("{}.ec", rest.split([' ', '.']).next().unwrap())))
+            .collect()
+    }
+
+    /// The oracle files' text one after another; a file no job has created yet is its
+    /// untouched proof.
+    fn proof_text(out: &Path, file: &str) -> String {
+        oracle_files(out, file)
+            .iter()
+            .map(|f| std::fs::read_to_string(f).unwrap_or_else(|_| UNTOUCHED.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    impl EquivalenceTactics {
+        /// The transcript of the equivalence's one proved oracle; with more, their transcripts
+        /// one after another in a file beside them.
+        fn transcript(&self) -> PathBuf {
+            let paths: Vec<&PathBuf> =
+                self.oracles.iter().filter_map(|o| o.transcript.as_ref()).collect();
+            if let [one] = paths[..] {
+                return one.clone();
+            }
+            let dir = paths[0].parent().unwrap().parent().unwrap();
+            let all = dir.join("all-transcripts.jsonl");
+            let text: String = paths
+                .iter()
+                .map(|p| std::fs::read_to_string(p).unwrap())
+                .collect();
+            std::fs::write(&all, text).unwrap();
+            all
+        }
+    }
+
+    /// The record of the one oracle of the equivalence `file` that has one.
+    fn session_record_path(out: &Path, file: &str) -> PathBuf {
+        let dir = session_dir(out, file);
+        std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.to_string_lossy().ends_with(".record.json"))
+            .expect("an oracle record")
     }
 
     /// Story 40: the run says which node it is in before every sentence, and the transcript
@@ -961,7 +1067,7 @@ mod live {
         let total = walk[0].rsplit('/').next().unwrap();
         assert!(walk.iter().filter(|e| e.starts_with("node")).all(|e| e.ends_with(&format!("/{total}"))));
         let sentences = walk.iter().filter(|e| e.starts_with("sentence")).count();
-        let transcript = std::fs::read_to_string(&result.equivalences[0].transcript).unwrap();
+        let transcript = std::fs::read_to_string(result.equivalences[0].transcript()).unwrap();
         assert!(sentences >= result.equivalences[0].oracles[0].stats.closed);
         assert!(transcript.lines().count() >= 1);
     }
@@ -977,7 +1083,7 @@ mod live {
         };
         let oracle = &result.equivalences[0].oracles[0];
         assert_eq!(oracle.oracle, "UsefulOracle");
-        assert!(oracle.problem.is_none());
+        assert!(oracle.problem.is_none(), "{:?}", oracle.problem);
         assert!(oracle.stats.admits.is_empty(), "{}", result.render());
         let text = proof_file(&result, out.path());
         assert!(!text.contains("admit"), "{text}");
@@ -993,7 +1099,7 @@ mod live {
         assert_eq!(report, result.equivalences[0].render());
         assert!(report.contains("no admit"));
         // the transcript holds every sentence with EasyCrypt's answer
-        let transcript = std::fs::read_to_string(&result.equivalences[0].transcript).unwrap();
+        let transcript = std::fs::read_to_string(result.equivalences[0].transcript()).unwrap();
         assert!(transcript.lines().count() >= oracle.stats.closed);
         assert!(transcript.contains("\"sentence\":\"proc; inline.\""));
         // every sentence of the walk says which oracle and node it belongs to, and why
@@ -1048,7 +1154,8 @@ mod live {
             "if.",
             "seq 1 1 : (#pre /\\ rand{1} = rand{2}); 1: auto => />.",
             "rcondt{1} ^if; 1: auto => /#.",
-            "auto => /> &1 &2 *; smt().",
+            // the leaf (story 64): the exit path, then `auto`, then the goal opened
+            "auto => &1 &2 hpre.",
         ] {
             assert!(text.contains(tactic), "missing `{tactic}` in\n{text}");
         }
@@ -1089,12 +1196,12 @@ mod live {
         let mut session = Session::start(out).unwrap();
         let source = &exported.files[Path::new(file)];
         for sentence in sentences_until_call(file, source).unwrap() {
-            ok_or_reject(session.send(&sentence).unwrap(), file, &sentence).unwrap();
+            ok_or_reject(session.send(&sentence, Want::Full).unwrap(), file, &sentence).unwrap();
         }
         // the base case, then the oracle's goal is in front
         let base = &split_sentences(source)[sentences_until_call(file, source).unwrap().len()];
         assert_eq!(
-            session.send(base).unwrap().status,
+            session.send(base, Want::Status).unwrap().status,
             crate::easycrypt::json::Status::Ok
         );
         assert!(session.front().unwrap().concl.kind == "equivF");
@@ -1220,7 +1327,7 @@ mod live {
             |t: &TheoremTactics| stable_page(&std::fs::read_to_string(page_path(t)).unwrap());
         assert_eq!(page(&capped), page(&full));
         let size = |t: &TheoremTactics| {
-            std::fs::metadata(&t.equivalences[0].transcript)
+            std::fs::metadata(t.equivalences[0].transcript())
                 .unwrap()
                 .len()
         };
@@ -1230,9 +1337,9 @@ mod live {
             size(&capped),
             size(&full)
         );
-        let text = std::fs::read_to_string(&capped.equivalences[0].transcript).unwrap();
+        let text = std::fs::read_to_string(capped.equivalences[0].transcript()).unwrap();
         assert!(text.contains("\"concl_cut\":"));
-        assert!(!std::fs::read_to_string(&full.equivalences[0].transcript)
+        assert!(!std::fs::read_to_string(full.equivalences[0].transcript())
             .unwrap()
             .contains("\"concl_cut\":"));
     }
@@ -1315,18 +1422,35 @@ mod live {
             .count()
     }
 
-    /// The report's total of admits, and of those labelled `interrupted`.
+    /// The reports of the oracles under the equivalence's progress folder `dir`, in oracle
+    /// order (story 68: each oracle's report is written with its file); `None` when there is
+    /// none yet.
+    fn oracle_reports(dir: &Path) -> Option<String> {
+        let mut reports: Vec<PathBuf> = std::fs::read_dir(dir)
+            .ok()?
+            .map(|e| e.unwrap().path().join("report.txt"))
+            .filter(|p| p.exists())
+            .collect();
+        reports.sort();
+        let text: String = reports.iter().map(|p| std::fs::read_to_string(p).unwrap()).collect();
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// The report's total of admits (over every total line: one for each oracle's report), and
+    /// of those labelled `interrupted`.
     fn report_admits(report: &str) -> (usize, usize) {
-        let total_line = report
+        let total: usize = report
             .lines()
-            .find(|l| l.contains(" oracles, "))
-            .expect("the report's last line");
-        let total = total_line
-            .split(", ")
-            .find_map(|part| part.strip_suffix(" admits"))
-            .expect("an admit count")
-            .parse()
-            .unwrap();
+            .filter(|l| l.contains(" oracles, "))
+            .map(|total_line| {
+                total_line
+                    .split(", ")
+                    .find_map(|part| part.strip_suffix(" admits"))
+                    .expect("an admit count")
+                    .parse::<usize>()
+                    .unwrap()
+            })
+            .sum();
         let interrupted = report
             .lines()
             .filter_map(|l| l.split("interrupted ").nth(1))
@@ -1455,7 +1579,7 @@ mod live {
             .0;
         let eq = &result.equivalences[0];
         // the walk's sentences carry a note; the ones EasyCrypt accepted are the ones written
-        let transcript = std::fs::read_to_string(&eq.transcript).unwrap();
+        let transcript = std::fs::read_to_string(eq.transcript()).unwrap();
         let mut walked = 0;
         let mut rejected = 0;
         for line in transcript.lines() {
@@ -1589,7 +1713,7 @@ mod live {
             "{report}"
         );
         // nothing was sent for the stopped oracle: one `proc; inline.` after the `call`
-        let sent = sentences(&result.equivalences[0].transcript);
+        let sent = sentences(&result.equivalences[0].transcript());
         let call = sent.iter().position(|s| s.starts_with("call (")).unwrap();
         assert_eq!(
             sent[call..].iter().filter(|s| *s == "proc; inline.").count(),
@@ -1630,7 +1754,7 @@ mod live {
             &project,
             &exported,
             out,
-            &Cvc5LibBackend::new(true, None),
+            &backend(),
             options,
             &mut || Box::new(watching.take().unwrap_or(Watching { stop: None })),
         )
@@ -1675,13 +1799,27 @@ mod live {
         }
     }
 
+    /// The session folder of the first equivalence: [`read_record`] joins its oracles' records.
     fn record_path(result: &TheoremTactics, out: &Path) -> PathBuf {
-        let file = &result.equivalences[0].proof_file;
-        session_record_path(&out, file)
+        session_dir(out, &result.equivalences[0].proof_file)
     }
 
+    /// The record at `path`; for a session folder, its oracles' records joined in the glue's
+    /// order.
     fn read_record(path: &Path) -> SessionRecord {
-        SessionRecord::read(path).unwrap().expect("a record")
+        if !path.is_dir() {
+            return SessionRecord::read(path).unwrap().expect("a record");
+        }
+        let stem = path.file_name().unwrap().to_string_lossy().into_owned();
+        let out = path.parent().unwrap().parent().unwrap();
+        let mut records = Vec::new();
+        let mut names = Vec::new();
+        for file in oracle_files(out, &format!("{stem}.ec")) {
+            let oracle = file.file_stem().unwrap().to_string_lossy()[stem.len() + 1..].to_string();
+            records.extend(SessionRecord::read(&path.join(format!("{oracle}.record.json"))).unwrap());
+            names.push(oracle);
+        }
+        SessionRecord::join(&records, &names).expect("a record")
     }
 
     /// The first oracle proved, the second stopped in lockstep execution, as by Ctrl-C.
@@ -1725,7 +1863,7 @@ mod live {
         assert_eq!(resumed.admits_by_reason().len(), first.admits_by_reason().len());
         // not walked: one `proc; inline.` after the call (the other oracle's), the resumed
         // oracle's goal only got `admit.`
-        let sent = sentences(&eq.transcript);
+        let sent = sentences(&eq.transcript());
         let call = sent.iter().position(|s| s.starts_with("call (")).unwrap();
         assert_eq!(
             sent[call..].iter().filter(|s| *s == "proc; inline.").count(),
@@ -1882,13 +2020,13 @@ while :; do
   fi
   [ $after -ge 0 ] && after=$((after+1))
   s=$(printf '%s\n' "$line" | sed -e 's/^."sentence":"\(.*\)","want":"[a-z]*".$/\1/' -e 's/\\"/"/g' -e 's/\\\\/\\/g')
-  case "$s" in "call ("*) opened=1;; esac
+  case "$s" in "proof.") opened=1;; esac
   if [ $opened = 1 ] && [ "$s" = "proc; inline." ]; then
     n=$(($(cat '{walked}')+1))
     echo $n > '{walked}'
     case " {hang} " in *" $n "*) after=0;; *) after=-1;; esac
   fi
-  if [ $after -eq 4 ]; then
+  if [ $after -eq 6 ]; then
     trap '' INT
     while :; do sleep 1; done
   fi
@@ -1937,6 +2075,185 @@ wait $ec
         result
     }
 
+    // ------------------------------------------------------------------
+    // Story 68: oracle lemmas, proved in parallel
+    // ------------------------------------------------------------------
+
+    /// `project` exported to a fresh directory, and the project to prove it with.
+    fn exported_to(project: &str) -> (tempfile::TempDir, DirectoryFilesAndProject) {
+        let dir = PathBuf::from(project);
+        let files = Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
+        let project = DirectoryProject::load(dir, files).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let exported = export_theorem(project.get_theorem("Proof").unwrap(), &project).unwrap();
+        write_files(out.path(), &exported.files).unwrap();
+        (out, DirectoryFilesAndProject { project, exported })
+    }
+
+    struct DirectoryFilesAndProject {
+        project: DirectoryProject<'static>,
+        exported: crate::writers::easycrypt::export::ExportedTheorem,
+    }
+
+    impl DirectoryFilesAndProject {
+        fn prove(&self, out: &Path, options: &TacticsOptions) -> TheoremTactics {
+            let theorem = self.project.get_theorem("Proof").unwrap();
+            run_tactics(theorem, &self.project, &self.exported, out, &backend(), options).unwrap()
+        }
+    }
+
+    /// Every file under `dir`, relative, sorted.
+    fn files_under(dir: &Path) -> Vec<String> {
+        fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(root, &path, out);
+                } else {
+                    out.push(path.strip_prefix(root).unwrap().display().to_string());
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(dir, dir, &mut out);
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn two_proof_jobs_on_different_oracles_of_one_equivalence_both_finish_with_their_own_files() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let (out, p) = exported_to(FOUR_ORACLES);
+        let eq = p.exported.equivalences[0].clone();
+        let stem = eq.proof_file.trim_end_matches(".ec").to_string();
+        let [(a, a_file), (b, b_file), ..] = &eq.oracle_files[..] else {
+            panic!("four oracles: {:?}", eq.oracle_files);
+        };
+        let before = files_under(out.path());
+        let glue = std::fs::read_to_string(out.path().join(&eq.proof_file)).unwrap();
+        let (ra, rb) = std::thread::scope(|s| {
+            let ja = s.spawn(|| p.prove(out.path(), &oracle_option(a, false)));
+            let jb = s.spawn(|| p.prove(out.path(), &oracle_option(b, false)));
+            (ja.join().unwrap(), jb.join().unwrap())
+        });
+        for (r, oracle) in [(&ra, a), (&rb, b)] {
+            let names: Vec<&str> = r.oracles().map(|o| o.oracle.as_str()).collect();
+            assert_eq!(names, [oracle.as_str()], "{}", r.render());
+            assert_eq!(
+                r.equivalences[0].report_file,
+                format!("progress/{stem}/{oracle}/report.txt")
+            );
+        }
+        // the glue is translation's, and no job touched it
+        assert_eq!(std::fs::read_to_string(out.path().join(&eq.proof_file)).unwrap(), glue);
+        // what is new: each oracle's record, tree and progress folder, and nothing else of the
+        // equivalence (no report, no page, no lock left)
+        let new: Vec<String> = files_under(out.path())
+            .into_iter()
+            .filter(|f| !before.contains(f) && !f.starts_with("!debug!"))
+            .collect();
+        for f in &new {
+            let own = [a, b].iter().any(|o| {
+                f == &format!("session/{stem}/{o}.record.json")
+                    || f == &format!("session/{stem}/{o}.tree.json")
+                    || f.starts_with(&format!("progress/{stem}/{o}/"))
+            });
+            assert!(own, "{f} is no oracle's own file: {new:?}");
+        }
+        for o in [a, b] {
+            assert!(new.contains(&format!("session/{stem}/{o}.record.json")), "{new:?}");
+        }
+        // the oracle files are proved, and the whole compiles
+        for f in [a_file, b_file] {
+            let text = std::fs::read_to_string(out.path().join(f)).unwrap();
+            assert!(!text.contains(UNTOUCHED), "{text}");
+        }
+        compile(&crate::easycrypt::session::locate_binary(), out.path(), &eq.proof_file).unwrap();
+    }
+
+    /// An EasyCrypt that logs `start` and `end` lines to `log` around the real one.
+    fn logging_easycrypt(dir: &Path, log: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let real = crate::easycrypt::session::locate_binary();
+        let script = dir.join("logging-easycrypt");
+        std::fs::write(
+            &script,
+            format!(
+                // a session kills this script when it is dropped: a watcher logs the end of
+                // the real EasyCrypt, which exits when its input closes
+                "#!/bin/sh\necho start >> '{log}'\n'{real}' \"$@\" <&0 &\nec=$!\n\
+                 ( while kill -0 $ec 2>/dev/null; do sleep 0.05; done; echo end >> '{log}' ) \
+                 </dev/null >/dev/null 2>&1 &\nwait $ec\n",
+                log = log.display(),
+                real = real.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    #[test]
+    fn three_jobs_prove_three_oracles_at_once_and_the_report_keeps_oracle_order() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let fake = tempfile::tempdir().unwrap();
+        let log = fake.path().join("log");
+        let (out, p) = exported_to(FOUR_ORACLES);
+        let options = TacticsOptions {
+            jobs: 3,
+            ..TacticsOptions::default()
+        };
+        TEST_EASYCRYPT.with(|t| {
+            *t.borrow_mut() = Some(FakeEasyCrypt {
+                binary: logging_easycrypt(fake.path(), &log),
+                grace: Duration::from_millis(1_500),
+                resend: Duration::from_millis(250),
+            })
+        });
+        let result = p.prove(out.path(), &options);
+        TEST_EASYCRYPT.with(|t| t.borrow_mut().take());
+        // the watchers log each end within a moment
+        let began = Instant::now();
+        while began.elapsed() < Duration::from_secs(10) {
+            let text = std::fs::read_to_string(&log).unwrap();
+            if text.matches("start").count() == text.matches("end").count() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let (mut running, mut most, mut started) = (0, 0, 0);
+        for line in std::fs::read_to_string(&log).unwrap().lines() {
+            if line == "start" {
+                running += 1;
+                started += 1;
+            } else {
+                running -= 1;
+            }
+            most = most.max(running);
+        }
+        assert_eq!(started, 4, "one EasyCrypt for each oracle");
+        assert_eq!(most, 3, "three at once");
+        let eq = &result.equivalences[0];
+        let names: Vec<&str> = eq.oracles.iter().map(|o| o.oracle.as_str()).collect();
+        assert_eq!(names, ["First", "Second", "Third", "Fourth"]);
+        let report = std::fs::read_to_string(out.path().join(&eq.report_file)).unwrap();
+        let at = |o: &str| report.find(&format!("  {o}: lockstep")).expect(o);
+        assert!(at("First") < at("Second") && at("Second") < at("Third") && at("Third") < at("Fourth"));
+        // the page of the equivalence: one row for each oracle, none running any more
+        let page = equivalence_page(&result, out.path());
+        for o in names {
+            assert!(page.contains(&format!("<a href=\"{o}/index.html\">{o}</a>")), "{page}");
+        }
+        assert!(!page.contains("running") && !page.contains("http-equiv"), "{page}");
+        compile(&crate::easycrypt::session::locate_binary(), out.path(), &eq.proof_file).unwrap();
+    }
+
     fn interrupted_admits(o: &OracleTactics) -> usize {
         o.stats
             .admits
@@ -1973,8 +2290,14 @@ wait $ec
             .collect()
     }
 
+    /// The page of the equivalence (story 68): one row for each oracle.
+    fn equivalence_page(result: &TheoremTactics, out: &Path) -> String {
+        let stem = result.equivalences[0].proof_file.trim_end_matches(".ec").to_string();
+        std::fs::read_to_string(out.join(format!("progress/{stem}/index.html"))).unwrap()
+    }
+
     #[test]
-    fn an_unanswered_interrupt_seals_the_oracle_and_a_respawned_easycrypt_proves_the_rest() {
+    fn an_unanswered_interrupt_seals_the_oracle_and_the_next_oracle_has_a_fresh_easycrypt() {
         // the second oracle's first sentence at N0 goes unanswered
         let Some((result, out, _)) = run_unanswered(&[2], None) else {
             return;
@@ -1988,31 +2311,31 @@ wait $ec
         assert!(interrupted_admits(&eq.oracles[1]) > 0, "{}", eq.render());
         assert_eq!(eq.oracles[1].stats.admits.len(), interrupted_admits(&eq.oracles[1]));
         for o in &eq.oracles[2..] {
-            assert_eq!(o.stats.admits.len(), 0, "proved after the respawn: {}", eq.render());
+            assert_eq!(o.stats.admits.len(), 0, "proved after it: {}", eq.render());
             assert!(o.stats.closed > 0);
         }
-        // the unanswered interrupt, and the respawn
         let [u] = eq.unanswered.as_slice() else {
             panic!("one unanswered interrupt: {}", eq.render());
         };
-        assert_eq!((u.oracle.as_str(), u.node.as_str(), u.signals), ("Second", "N0", 6));
-        assert!(u.respawn.is_some());
+        assert_eq!((u.oracle.as_str(), u.signals), ("Second", 6));
+        assert!(!u.ended_job);
         let report = std::fs::read_to_string(out.path().join(&eq.report_file)).unwrap();
         assert!(
-            report.contains(
-                "    EasyCrypt left an interrupt unanswered at N0 (6 signals over 1 s); oracle \
-                 sealed, EasyCrypt respawned (proof opened again in "
-            ),
+            report.contains(&format!(
+                "    EasyCrypt left an interrupt unanswered at {} (6 signals over 1 s); oracle \
+                 sealed, EasyCrypt given up, the next oracle gets a fresh one",
+                u.node
+            )),
             "{report}"
         );
         assert!(!report.contains("interrupted:"), "not a Ctrl-C: {report}");
-        // the respawn and the sentences sent again are in the sealed oracle's time by role
-        let second = report.split("  Second:").nth(1).unwrap();
-        assert!(second.contains("      respawns                1 "), "{report}");
-        assert!(second.contains("      resume "), "{report}");
-        let page = std::fs::read_to_string(page_path(&result)).unwrap();
-        assert!(page.contains("EasyCrypt left an interrupt unanswered at N0"), "{page}");
-        assert!(page.contains("tactics (done)"));
+        let second_page = eq.oracles[1]
+            .transcript
+            .as_ref()
+            .unwrap()
+            .with_file_name("index.html");
+        let page = std::fs::read_to_string(second_page).unwrap();
+        assert!(page.contains("EasyCrypt left an interrupt unanswered at "), "{page}");
         // the record: the sealed oracle is not done, so the next job resumes it
         let record = read_record(&record_path(&result, out.path()));
         assert!(!record.complete);
@@ -2021,22 +2344,11 @@ wait $ec
             statuses(&record),
             status_list(&[("First", Done), ("Second", Sealed), ("Third", Done), ("Fourth", Done)])
         );
-        // the transcript: the fresh EasyCrypt opens the proof again and admits the oracles in
-        // the file, then proves the rest; its records follow the first one's in the same file
-        let sent = tagged_sentences(&eq.transcript);
-        let fresh: Vec<&str> = sent
-            .iter()
-            .filter(|(tag, _)| tag == &format!("{} (respawn 1)", eq.proof_file))
-            .map(|(_, s)| s.as_str())
-            .collect();
-        let call = fresh.iter().position(|s| s.starts_with("call (")).unwrap();
-        assert!(fresh[call + 1].starts_with("auto => />; smt("), "the base case: {fresh:?}");
-        assert_eq!(fresh[call + 2..call + 4], ["admit.", "admit."], "{fresh:?}");
-        assert_eq!(fresh[call + 4], "proc; inline.");
-        // after the `call`: the two oracles walked
-        assert_eq!(fresh[call..].iter().filter(|s| **s == "proc; inline.").count(), 2);
-        let first_fresh = sent.iter().position(|(tag, _)| tag.contains("respawn")).unwrap();
-        assert!(sent[first_fresh..].iter().all(|(tag, _)| tag.contains("respawn 1")));
+        // each oracle has its own EasyCrypt: its transcript opens its own lemma
+        for o in &eq.oracles {
+            let sent = tagged_sentences(o.transcript.as_ref().unwrap());
+            assert!(sent.iter().all(|(tag, _)| tag.ends_with(&format!("_{}.ec", o.oracle))));
+        }
         // the partial proof compiles (the test compiles, never the run: ADR 0005)
         let text = proof_file(&result, out.path());
         assert_eq!(text.matches(UNTOUCHED).count(), 0, "{text}");
@@ -2059,8 +2371,8 @@ wait $ec
         let names: Vec<&str> = eq.oracles.iter().map(|o| o.oracle.as_str()).collect();
         assert_eq!(names, ["First", "Second", "Third"], "{}", eq.render());
         assert!(eq.oracles.iter().all(|o| interrupted_admits(o) > 0));
-        let respawned: Vec<bool> = eq.unanswered.iter().map(|u| u.respawn.is_some()).collect();
-        assert_eq!(respawned, [true, true, false]);
+        let ended: Vec<bool> = eq.unanswered.iter().map(|u| u.ended_job).collect();
+        assert_eq!(ended, [false, false, true]);
         let Some(Interrupted::Sealed { oracle, node, .. }) = &eq.interrupted else {
             panic!("sealed: {:?}", eq.interrupted);
         };
@@ -2076,8 +2388,8 @@ wait $ec
             "{report}"
         );
         assert!(report.contains(why), "{report}");
-        let page = std::fs::read_to_string(page_path(&result)).unwrap();
-        assert!(page.contains("tactics (ended early)"), "{page}");
+        let page = equivalence_page(&result, out.path());
+        assert!(page.contains("ended early: "), "{page}");
         assert!(!page.contains("Ctrl-C"));
         let record = read_record(&record_path(&result, out.path()));
         use OracleStatus::{Interrupted as Sealed, Pending};
@@ -2095,9 +2407,9 @@ wait $ec
     }
 
     #[test]
-    fn a_ctrl_c_while_respawning_stops_the_job_as_a_ctrl_c() {
+    fn a_ctrl_c_after_an_unanswered_interrupt_stops_the_job_as_a_ctrl_c() {
         // the first goal left is the walk unwinding from the unanswered sentence at N0 of the
-        // first oracle: the stop comes after the seal, before the fresh EasyCrypt
+        // first oracle: the stop comes after the seal, before the next oracle starts
         let Some((result, out, _)) = run_unanswered(&[1], Some("goal N0")) else {
             return;
         };
@@ -2110,7 +2422,7 @@ wait $ec
         };
         assert!(interrupted_admits(first) > 0);
         // nothing of a fresh EasyCrypt was sent
-        let sent = tagged_sentences(&eq.transcript);
+        let sent = tagged_sentences(&eq.transcript());
         assert!(sent.iter().all(|(tag, _)| !tag.contains("respawn")), "{sent:?}");
         let record = read_record(&record_path(&result, out.path()));
         use OracleStatus::{Interrupted as Sealed, Pending};
@@ -2123,8 +2435,8 @@ wait $ec
                 ("Fourth", Pending)
             ])
         );
-        let page = std::fs::read_to_string(page_path(&result)).unwrap();
-        assert!(page.contains("tactics (interrupted)"));
+        let page = equivalence_page(&result, out.path());
+        assert!(page.contains("interrupted: no oracle was in flight"), "{page}");
     }
 
     // ------------------------------------------------------------------
@@ -2254,11 +2566,14 @@ wait $ec
             entry.closed.len()
         );
         // the transcript says which node each `admit.` keeps
-        let transcript = std::fs::read_to_string(&trust.equivalences[0].transcript).unwrap();
+        let transcript = std::fs::read_to_string(trust.equivalences[0].transcript()).unwrap();
         let kept_in: Vec<String> = transcript
             .lines()
             .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
             .filter(|r| r["ctx"]["role"] == "resume")
+            // the pragma that makes the next answer carry every goal (story 61) is no kept node
+            // and event records (an interrupt under load) have no sentence
+            .filter(|r| !r["sentence"].as_str().unwrap_or("pragma ").starts_with("pragma "))
             .map(|r| {
                 let c = &r["ctx"];
                 let sentence = r["sentence"].as_str().unwrap();
@@ -2328,7 +2643,7 @@ wait $ec
             return;
         };
         let file = first_run.equivalences[0].proof_file.clone();
-        let record = session_record_path(&out.path(), &file);
+        let record = session_record_path(out.path(), &file);
         // N1's script as two sentences, the first of which closes its goal: a stop between them
         // finds one goal fewer in the session than the script, which has neither, accounts for
         edit_json(&record, |r| {
@@ -2399,7 +2714,9 @@ wait $ec
         let eq = &first_run.equivalences[0];
         let stem = eq.proof_file.trim_end_matches(".ec");
         let session = out.path().join("session").join(stem);
-        assert!(session.join("record.json").exists());
+        // story 68: one record for each oracle
+        assert!(session.join("Branch.record.json").exists());
+        assert!(!session.join("record.json").exists());
         assert!(session.join("Branch.tree.json").exists());
         assert_eq!(eq.report_file, format!("progress/{stem}/report.txt"));
         assert!(out.path().join(&eq.report_file).exists());
@@ -2465,14 +2782,14 @@ wait $ec
         let third = copy_export(out.path());
         // no tree file
         let file = &first_run.equivalences[0].proof_file;
-        std::fs::remove_file(saved_tree_path(&out.path(), file, "Branch")).unwrap();
+        std::fs::remove_file(saved_tree_path(out.path(), file, "Branch")).unwrap();
         walk_events();
         let result = run_again_on(TWO_BRANCHES, out.path(), &resume_with(ResumeMode::Trust));
         assert!(walk_events().contains(&"lockstep Branch".to_string()));
         assert_eq!(the_oracle(&result).resumed_at, None);
-        assert!(saved_tree_path(&out.path(), file, "Branch").exists());
+        assert!(saved_tree_path(out.path(), file, "Branch").exists());
         // a version 2 record has no closed nodes
-        edit_json(&session_record_path(&other.path(), file), |r| {
+        edit_json(&session_record_path(other.path(), file), |r| {
             r["version"] = 2.into();
             for o in r["oracles"].as_array_mut().unwrap() {
                 o.as_object_mut().unwrap().remove("closed");
@@ -2486,8 +2803,8 @@ wait $ec
         assert!(record.complete);
         // a tree written by a later lockstep execution than the closed nodes were proved on (a
         // job killed between writing the tree and the record)
-        let record = session_record_path(&third.path(), file);
-        let saved = SavedTree::read(&saved_tree_path(&third.path(), file, "Branch"))
+        let record = session_record_path(third.path(), file);
+        let saved = SavedTree::read(&saved_tree_path(third.path(), file, "Branch"))
             .unwrap()
             .expect("a tree");
         assert_eq!(read_record(&record).oracles[0].tree_id.as_ref(), Some(&saved.id));
@@ -2568,7 +2885,7 @@ wait $ec
             return;
         };
         let file = &first_run.equivalences[0].proof_file;
-        edit_json(&session_record_path(&out.path(), file), |r| {
+        edit_json(&session_record_path(out.path(), file), |r| {
             r["oracles"][0]["closed"][0]["script"][0]["sentence"] = "sp 9 9.".into();
         });
         walk_events();

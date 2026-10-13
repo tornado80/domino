@@ -49,6 +49,8 @@ pub enum CheckError {
     },
     #[error("{file} has no `call (…); last first.` sentence")]
     NoCallSentence { file: String },
+    #[error("{file} has no `proof.` sentence")]
+    NoProofSentence { file: String },
     #[error("the export has no file {file}")]
     MissingFile { file: String },
     #[error("the theorem has no oracle `{oracle}` in equivalence {file}")]
@@ -170,6 +172,22 @@ pub(crate) fn sentences_until_call(file: &str, source: &str) -> Result<Vec<Strin
         }
     }
     Err(CheckError::NoCallSentence {
+        file: file.to_string(),
+    })
+}
+
+/// The sentences of the oracle lemma file `file` up to and including `proof.` (story 68): the
+/// oracle's goal is in front after them.
+pub(crate) fn sentences_until_proof(file: &str, source: &str) -> Result<Vec<String>, CheckError> {
+    let mut out = Vec::new();
+    for sentence in split_sentences(source) {
+        let done = sentence == "proof.";
+        out.push(sentence);
+        if done {
+            return Ok(out);
+        }
+    }
+    Err(CheckError::NoProofSentence {
         file: file.to_string(),
     })
 }

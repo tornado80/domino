@@ -68,6 +68,8 @@ pub enum EcItem {
     },
     Module(EcModule),
     Section(EcSection),
+    /// A lemma outside any section: an oracle lemma (story 68), which names no adversary.
+    Lemma(EcLemma),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -219,6 +221,15 @@ pub enum EcExpr {
     /// precondition (story 13, [`ProofLine::ByequivPrecondition`]); a
     /// self-delimited primitive, atom precedence like every other one here.
     GlobEq(String),
+    /// `equiv[left ~ right : ={arg} /\ inv ==> ={res} /\ inv]`: the goal the `call (: inv)`
+    /// rule leaves for one oracle, and the statement of its oracle lemma (story 68). `left` and
+    /// `right` are the two procedures' qualified paths. Renders over several lines, `inv` laid
+    /// out as in the `call`.
+    OracleEquiv {
+        left: String,
+        right: String,
+        inv: Box<EcExpr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

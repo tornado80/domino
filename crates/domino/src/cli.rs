@@ -173,11 +173,17 @@ pub(crate) struct EcProve {
     /// one after another in this process; to run them at once start one process each.
     #[clap(long)]
     pub(crate) proofstep: Option<usize>,
-    /// Only this exported oracle; the rest keep what the session record holds for them, or
-    /// `+ proc; inline. admit.`.
+    /// Only this exported oracle; the rest keep what their session records hold, or
+    /// `+ proc; inline. admit.`. Each oracle has its own lock, so jobs on different oracles of
+    /// one equivalence can run at once.
     #[clap(long)]
     pub(crate) oracle: Option<String>,
-    /// Discard the equivalence's session record and prove it again from the skeleton (with
+    /// How many oracles of an equivalence are proved at once, each in an EasyCrypt process of
+    /// its own (story 68). Each worker has its own page and transcript under
+    /// `progress/Eq_<L>_<R>/<O>/`.
+    #[clap(long, default_value_t = 1)]
+    pub(crate) jobs: usize,
+    /// Discard the equivalence's session records and prove it again from the skeleton (with
     /// `--oracle O`: prove `O` again, keeping the other oracles' proofs). Without it a complete
     /// record skips the equivalence and a partial one is resumed: the oracles it holds are not
     /// proved again. Never rewrites a translation file: a stale one is fixed by
@@ -204,7 +210,7 @@ pub(crate) struct EcProve {
     /// which is the solver transcript of `domino debug`/`prove`.
     #[clap(long, value_enum, default_value_t = EcTranscriptArg::Capped)]
     pub(crate) ec_transcript: EcTranscriptArg,
-    /// When `Eq_*.ec` and its report are rewritten. The file on disk always holds what has been
+    /// When an oracle lemma file `Eq_<L>_<R>_<O>.ec` and its report are rewritten. The file on disk always holds what has been
     /// proved so far: `node` also writes after every joint node, `tactic` (the default) after
     /// every accepted sentence, the oracle in flight sealed (its open goals admitted, labelled
     /// `interrupted`).

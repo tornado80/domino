@@ -199,7 +199,6 @@ pub(super) struct EqRec {
     pub oracles: Vec<OracleRec>,
     /// Sentences outside any oracle: the proof's opening, the base case, goals not asked for.
     pub setup_steps: usize,
-    pub base_case_admitted: bool,
     pub report_file: Option<String>,
     pub finished: bool,
 }
@@ -357,7 +356,6 @@ impl LiveHandle {
                 })
                 .collect(),
             setup_steps: 0,
-            base_case_admitted: false,
             report_file: None,
             finished: false,
         });
@@ -630,7 +628,6 @@ impl LiveHandle {
     pub fn equivalence_finished(&self, result: &EquivalenceTactics) {
         let mut live = self.0.borrow_mut();
         let Some(eq) = live.cur_eq else { return };
-        live.eqs[eq].base_case_admitted = result.base_case_admitted;
         live.eqs[eq].report_file = Some(result.report_file.clone());
         live.eqs[eq].finished = true;
         live.cur_oracle = None;

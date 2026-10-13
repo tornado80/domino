@@ -20,7 +20,7 @@
 //! precisely *because* nothing here writes, and re-appears as
 //! [`write_files`]'s own parameter instead.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::gamehops::GameHop;
@@ -51,7 +51,11 @@ pub struct EquivalenceReport {
     pub left_name: String,
     pub right_name: String,
     pub invariants_file: String,
+    /// The glue, `Eq_<L>_<R>.ec`: a translation file (story 68).
     pub proof_file: String,
+    /// `(exported oracle, Eq_<L>_<R>_<O>.ec)` for each oracle lemma, in the game interface's
+    /// order: the files the proof jobs own.
+    pub oracle_files: Vec<(String, String)>,
     pub oracle_count: usize,
     pub admit_count: usize,
     pub oracle_set_mismatch: Option<String>,
@@ -245,6 +249,12 @@ pub fn export_theorem_observed(
             right_name: ef.proof.right_name.clone(),
             invariants_file: ef.invariants.file_name.clone(),
             proof_file: ef.proof.file_name.clone(),
+            oracle_files: ef
+                .proof
+                .oracle_files
+                .iter()
+                .map(|o| (o.oracle.clone(), o.file_name.clone()))
+                .collect(),
             oracle_count: ef.proof.oracle_count,
             admit_count: ef.proof.admit_count,
             oracle_set_mismatch: ef.proof.oracle_set_mismatch.clone(),
@@ -252,6 +262,9 @@ pub fn export_theorem_observed(
             helpers: ef.invariants.helpers.clone(),
         });
     }
+
+    // after every other file: an oracle file may collide with any of them
+    insert_oracle_files(&mut files, &equivalence_files)?;
 
     if let Some(file) = files
         .keys()
@@ -272,6 +285,38 @@ pub fn export_theorem_observed(
         randomness_mapping_oracles,
         equivalences,
     })
+}
+
+/// Adds each equivalence's oracle lemma files to `files`, which holds every other file of the
+/// export. The **name rule** (story 68): an oracle file whose name, ignoring case (the file
+/// system may), is already taken, by another file of the export or by another oracle's file,
+/// is [`EcExportError::OracleFileCollision`], which names both.
+fn insert_oracle_files(
+    files: &mut BTreeMap<PathBuf, String>,
+    equivalence_files: &[super::proof::EquivalenceFiles],
+) -> Result<(), EcExportError> {
+    let mut taken: HashMap<String, String> = files
+        .keys()
+        .map(|rel| {
+            let name = rel.display().to_string();
+            (name.to_lowercase(), format!("the file `{name}` of the export"))
+        })
+        .collect();
+    for ef in equivalence_files {
+        let equivalence = ef.proof.file_name.trim_end_matches(".ec");
+        for o in &ef.proof.oracle_files {
+            let owner = format!("oracle `{}` of `{equivalence}`", o.oracle);
+            if let Some(other) = taken.insert(o.file_name.to_lowercase(), owner.clone()) {
+                return Err(EcExportError::OracleFileCollision {
+                    file: o.file_name.clone(),
+                    owner,
+                    other,
+                });
+            }
+            files.insert(PathBuf::from(&o.file_name), render_file(&o.file));
+        }
+    }
+    Ok(())
 }
 
 /// Writes every entry of `exported.files` under `out_dir`, flat (story 10
@@ -352,6 +397,9 @@ mod tests {
         }
         for eq in &exported.equivalences {
             compile(&base, &format!("{base}/{}", eq.invariants_file));
+            for (_, file) in &eq.oracle_files {
+                compile(&base, &format!("{base}/{file}"));
+            }
             compile(&base, &format!("{base}/{}", eq.proof_file));
         }
         std::fs::remove_dir_all(&tmp).unwrap();
@@ -640,7 +688,7 @@ mod tests {
         let n = exported.files.len();
         assert_eq!(rec.0.first().unwrap(), &format!("phase write {n}"));
         assert_eq!(rec.0.iter().filter(|e| e.starts_with("item write ")).count(), n);
-        assert!(rec.0.contains(&"item write 7 Proof/Interfaces.ec".to_string()), "{:?}", rec.0);
+        assert!(rec.0.contains(&"item write 8 Proof/Interfaces.ec".to_string()), "{:?}", rec.0);
         assert_eq!(rec.0[rec.0.len() - 2], "end write");
         assert_eq!(rec.0.last().unwrap(), &format!("finished {n}"));
         for (rel, contents) in &exported.files {
@@ -700,6 +748,74 @@ mod tests {
         assert_eq!(first, exported.files);
 
         std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// `hello-world` with every `UsefulOracle` renamed to `oracle`, in a scratch directory.
+    fn hello_world_with_oracle(oracle: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let from = Path::new("example-projects/hello-world");
+        for entry in walkdir_files(from) {
+            let to = dir.path().join(entry.strip_prefix(from).unwrap());
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            let text = std::fs::read_to_string(&entry).unwrap();
+            std::fs::write(to, text.replace("UsefulOracle", oracle)).unwrap();
+        }
+        dir
+    }
+
+    fn walkdir_files(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                out.extend(walkdir_files(&path));
+            } else {
+                out.push(path);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn each_oracle_has_a_lemma_file_and_the_glue_closes_it_with_conseq() {
+        let exported = export("example-projects/hello-world", "Proof").unwrap();
+        let eq = &exported.equivalences[0];
+        let file = "Eq_medium_composition_small_composition_UsefulOracle.ec";
+        assert_eq!(eq.oracle_files, vec![("UsefulOracle".to_string(), file.to_string())]);
+        let oracle = &exported.files[Path::new(file)];
+        assert!(oracle.contains(
+            "lemma Eq_medium_composition_small_composition_UsefulOracle : \
+             equiv[Comp_MediumComposition.Game_MediumComposition.d_UsefulOracle ~ \
+             Comp_SmallComposition.Game_SmallComposition.d_UsefulOracle :\n      ={arg} /\\ inv"
+        ));
+        assert!(oracle.contains("==> ={res} /\\ inv"));
+        assert!(oracle.contains("(* d_UsefulOracle *)\n+ proc; inline. admit.\nqed."));
+        assert!(!oracle.contains("section"));
+        let glue = &exported.files[Path::new(&eq.proof_file)];
+        assert!(glue.contains(
+            "require import Eq_medium_composition_small_composition_UsefulOracle."
+        ));
+        assert!(glue.contains(
+            "(* d_UsefulOracle *)\n+ by conseq Eq_medium_composition_small_composition_UsefulOracle => /#."
+        ));
+        assert!(!glue.contains("admit"));
+    }
+
+    #[test]
+    fn the_name_rule_rejects_an_oracle_called_invariants_and_names_both_files() {
+        let dir = hello_world_with_oracle("Invariants");
+        let err = export(dir.path().to_str().unwrap(), "Proof").unwrap_err();
+        assert!(
+            matches!(&err, EcExportError::OracleFileCollision { file, .. }
+                if file == "Eq_medium_composition_small_composition_Invariants.ec"),
+            "{err}"
+        );
+        let message = err.to_string();
+        assert!(message.contains("oracle `Invariants` of `Eq_medium_composition_small_composition`"), "{message}");
+        assert!(
+            message.contains("the file `Eq_medium_composition_small_composition_Invariants.ec` of the export"),
+            "{message}"
+        );
     }
 
     // --- full-tree compile, dependency order (skips without `easycrypt`) ---
