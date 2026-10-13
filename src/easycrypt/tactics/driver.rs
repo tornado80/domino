@@ -490,9 +490,9 @@ const BASE_SMT_LEMMAS: [&str; 3] = ["get_setE", "mem_set", "emptyE"];
 /// unfolded.
 const FALLBACKS: usize = 4;
 
-/// The length of the part fallback sequence ([`Prover::atom`]); story 66 adds the key case
-/// split as the fourth.
-const PART_FALLBACKS: usize = 3;
+/// The length of the part fallback sequence ([`Prover::atom`]); the fourth is the key case
+/// split.
+const PART_FALLBACKS: usize = 4;
 
 /// Timeouts of the prover.
 #[derive(Debug, Clone, Copy)]
@@ -632,6 +632,9 @@ pub(super) struct Prover<'a> {
     /// The premises the leaf procedure introduced on the way to the front goal, in the order of
     /// introduction (story 65): part fallback 3 moves them back into the goal.
     pub premises: Vec<String>,
+    /// The binders the leaf procedure introduced on the way to the front goal (story 66): the
+    /// key case split splits on them.
+    pub binders: Vec<String>,
     /// The outcome of the last sentence sent ([`SmtOutcome::of_answer`]).
     pub last_smt: Option<SmtOutcome>,
     /// The outcome of the last part fallback, for the next admit's comment; the admit takes it.
@@ -1688,6 +1691,7 @@ impl Prover<'_> {
             return Ok(());
         }
         self.premises = vec!["hpre".to_string()];
+        self.binders.clear();
         self.deadline = leaf_deadline(self.leaf_budget, std::time::Instant::now());
         let result = self.as_role(Role::Split, |p| p.open_part(node, pair, Part::Whole));
         self.deadline = None;
@@ -1807,7 +1811,13 @@ impl Prover<'_> {
     /// One step of [`Self::open_part`] that keeps one goal: whether EasyCrypt accepted it.
     fn open_step(&mut self, step: Step) -> R<bool> {
         match step {
-            Step::Intro(names) => self.send(&format!("move => {names} /=.")),
+            Step::Intro(names) => {
+                let sent = self.send(&format!("move => {names} /=."))?;
+                if sent {
+                    self.binders.extend(names.split_whitespace().map(String::from));
+                }
+                Ok(sent)
+            }
             Step::Premise(name) => {
                 let sent = self.send(&format!("move => {name} /=."))?;
                 if sent {
@@ -1830,19 +1840,21 @@ impl Prover<'_> {
             return self.atom(node, pair, part);
         }
         // a premise a bullet introduces is that bullet's own
-        let premises = self.premises.len();
+        let (premises, binders) = (self.premises.len(), self.binders.len());
         for _ in 0..=self.count() - before {
             let same = part.clone();
             self.bullet(|p| p.open_part(node, pair, same))?;
             self.premises.truncate(premises);
+            self.binders.truncate(binders);
         }
         Ok(())
     }
 
     /// The part fallback sequence (story 65): `smt().`, `smt(<hints>).`, then the premises the
     /// leaf procedure introduced moved back and crushed (`move: <premises> => />; smt(<hints>).`,
-    /// skipped when there are none). Each is one sentence. Else an admit that keeps the
-    /// unfoldings and introductions already made, with the last fallback's outcome.
+    /// skipped when there are none), then the key case split ([`Self::key_case_split`]). Else
+    /// an admit that keeps the unfoldings and introductions already made, with the last
+    /// fallback's outcome.
     fn atom(&mut self, node: usize, pair: Option<&PairRecord>, part: &Part) -> R<()> {
         let hints = self.hint_sentence();
         let mut fallbacks = vec!["smt().".to_string(), hints.clone()];
@@ -1869,8 +1881,71 @@ impl Prover<'_> {
             }
             outcome = self.last_smt;
         }
-        self.admit_smt = outcome;
+        if self.key_case_split(part, &hints)? {
+            return Ok(());
+        }
+        self.admit_smt = self.last_smt.or(outcome);
         self.admit_part(node, pair, part, "")
+    }
+
+    /// Part fallback 4 (story 66): `case (b = k) => [->|?].` on each pair of
+    /// [`goals::key_pairs`] in turn, each case a bullet, and `hints` at the end of each case.
+    /// Kept only if every case closes; else everything is undone. It does not run (`false`,
+    /// `last_smt` cleared) with no pair or more than [`goals::MAX_KEY_PAIRS`]; after it ran,
+    /// `last_smt` is the outcome of its last `smt`.
+    fn key_case_split(&mut self, part: &Part, hints: &str) -> R<bool> {
+        self.last_smt = None;
+        let pairs = self
+            .front()
+            .map(|g| goals::key_pairs(&g.concl, &self.binders))
+            .unwrap_or_default();
+        if pairs.is_empty() || pairs.len() > goals::MAX_KEY_PAIRS {
+            return Ok(false);
+        }
+        let role = Role::PartFallback {
+            n: PART_FALLBACKS,
+            part: part.claim_label(),
+        };
+        let closing = Closing::Fallback {
+            k: PART_FALLBACKS,
+            of: PART_FALLBACKS,
+        };
+        let shown = format!("case split on {} key(s)", pairs.len());
+        self.as_role(role, |p| {
+            p.closing_attempt(closing, &shown, |p| {
+                let snap = p.snap();
+                let closed = p.split_cases(&pairs, hints)?;
+                if !closed {
+                    let outcome = p.last_smt;
+                    p.rollback(snap)?;
+                    p.last_smt = outcome;
+                }
+                Ok(closed)
+            })
+        })
+    }
+
+    /// The cases of `pairs` on the front goal, as in [`Self::key_case_split`]: whether every
+    /// case closed. Stops at the first case that does not; the caller undoes.
+    fn split_cases(&mut self, pairs: &[goals::KeyPair], hints: &str) -> R<bool> {
+        let Some((first, rest)) = pairs.split_first() else {
+            let before = self.count();
+            return Ok(self.send(hints)? && self.count() < before);
+        };
+        let before = self.count();
+        let outcome = self.last_smt;
+        let sent = self.send(&format!("case ({} = {}) => [->|?].", first.binder, first.key))?;
+        self.last_smt = outcome;
+        if !sent || self.count() != before + 1 {
+            return Ok(false);
+        }
+        let equal: Vec<_> = rest
+            .iter()
+            .filter(|p| p.binder != first.binder)
+            .cloned()
+            .collect();
+        Ok(self.bullet(|p| p.split_cases(&equal, hints))?
+            && self.bullet(|p| p.split_cases(rest, hints))?)
     }
 
     /// Admits the front goal as `part` of the pair's claims: the reason is what Domino itself

@@ -1133,6 +1133,7 @@ mod live {
             stopped: None,
             resume: None,
             premises: Vec::new(),
+            binders: Vec::new(),
             last_smt: None,
             admit_smt: None,
         };
@@ -2721,6 +2722,7 @@ done
         stopped: None,
         resume: None,
         premises: Vec::new(),
+        binders: Vec::new(),
         last_smt: None,
         admit_smt: None,
     };
@@ -2830,6 +2832,8 @@ struct LeafRun {
     /// `<role> <sentence>`, and ` [part]` where the record has one.
     said: Vec<String>,
     admits: Vec<Admit>,
+    /// The script the leaf left.
+    script: String,
 }
 
 /// Proves joint node 0, a terminal pair, against a fake EasyCrypt. `goals` are the proof
@@ -2922,12 +2926,14 @@ done
         stopped: None,
         resume: None,
         premises: Vec::new(),
+        binders: Vec::new(),
         last_smt: None,
         admit_smt: None,
     };
     prover.prove_node(0).unwrap();
     assert_eq!(prover.count(), 0, "the leaf is closed");
     let admits = prover.stats.admits.clone();
+    let script = prover.script.render();
     let said = sink
         .text()
         .lines()
@@ -2943,7 +2949,11 @@ done
             s
         })
         .collect();
-    LeafRun { said, admits }
+    LeafRun {
+        said,
+        admits,
+        script,
+    }
 }
 
 /// A proof state whose front goal is `front` (goal JSON), with `open` goals of its kind.
@@ -3224,4 +3234,147 @@ fn a_claim_that_fails_in_domino_is_admitted_at_once_and_a_part_without_a_claim_i
     assert_eq!(whole.claim, "equal-output+invariant");
     // the worse of equal-output (verified) and invariant (fails)
     assert_eq!(whole.domino, DominoView::Fails);
+}
+
+/// Story 66: `forall c d, P (m.[k{2} <- v]).[c] (m.[j{2} <- v]).[d]` after `auto`, with a fake
+/// EasyCrypt in which only the key cases close (`p1` is the part, `nK` is K goals after a
+/// `case`). `last_closes` says whether the last case's `smt` closes.
+fn run_key_split(last_closes: bool) -> LeafRun {
+    let local = |n: &str| format!(r#"{{"kind":"local","name":"{n}"}}"#);
+    let key = |n: &str| {
+        format!(r#"{{"kind":"pvar","scope":"global","path":"Top.Comp_H3.M./{n}","mem":"&2"}}"#)
+    };
+    let read = |k: &str, b: &str| {
+        let set = format!(
+            r#"{{"kind":"app","op":"Top.FMap._.[_<-_]","args":[{},{},{}]}}"#,
+            local("m"),
+            key(k),
+            local("v")
+        );
+        format!(r#"{{"kind":"app","op":"Top.FMap._.[_]","args":[{set},{}]}}"#, local(b))
+    };
+    let body = format!(
+        r#"{{"kind":"app","pp":"","op":"Top.P","args":[{},{}]}}"#,
+        read("k", "c"),
+        read("j", "d")
+    );
+    let binder = |n: &str| format!(r#"{{"name":"{n}","kind":"var","type":{{"pp":"int"}}}}"#);
+    let all = format!(
+        r#"{{"kind":"quant","pp":"","quantifier":"forall","binders":[{},{}],"body":{body}}}"#,
+        binder("c"),
+        binder("d")
+    );
+    let goals = [
+        ("start", proof_of(&program_with_ifs(&[], &[]), 1)),
+        ("all", proof_of(&formula(&all), 1)),
+        ("p1", proof_of(&formula(&body), 1)),
+        ("n1", proof_of(&formula(&body), 1)),
+        ("n2", proof_of(&formula(&body), 2)),
+        ("n3", proof_of(&formula(&body), 3)),
+    ];
+    let last = if last_closes { "g=none; ans" } else { "err" };
+    let arms = format!(
+        r#"
+    "auto => &1 &2 hpre.") g=all; ans;;
+    "move => c d /=.") g=p1; ans;;
+    "case ("*) case $g in p1) g=n2; ans;; n2) g=n3; ans;; n1) g=n2; ans;; *) err;; esac;;
+    "smt(get_setE mem_set emptyE).") case $g in n3) g=n2; ans;; n2) g=n1; ans;; n1) {last};; *) err;; esac;;
+    admit.) g=none; ans;;"#
+    );
+    run_leaf(&goals, "start", &arms, vec![], &[])
+}
+
+const KEY_SPLIT: [&str; 7] = [
+    "case (c = Comp_H3.M.k{2}) => [->|?].",
+    "case (d = Comp_H3.M.j{2}) => [->|?].",
+    "smt(get_setE mem_set emptyE).",
+    "smt(get_setE mem_set emptyE).",
+    "case (d = Comp_H3.M.j{2}) => [->|?].",
+    "smt(get_setE mem_set emptyE).",
+    "smt(get_setE mem_set emptyE).",
+];
+
+/// Story 66: two pairs give four cases, in order, each a bullet, and the part is closed.
+#[test]
+fn two_key_pairs_split_into_four_cases_each_a_bullet() {
+    let run = run_key_split(true);
+    let split: Vec<_> = run
+        .said
+        .iter()
+        .filter_map(|s| s.strip_prefix("part-fallback "))
+        .filter_map(|s| s.strip_suffix(" [equal-output+invariant]"))
+        .skip(3)
+        .collect();
+    assert_eq!(split, KEY_SPLIT, "{:?}", run.said);
+    assert!(run.admits.is_empty(), "{:?}", run.admits);
+    let script: Vec<_> = run
+        .script
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.contains("case (") || l.contains("smt(get"))
+        .collect();
+    assert_eq!(
+        script,
+        [
+            "case (c = Comp_H3.M.k{2}) => [->|?].",
+            "+ case (d = Comp_H3.M.j{2}) => [->|?].",
+            "+ smt(get_setE mem_set emptyE).",
+            "+ smt(get_setE mem_set emptyE).",
+            "+ case (d = Comp_H3.M.j{2}) => [->|?].",
+            "+ smt(get_setE mem_set emptyE).",
+            "+ smt(get_setE mem_set emptyE).",
+        ],
+        "{}",
+        run.script
+    );
+}
+
+/// Story 66: when the last case does not close, the whole split is undone and the part is
+/// admitted with the outcome of that last `smt`.
+#[test]
+fn one_failing_case_undoes_the_whole_split() {
+    let run = run_key_split(false);
+    let n = run.said.len();
+    assert!(run.said[n - 3].starts_with("part-fallback smt("), "{:?}", run.said);
+    assert!(run.said[n - 2].starts_with("undo undo "), "{:?}", run.said);
+    assert!(run.said[n - 1].starts_with("admit admit."), "{:?}", run.said);
+    assert!(!run.script.contains("case ("), "{}", run.script);
+    let [admit] = run.admits.as_slice() else {
+        panic!("{:?}", run.admits)
+    };
+    assert_eq!(admit.smt, Some(SmtOutcome::Error));
+}
+
+/// Story 66: more than six pairs, and fallback 4 does not run.
+#[test]
+fn seven_key_pairs_give_no_split() {
+    let local = |n: &str| format!(r#"{{"kind":"local","name":"{n}"}}"#);
+    let reads: Vec<String> = (0..7)
+        .map(|i| {
+            let key = format!(r#"{{"kind":"pvar","scope":"local","name":"k{i}","mem":"&1"}}"#);
+            let set = format!(
+                r#"{{"kind":"app","op":"Top.FMap._.[_<-_]","args":[{},{key},{}]}}"#,
+                local("m"),
+                local("v")
+            );
+            format!(r#"{{"kind":"app","op":"Top.FMap._.[_]","args":[{set},{}]}}"#, local("c"))
+        })
+        .collect();
+    let body = format!(r#"{{"kind":"app","pp":"","op":"Top.P","args":[{}]}}"#, reads.join(","));
+    let binder = r#"{"name":"c","kind":"var","type":{"pp":"int"}}"#;
+    let all = format!(
+        r#"{{"kind":"quant","pp":"","quantifier":"forall","binders":[{binder}],"body":{body}}}"#
+    );
+    let goals = [
+        ("start", proof_of(&program_with_ifs(&[], &[]), 1)),
+        ("all", proof_of(&formula(&all), 1)),
+        ("p1", proof_of(&formula(&body), 1)),
+    ];
+    let arms = r#"
+    "auto => &1 &2 hpre.") g=all; ans;;
+    "move => c /=.") g=p1; ans;;
+    admit.) g=none; ans;;"#;
+    let run = run_leaf(&goals, "start", arms, vec![], &[]);
+    assert!(!run.said.iter().any(|s| s.contains("case (")), "{:?}", run.said);
+    assert_eq!(run.admits.len(), 1);
 }

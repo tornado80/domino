@@ -147,6 +147,101 @@ pub(super) fn mentions_op(form: &Form, name: &str) -> bool {
     children.into_iter().any(|c| mentions_op(c, name))
 }
 
+/// The most pairs a key case split takes: `2^6` cases.
+pub(super) const MAX_KEY_PAIRS: usize = 6;
+
+/// A binder over the keys of an updated map, and the written key (story 66): the split
+/// `case (binder = key)`. Both are EasyCrypt text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct KeyPair {
+    pub binder: String,
+    pub key: String,
+}
+
+/// Whether the operator path ends in the operator `name` (an FMap operator name has dots:
+/// `Top.FMap._.[_<-_]`).
+fn op_ends(form: &Form, name: &str) -> bool {
+    form.kind == "app"
+        && op_name(form).is_some_and(|op| op.strip_suffix(name).is_some_and(|p| p.ends_with('.')))
+}
+
+/// An atom as EasyCrypt reads it: a program variable at a memory (`M.x{2}`, `x{1}`) or a local
+/// (`c`). `None` for anything else.
+fn atom_text(form: &Form) -> Option<String> {
+    match form.kind.as_str() {
+        "local" => form.name.clone(),
+        "pvar" => {
+            let side = form.mem.as_deref()?.trim_start_matches('&');
+            let var = match form.scope.as_deref() {
+                Some("global") => {
+                    let path = form.path.as_deref()?;
+                    path.strip_prefix("Top.").unwrap_or(path).replace("./", ".")
+                }
+                _ => form.name.clone()?,
+            };
+            Some(format!("{var}{{{side}}}"))
+        }
+        _ => None,
+    }
+}
+
+/// The atom keys written into `map` by a chain of updates `m.[k1 <- v1].[k2 <- v2]…`.
+fn written_keys(map: &Form) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut m = map;
+    while op_ends(m, "_.[_<-_]") && m.args.len() == 3 {
+        keys.extend(atom_text(&m.args[1]));
+        m = &m.args[0];
+    }
+    keys
+}
+
+/// The `(map, index)` of a read `m.[b]` or of a membership test `b \in m` (`dom m b`).
+fn map_access(form: &Form) -> Option<(&Form, &Form)> {
+    let read = op_ends(form, "_.[_]") || op_ends(form, "dom");
+    (read && form.args.len() == 2).then(|| (&form.args[0], &form.args[1]))
+}
+
+/// The pairs of a key case split on `form` (story 66 §3.1): a binder in `binders` that is the
+/// index of a read or a membership test on an updated map, with each atom key written into that
+/// map. In the order they occur, without duplicates.
+pub(super) fn key_pairs(form: &Form, binders: &[String]) -> Vec<KeyPair> {
+    let mut pairs = Vec::new();
+    collect_key_pairs(form, binders, &mut pairs);
+    pairs
+}
+
+fn collect_key_pairs(form: &Form, binders: &[String], pairs: &mut Vec<KeyPair>) {
+    if let Some((map, index)) = map_access(form) {
+        if let Some(binder) = (index.kind == "local")
+            .then_some(index.name.as_ref())
+            .flatten()
+            .filter(|b| binders.contains(b))
+        {
+            for key in written_keys(map) {
+                let pair = KeyPair {
+                    binder: binder.clone(),
+                    key,
+                };
+                if !pairs.contains(&pair) {
+                    pairs.push(pair);
+                }
+            }
+        }
+    }
+    let children = form
+        .head
+        .iter()
+        .map(|b| &**b)
+        .chain(form.args.iter())
+        .chain(form.body.iter().map(|b| &**b))
+        .chain(form.pre.iter().map(|b| &**b))
+        .chain(form.post.iter().map(|b| &**b));
+    for child in children {
+        collect_key_pairs(child, binders, pairs);
+    }
+}
+
 /// A hypothesis name that no hypothesis of the goal has.
 pub(super) fn fresh_name(goal: &Goal, base: &str) -> String {
     let taken = |n: &str| goal.hyps.iter().any(|h| h.name == n);
@@ -237,5 +332,81 @@ mod tests {
         let form = quant(r#"{"name":"&m","ident":{"name":"&m","tag":2},"kind":"mem"}"#);
         let (names, _) = as_forall(&form).unwrap();
         assert_eq!(names, ["&m"]);
+    }
+
+    fn local(name: &str) -> String {
+        format!(r#"{{"kind":"local","name":"{name}"}}"#)
+    }
+
+    fn pvar_k2() -> String {
+        r#"{"kind":"pvar","scope":"global","path":"Top.Comp_H3.Pkg_Inst_KX./k","mem":"&2"}"#.into()
+    }
+
+    fn app(op: &str, args: &[String]) -> String {
+        format!(r#"{{"kind":"app","op":"{op}","args":[{}]}}"#, args.join(","))
+    }
+
+    fn set(map: &str, key: &str) -> String {
+        app("Top.FMap._.[_<-_]", &[map.into(), key.into(), local("v")])
+    }
+
+    fn read(map: &str, index: &str) -> String {
+        app("Top.FMap._.[_]", &[map.into(), index.into()])
+    }
+
+    fn form(json: &str) -> Form {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn binders(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn a_read_of_an_updated_map_at_a_binder_gives_one_pair() {
+        // forall c, (m.[k{2} <- v]).[c] <> None => ..., after `move => c`
+        let m = local("m");
+        let lhs = read(&set(&m, &pvar_k2()), &local("c"));
+        let ne = app("Top.Logic.<>", &[lhs, r#"{"kind":"op"}"#.into()]);
+        let goal = form(&app("Top.Logic.=>", &[ne, r#"{"kind":"op"}"#.into()]));
+        let pairs = key_pairs(&goal, &binders(&["c"]));
+        assert_eq!(
+            pairs,
+            [KeyPair {
+                binder: "c".into(),
+                key: "Comp_H3.Pkg_Inst_KX.k{2}".into()
+            }]
+        );
+        // a membership test gives the same pair, once
+        let both = app(
+            "Top.Logic.and",
+            &[
+                read(&set(&m, &pvar_k2()), &local("c")),
+                app("Top.FMap.dom", &[set(&m, &pvar_k2()), local("c")]),
+            ],
+        );
+        assert_eq!(key_pairs(&form(&both), &binders(&["c"])).len(), 1);
+    }
+
+    #[test]
+    fn a_key_that_is_not_an_atom_and_a_binder_outside_an_updated_map_give_no_pair() {
+        let m = local("m");
+        let k_plus_1 = app("Top.CoreInt.add", &[pvar_k2(), r#"{"kind":"int","value":"1"}"#.into()]);
+        let not_atom = read(&set(&m, &k_plus_1), &local("c"));
+        assert!(key_pairs(&form(&not_atom), &binders(&["c"])).is_empty());
+        let plain = app("Top.Logic.and", &[read(&m, &local("c")), set(&m, &pvar_k2())]);
+        assert!(key_pairs(&form(&plain), &binders(&["c"])).is_empty());
+        // an index that the opening loop did not introduce
+        let other = read(&set(&m, &pvar_k2()), &local("d"));
+        assert!(key_pairs(&form(&other), &binders(&["c"])).is_empty());
+    }
+
+    #[test]
+    fn a_chain_of_updates_gives_a_pair_for_each_key_in_order() {
+        let x1 = r#"{"kind":"pvar","scope":"local","name":"x","mem":"&1"}"#;
+        let chain = set(&set(&local("m"), x1), &pvar_k2());
+        let pairs = key_pairs(&form(&read(&chain, &local("c"))), &binders(&["c"]));
+        let keys: Vec<_> = pairs.iter().map(|p| p.key.as_str()).collect();
+        assert_eq!(keys, ["Comp_H3.Pkg_Inst_KX.k{2}", "x{1}"]);
     }
 }

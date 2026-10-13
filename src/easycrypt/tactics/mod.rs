@@ -1722,6 +1722,7 @@ where
         stopped: None,
         resume,
         premises: Vec::new(),
+        binders: Vec::new(),
         last_smt: None,
         admit_smt: None,
     };

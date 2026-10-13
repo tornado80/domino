@@ -212,6 +212,18 @@ pub struct Form {
     pub pre: Option<Box<Form>>,
     #[serde(default)]
     pub post: Option<Box<Form>>,
+    /// `local`, and `pvar` of scope `local`: the variable's name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `pvar`: `local` or `global`.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// `pvar` of scope `global`: the variable's path (`Top.M./x`).
+    #[serde(default)]
+    pub path: Option<String>,
+    /// `pvar`: the memory (`&1`).
+    #[serde(default)]
+    pub mem: Option<String>,
 }
 
 impl Form {
