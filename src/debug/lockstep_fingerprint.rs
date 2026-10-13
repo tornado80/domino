@@ -103,6 +103,25 @@ impl Fingerprint {
         ]))
     }
 
+    /// The fingerprint of a side tree (symbolic-execution story 25): the same parts, from one
+    /// side. `inst` is the free instance of the composition (no constant fixed), `code` its
+    /// inlined EasyCrypt listing with the signature, `invariants` the SMT of its package and game
+    /// invariants and `claims` the names of the checks. A side tree has no randomness mapping.
+    pub(crate) fn of_side(
+        inst: &GameInstance,
+        code: String,
+        invariants: &[SmtExpr],
+        claims: &[String],
+    ) -> Fingerprint {
+        Fingerprint::from_parts([
+            code,
+            constants_of(inst),
+            String::new(),
+            smt(invariants),
+            claims.join("\n"),
+        ])
+    }
+
     /// The fingerprint of the parts' texts, in the order of [`PARTS`].
     fn from_parts(texts: [String; 5]) -> Fingerprint {
         let parts: BTreeMap<String, String> = PARTS

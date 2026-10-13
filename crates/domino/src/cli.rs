@@ -256,6 +256,11 @@ pub(crate) struct EcDebug {
     /// Only this exported oracle.
     #[clap(long)]
     pub(crate) oracle: Option<String>,
+    /// One-sided execution of this composition instead of lockstep execution
+    /// (symbolic-execution story 25): the side tree of each oracle (or of `--oracle`), with the
+    /// composition's parameters free, written under `!debug!/SideInv_<C>/<oracle>/`.
+    #[clap(long, conflicts_with = "proofstep")]
+    pub(crate) side_inv: Option<String>,
     /// Per-query solver timeout in milliseconds (cvc5 `tlimit-per`), as for
     /// `domino debug --timeout`. A timeout counts as `unknown`, never as verified.
     #[clap(long)]

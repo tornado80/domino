@@ -901,6 +901,42 @@ fn easycrypt_debug<P: project::Project>(
         use sspverif::writers::easycrypt::progress::LoggingExportObserver;
 
         let theorem_names = proof_job_theorem(project, &d.theorem)?;
+        if let Some(composition) = &d.side_inv {
+            let backend =
+                sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.debug_timeout);
+            let stop = stop_on_ctrl_c(
+                "easycrypt: interrupt — finishing the current solver query, then writing partial \
+                 results (Ctrl-C again to abort now)",
+            );
+            let mut all_ok = true;
+            for name in &theorem_names {
+                let theorem_out = out_base.join(name);
+                stage_line(
+                    d.progress,
+                    &format!(
+                        "easycrypt debug: one-sided execution of {composition} → {}",
+                        theorem_out.join("!debug!").join(format!("SideInv_{composition}")).display()
+                    ),
+                );
+                let entries = sspverif::easycrypt::debug::debug_side_invariants(
+                    project,
+                    name,
+                    composition,
+                    d.oracle.as_deref(),
+                    &theorem_out,
+                    &backend,
+                    d.debug_timeout,
+                    Some(&stop),
+                    &mut || debug_observer(d.progress),
+                    &mut |entry| println!("{}", entry.one_line()),
+                )?;
+                all_ok &= entries.iter().all(|entry| entry.ok);
+            }
+            if !all_ok {
+                return Err(EcDebugNotVerified.into());
+            }
+            return Ok(());
+        }
         for name in &theorem_names {
             stage_line(
                 d.progress,

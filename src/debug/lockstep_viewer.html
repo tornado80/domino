@@ -128,7 +128,11 @@ nodes.forEach(n => n.children.forEach((c, i) => {
 // A trace still being written may lack the run's end.
 const LIVE = !!document.querySelector('meta[http-equiv="refresh"]');
 const KW = { branch: "if", unwrap: "unwrap", sample: "sample", "return": "return", abort: "abort" };
-const SIDES = [["left", "L"], ["right", "R"]];
+// A side tree of one-sided execution (symbolic-execution story 25) has no right side: one column.
+const SIDES = T.one_sided ? [["left", "L"]] : [["left", "L"], ["right", "R"]];
+if (T.one_sided) {
+  document.getElementById("cell-right").style.display = "none";
+}
 const sitesOf = side => (side === "left" ? T.left_sites : T.right_sites) || {};
 const srcLine = (side, label) => { const s = sitesOf(side)[label]; return s ? s.line : ""; };
 const textLines = { left: (T.left_listing || "").split("\n"), right: (T.right_listing || "").split("\n") };
@@ -228,7 +232,8 @@ const reasonText = (v, pair) => {
 
 // ---- header ---------------------------------------------------------------
 document.getElementById("h-title").textContent =
-  `${T.theorem} · proofstep ${T.proofstep} · ${T.left_game} == ${T.right_game}`;
+  T.one_sided ? `${T.theorem} · side invariants of ${T.left_game}`
+  : `${T.theorem} · proofstep ${T.proofstep} · ${T.left_game} == ${T.right_game}`;
 document.getElementById("h-sub").textContent =
   `oracle ${T.oracle} · ${T.all_claims && T.listing === "domino" ? (T.core ? "all claims of the core claim set" : "all claims") : "claims " + T.claims.filter(c => !c.admitted).map(c => c.name).join(", ")} · lockstep execution on the ${T.listing} listing`;
 {
@@ -579,7 +584,7 @@ function listingSpec(path, side, pair, cutStep) {
 function pathTable(path, cut) {
   const tbl = el("table", "path-tbl");
   const head = el("tr");
-  ["node", "kind", "left", "right"].forEach(h => head.appendChild(el("th", null, h)));
+  ["node", "kind"].concat(SIDES.map(([s]) => s)).forEach(h => head.appendChild(el("th", null, h)));
   tbl.appendChild(head);
   path.forEach(({ node }, k) => {
     const next = k + 1 < path.length ? path[k + 1].edge : (cut || null);
@@ -647,7 +652,7 @@ function claimBlock(pair) {
 function effectBlock(pair) {
   const grid = el("div", "eff-grid");
   grid.appendChild(effectColumn(T.left_game, pair.left.effect || null, pair.left.terminal));
-  grid.appendChild(effectColumn(T.right_game, pair.right.effect || null, pair.right.terminal));
+  if (!T.one_sided) grid.appendChild(effectColumn(T.right_game, pair.right.effect || null, pair.right.terminal));
   const wrap = el("div");
   wrap.appendChild(grid);
   return wrap;

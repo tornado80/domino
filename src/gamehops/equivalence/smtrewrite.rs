@@ -392,7 +392,7 @@ impl SmtParser<Error> for SmtRewrite<'_> {
 
         let expr = (
             "define-fun",
-            &format!("game-invariant!{}!", game.name()),
+            &crate::writers::smt::contexts::game_invariant_claim_name(game.name()),
             vec![(
                 SmtExpr::Atom("game".to_string()),
                 SmtExpr::Atom(gamestate_sort),
@@ -441,7 +441,7 @@ impl SmtParser<Error> for SmtRewrite<'_> {
 
         let expr = (
             "define-fun",
-            &format!("package-invariant!{}-{}!", game.name(), package.name()),
+            &crate::writers::smt::contexts::package_invariant_claim_name(game.name(), package.name()),
             vec![(
                 SmtExpr::Atom("game".to_string()),
                 SmtExpr::Atom(gamestate_sort),

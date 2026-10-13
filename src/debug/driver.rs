@@ -148,6 +148,15 @@ pub enum DebugError {
     #[error("oracle `{oracle}` is not exported by game instance `{game_inst}`")]
     OracleNotExported { oracle: String, game_inst: String },
 
+    #[error("no composition named `{name}` in this project")]
+    CompositionNotFound { name: String },
+
+    #[error(
+        "theorem `{theorem}` already has a game instance named `{name}`, the name one-sided \
+         execution gives the composition with free parameters"
+    )]
+    SideInstanceNameTaken { name: String, theorem: String },
+
     #[error("{}", claim_not_found(claim, available, *core))]
     ClaimNotFound {
         claim: String,

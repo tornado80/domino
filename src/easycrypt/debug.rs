@@ -176,3 +176,71 @@ where
     }
     Ok(entries)
 }
+
+/// `domino easycrypt debug --side-inv <C>` (symbolic-execution story 25): one-sided execution of
+/// each oracle of composition `composition` (only `oracle`, if given), under
+/// `<theorem_out>/!debug!/SideInv_<C>/<O>/`. Then the theorem's debug index
+/// (`<theorem_out>/index.html`) is rewritten to list the runs. A `Ctrl-C` (`stop`) ends the
+/// sweep after the oracle in flight.
+#[allow(clippy::too_many_arguments)]
+pub fn debug_side_invariants<P, B>(
+    project: &P,
+    theorem: &str,
+    composition: &str,
+    oracle: Option<&str>,
+    theorem_out: &Path,
+    backend: &B,
+    timeout_ms: Option<u64>,
+    stop: Option<&AtomicBool>,
+    make_observer: &mut dyn FnMut() -> Box<dyn DebugObserver>,
+    on_finished: &mut dyn FnMut(&SweepEntry),
+) -> Result<Vec<SweepEntry>, EcDebugError>
+where
+    P: Project,
+    B: SmtSolverBackend,
+{
+    use crate::debug::side_run::{run_side_command, side_debug_dir, side_entry, side_oracles};
+    let oracles = side_oracles(project, composition)?;
+    if let Some(wanted) = oracle {
+        if !oracles.iter().any(|o| o == wanted) {
+            return Err(DebugError::OracleNotExported {
+                oracle: wanted.to_string(),
+                game_inst: composition.to_string(),
+            }
+            .into());
+        }
+    }
+    let mut entries = Vec::new();
+    for o in oracles.iter().filter(|o| oracle.is_none_or(|w| w == o.as_str())) {
+        let mut observer = make_observer();
+        let run = run_side_command(
+            project,
+            theorem,
+            composition,
+            o,
+            &LockstepDebugOptions::easycrypt(timeout_ms),
+            backend,
+            side_debug_dir(theorem_out, composition, o),
+            observer.as_mut(),
+            stop,
+        )?;
+        drop(observer);
+        let entry = side_entry(&run);
+        on_finished(&entry);
+        let interrupted = is_interrupted(&entry);
+        entries.push(entry);
+        if interrupted {
+            break;
+        }
+    }
+    if let Some(root) = theorem_out.parent() {
+        crate::debug::index::refresh_indexes(
+            root,
+            &crate::debug::index::Level::Theorem {
+                theorem: theorem.to_string(),
+            },
+        )
+        .map_err(DebugError::from)?;
+    }
+    Ok(entries)
+}

@@ -56,6 +56,10 @@ pub struct ResultRecord {
     pub left: String,
     pub right: String,
     pub oracle: String,
+    /// The composition of a one-sided run (symbolic-execution story 25); its record lists it as
+    /// `left`, with an empty `right`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composition: Option<String>,
     pub claim: String,
     pub strategy: String,
     pub listing: String,
@@ -91,6 +95,7 @@ impl ResultRecord {
             left: t.left.clone(),
             right: t.right.clone(),
             oracle: t.oracle.clone(),
+            composition: entry.composition.clone(),
             claim: entry.claim.clone(),
             strategy: entry.strategy.to_string(),
             listing: entry.listing.to_string(),
@@ -232,6 +237,8 @@ pub enum Level {
     Project,
     Theorem { theorem: String },
     Proofstep { theorem: String, left: String, right: String },
+    /// The one-sided runs of a composition, in `!debug!/SideInv_<C>/` under the theorem.
+    SideInv { theorem: String, composition: String },
 }
 
 impl Level {
@@ -257,6 +264,9 @@ impl Level {
             Level::Project => root.to_path_buf(),
             Level::Theorem { theorem } => root.join(theorem),
             Level::Proofstep { theorem, left, right } => proofstep_dir(root, theorem, left, right),
+            Level::SideInv { theorem, composition } => {
+                root.join(theorem).join(side_inv_rel(composition))
+            }
         }
     }
 
@@ -264,9 +274,11 @@ impl Level {
         match self {
             Level::Project => None,
             Level::Theorem { .. } => Some(Level::Project),
-            Level::Proofstep { theorem, .. } => Some(Level::Theorem {
-                theorem: theorem.clone(),
-            }),
+            Level::Proofstep { theorem, .. } | Level::SideInv { theorem, .. } => {
+                Some(Level::Theorem {
+                    theorem: theorem.clone(),
+                })
+            }
         }
     }
 
@@ -276,6 +288,9 @@ impl Level {
             Level::Theorem { theorem } => format!("domino debug — theorem {theorem}"),
             Level::Proofstep { theorem, left, right } => {
                 format!("domino debug — {theorem}: {left} == {right}")
+            }
+            Level::SideInv { theorem, composition } => {
+                format!("domino debug — {theorem}: side invariants of {composition}")
             }
         }
     }
@@ -324,10 +339,16 @@ fn levels_below(root: &Path, level: &Level) -> Vec<Level> {
     let mut theorems = std::collections::BTreeSet::new();
     for found in records_below(&level.dir(root)) {
         let r = found.record;
-        proofsteps.insert(Level::Proofstep {
-            theorem: r.theorem.clone(),
-            left: r.left,
-            right: r.right,
+        proofsteps.insert(match r.composition {
+            Some(composition) => Level::SideInv {
+                theorem: r.theorem.clone(),
+                composition,
+            },
+            None => Level::Proofstep {
+                theorem: r.theorem.clone(),
+                left: r.left,
+                right: r.right,
+            },
         });
         theorems.insert(Level::Theorem { theorem: r.theorem });
     }
@@ -412,7 +433,7 @@ fn header(level: &Level) -> &'static [&'static str] {
     match level {
         Level::Project => &["theorem", "runs", "runs not ok", "oldest run", ""],
         Level::Theorem { .. } => &["proofstep", "games", "runs", "runs not ok", "oldest run", ""],
-        Level::Proofstep { .. } => &[
+        Level::Proofstep { .. } | Level::SideInv { .. } => &[
             "oracle",
             "claim",
             "strategy",
@@ -438,10 +459,21 @@ fn rows(level: &Level, dir: &Path, found: &[Found]) -> Vec<Row> {
                 .collect()
         }
         Level::Theorem { theorem } => {
-            let groups = group(found, |r| (r.left.clone(), r.proofstep, r.right.clone()));
+            let groups = group(found, |r| match &r.composition {
+                // after every proofstep
+                Some(c) => (c.clone(), usize::MAX, String::new()),
+                None => (r.left.clone(), r.proofstep, r.right.clone()),
+            });
             groups
                 .into_iter()
                 .map(|((left, step, right), runs)| {
+                    if step == usize::MAX {
+                        let hint = format!(
+                            "no index; run `domino easycrypt debug --theorem {theorem} --side-inv {left}`"
+                        );
+                        let link = child_link(dir, &side_inv_rel(&left), hint);
+                        return child_row(vec!["side-inv".to_string(), left], &runs, link);
+                    }
                     let hint =
                         format!("no index; run `domino debug --proof {theorem} --proofstep {step}`");
                     let link = child_link(dir, &format!("{left}-{right}"), hint);
@@ -449,8 +481,15 @@ fn rows(level: &Level, dir: &Path, found: &[Found]) -> Vec<Row> {
                 })
                 .collect()
         }
-        Level::Proofstep { .. } => found.iter().map(|f| run_row(dir, f)).collect(),
+        Level::Proofstep { .. } | Level::SideInv { .. } => {
+            found.iter().map(|f| run_row(dir, f)).collect()
+        }
     }
+}
+
+/// `!debug!/SideInv_<C>`: the directory of a composition's one-sided runs, under its theorem's.
+fn side_inv_rel(composition: &str) -> String {
+    format!("!debug!/SideInv_{composition}")
 }
 
 type GroupKey = (String, usize, String);
@@ -605,6 +644,7 @@ mod tests {
             left: format!("L{step}"),
             right: format!("R{step}"),
             oracle: oracle.into(),
+            composition: None,
             claim: "!all-claims!".into(),
             strategy: strategy.into(),
             listing: "domino".into(),

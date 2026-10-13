@@ -165,6 +165,9 @@ pub struct Failure {
 #[derive(Debug, Clone)]
 pub struct SweepEntry {
     pub target: Target,
+    /// The composition of a one-sided run (symbolic-execution story 25), whose target names it
+    /// as the left side with no right side; `None` for a run on an equivalence.
+    pub composition: Option<String>,
     /// The claim of the run, or `!all-claims!`.
     pub claim: String,
     /// `sequential` or `lockstep`.
@@ -217,6 +220,7 @@ impl SweepEntry {
         }
         Self {
             target,
+            composition: None,
             claim: run.claim.clone(),
             strategy: run.strategy,
             listing: "domino",
@@ -252,6 +256,7 @@ impl SweepEntry {
         }
         Self {
             target,
+            composition: None,
             claim: run.meta.claim.clone(),
             strategy: run.meta.mode,
             listing: run.meta.listing,
@@ -419,6 +424,7 @@ mod tests {
 
     fn entry(ok: bool, claims: Vec<ClaimLine>, failures: Vec<Failure>) -> SweepEntry {
         SweepEntry {
+            composition: None,
             target: Target {
                 theorem: "T".into(),
                 proofstep: 0,

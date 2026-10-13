@@ -256,6 +256,20 @@ pub struct SideView {
     pub exit_guard: Option<ExitGuardKind>,
 }
 
+impl SideView {
+    /// The right side of a one-sided run, which does not exist.
+    pub fn absent() -> Self {
+        SideView {
+            head: HeadView {
+                kind: HeadKind::Absent,
+                label: 0,
+            },
+            consumed: Vec::new(),
+            exit_guard: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeadView {
     pub kind: HeadKind,
@@ -271,6 +285,8 @@ pub enum HeadKind {
     Sample,
     Return,
     Abort,
+    /// No side stands here: the right column of a one-sided run (symbolic-execution story 25).
+    Absent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -446,6 +462,23 @@ impl PairRecord {
         self.claims.iter().any(|c| {
             c.verdict.is_failure() || c.parts.iter().any(|p| p.verdict.is_failure())
         })
+    }
+}
+
+impl PairSide {
+    /// The right side of a one-sided run's terminal, which does not exist: no steps, no lines,
+    /// no effect.
+    pub fn absent() -> Self {
+        PairSide {
+            steps: Vec::new(),
+            terminal: TerminalView {
+                label: 0,
+                line: String::new(),
+                is_abort: false,
+            },
+            lines: Vec::new(),
+            effect: None,
+        }
     }
 }
 
@@ -1256,7 +1289,13 @@ fn head_label(head: &Head<'_>) -> usize {
 
 /// Describe where a side stands, and report its consumption so far.
 fn side_view(state: &mut SideState<'_>) -> SideView {
-    let (kind, exit_guard) = match &state.head {
+    side_view_at(&mut state.pos, &state.head)
+}
+
+/// Describe a side at `pos`, standing at `head`, and report its consumption so far. Shared with
+/// one-sided execution ([`crate::debug::side`]).
+pub(crate) fn side_view_at(pos: &mut SidePos<'_>, head: &Head<'_>) -> SideView {
+    let (kind, exit_guard) = match head {
         Head::Branch(b) => (
             match b.form {
                 BranchForm::If { .. } => HeadKind::Branch,
@@ -1271,16 +1310,16 @@ fn side_view(state: &mut SideState<'_>) -> SideView {
     let view = SideView {
         head: HeadView {
             kind,
-            label: head_label(&state.head),
+            label: head_label(head),
         },
-        consumed: lines_view(&state.pos.consumed()),
+        consumed: lines_view(&pos.consumed()),
         exit_guard,
     };
-    state.pos.commit_consumed();
+    pos.commit_consumed();
     view
 }
 
-fn pair_side(inlined: &InlinedOracle, path: &TerminalPath) -> PairSide {
+pub(crate) fn pair_side(inlined: &InlinedOracle, path: &TerminalPath) -> PairSide {
     PairSide {
         steps: steps_view(&inlined.listing, &path.steps),
         terminal: terminal_view(&inlined.listing, &path.terminal),

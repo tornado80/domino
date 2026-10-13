@@ -21,6 +21,8 @@ pub mod lockstep_viewer;
 pub mod progress;
 pub mod render;
 pub mod report;
+pub mod side;
+pub mod side_run;
 pub mod smtout;
 pub mod sweep;
 

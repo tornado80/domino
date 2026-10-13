@@ -207,18 +207,23 @@ impl SmtSolver for Communicator {
     fn check_sat(&mut self) -> Result<SmtSolverResponse> {
         writeln!(self, "\n(check-sat)")?;
 
+        // Whitespace may lead the answer: a model read before leaves the newline after its
+        // closing parenthesis in the buffer. Without skipping it, no answer ever matched and
+        // the read waited forever (symbolic-execution story 25).
         let pred =
-            |_: usize, data: &str| -> (usize, Option<result::Result<SmtSolverResponse, Error>>) {
+            |_: usize, all: &str| -> (usize, Option<result::Result<SmtSolverResponse, Error>>) {
+                let data = all.trim_start();
+                let lead = all.len() - data.len();
                 let is_err_start = data.starts_with(r#"(error ""#);
                 let is_err_end = data.ends_with(")\n");
                 if data.starts_with("sat\n") {
-                    (4, Some(Ok(SmtSolverResponse::Sat)))
+                    (lead + 4, Some(Ok(SmtSolverResponse::Sat)))
                 } else if data.starts_with("unsat\n") {
-                    (6, Some(Ok(SmtSolverResponse::Unsat)))
+                    (lead + 6, Some(Ok(SmtSolverResponse::Unsat)))
                 } else if data.starts_with("unknown\n") {
-                    (8, Some(Ok(SmtSolverResponse::Unknown)))
+                    (lead + 8, Some(Ok(SmtSolverResponse::Unknown)))
                 } else if is_err_start && is_err_end {
-                    (data.len(), Some(Err(Error::SolverError(data.to_string()))))
+                    (all.len(), Some(Err(Error::SolverError(data.to_string()))))
                 } else {
                     (0, None)
                 }

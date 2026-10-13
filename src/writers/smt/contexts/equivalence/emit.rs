@@ -574,6 +574,27 @@ impl<'a> EquivalenceContext<'a> {
         claims
     }
 
+    /// The base frame's assumption of one-sided execution (symbolic-execution story 25): each
+    /// package and game invariant of the **left** game instance on its old state, asserted. The
+    /// right side is not read.
+    pub(crate) fn emit_left_side_invariants_old(&self, oracle_name: &str) -> Vec<SmtExpr> {
+        let gctx = self.left_game_inst_ctx();
+        let octx = gctx.exported_oracle_ctx_by_name(oracle_name).unwrap();
+        let old_state = octx
+            .oracle_arg_game_state_pattern()
+            .old_global_const_name(gctx.game_inst_name());
+        self.generate_game_or_package_invariant_claims()
+            .into_iter()
+            .filter(|claim| {
+                matches!(
+                    claim.ty,
+                    ClaimType::LeftPackageInvariant | ClaimType::LeftGameInvariant
+                )
+            })
+            .map(|claim| SmtAssert::<SmtExpr>((claim.name.as_str(), &old_state).into()).into())
+            .collect()
+    }
+
     pub(crate) fn randomness_mapping_candidates(&self, oracle_name: &str) -> Vec<RandomnessMappingEntry> {
         let left_export = self
             .left_game_inst_ctx()
@@ -1683,16 +1704,19 @@ fn build_rands(
         .collect()
 }
 
-/// The claim of the package invariant of instance `pkg_inst` in game instance `game_inst`:
-/// `package-invariant!<GameInst>-<Inst>!`. The one owner of this name.
-pub(crate) fn package_invariant_claim_name(game_inst: &str, pkg_inst: &str) -> String {
-    format!("package-invariant!{game_inst}-{pkg_inst}!")
+/// The claim of the package invariant of package instance `pkg_inst` in the state of `owner`:
+/// `package-invariant!<owner>-<pkg_inst>!`. The owner of the state is a game instance in lockstep
+/// execution and a composition in one-sided execution (symbolic-execution story 25). The one
+/// owner of this name.
+pub(crate) fn package_invariant_claim_name(owner: &str, pkg_inst: &str) -> String {
+    format!("package-invariant!{owner}-{pkg_inst}!")
 }
 
-/// The claim of the game invariant of game instance `game_inst`: `game-invariant!<GameInst>!`.
-/// The one owner of this name.
-pub(crate) fn game_invariant_claim_name(game_inst: &str) -> String {
-    format!("game-invariant!{game_inst}!")
+/// The claim of the game invariant on the state of `owner` (a game instance or a composition,
+/// as for [`package_invariant_claim_name`]): `game-invariant!<owner>!`. The one owner of this
+/// name.
+pub(crate) fn game_invariant_claim_name(owner: &str) -> String {
+    format!("game-invariant!{owner}!")
 }
 
 #[cfg(test)]

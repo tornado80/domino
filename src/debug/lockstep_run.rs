@@ -221,6 +221,14 @@ pub struct LockstepMeta {
     /// run would pair up (left times right).
     pub left_syntactic: u64,
     pub right_syntactic: u64,
+    /// A side tree of one-sided execution (symbolic-execution story 25): the right column is
+    /// absent, and the viewer shows one column.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub one_sided: bool,
+    /// The fingerprint of the tree (ADR 0008): `all` and each part, by name. Written for a side
+    /// tree; empty for a joint tree, whose fingerprint `prove` keeps with its saved tree.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub fingerprint: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -862,6 +870,8 @@ where
         right_frames: right_inl.listing.frames.clone(),
         left_syntactic: count_terminals(&left_inl),
         right_syntactic: count_terminals(&right_inl),
+        one_sided: false,
+        fingerprint: BTreeMap::new(),
     };
 
     let smt_header = format!(

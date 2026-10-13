@@ -1,0 +1,27 @@
+theorem T {
+    instance s = S {
+        params {
+            n: 1,
+        }
+    }
+
+    instance s2 = S {
+        params {
+            n: 1,
+        }
+    }
+
+    gamehops {
+        equivalence s s2 {
+            invariant: [./theorem/invariant.smt2]
+            O: {
+                randomness: simple
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+        }
+    }
+}
