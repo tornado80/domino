@@ -70,9 +70,10 @@ use crate::debug::progress::{DebugEvent, DebugObserver, SharedObserver};
 use crate::debug::render;
 use crate::debug::report;
 use crate::debug::smtout::{SmtOut, SmtWriter};
+use crate::gamehops::equivalence::ResolvedClaim;
 use crate::gamehops::GameHop;
 use crate::project::Project;
-use crate::theorem::{Claim, GameInstance};
+use crate::theorem::GameInstance;
 use crate::transforms::samplify::SampleInfo;
 use crate::transforms::theorem_transforms::{
     DebugTransform, EquivalenceTransform, EquivalenceTransformError,
@@ -539,6 +540,7 @@ where
     let (theorem_eq, auxs_eq) = EquivalenceTransform.transform_theorem(theorem)?;
     let mut eqctx = EquivalenceContext::new(eq, &theorem_eq, &auxs_eq);
     eqctx.load_invariants(project)?;
+    eqctx.resolve_claims();
 
     let (theorem_dbg, auxs_dbg) = DebugTransform.transform_theorem(theorem)?;
     let left_inst = theorem_dbg
@@ -574,7 +576,7 @@ where
 
     // Resolve the claim: the user-written proof tree for this oracle, plus the
     // generated package/game invariant claims (same set `prove` checks).
-    let mut claims = eq.proof_tree_by_oracle_name(oracle);
+    let mut claims = eqctx.claims_by_oracle_name(oracle);
     claims.extend(eqctx.generate_game_or_package_invariant_claims());
     let claim = claims
         .iter()
@@ -740,7 +742,11 @@ where
 /// The declarations asserted once at solver level 0. Same order and content as
 /// `verify_fn.rs`, with `emit_constant_declarations` narrowed to `Some(oracle)`
 /// (story 04) and the claim assumptions split out and asserted positively.
-fn base_frame<'a>(eqctx: &'a EquivalenceContext<'a>, oracle: &str, claim: &Claim) -> Vec<SmtExpr> {
+fn base_frame<'a>(
+    eqctx: &'a EquivalenceContext<'a>,
+    oracle: &str,
+    claim: &ResolvedClaim,
+) -> Vec<SmtExpr> {
     let mut base = vec![SmtExpr::Comment(" domino debug — base frame ".to_string())];
     base.extend(eqctx.emit_base_declarations());
     base.extend(eqctx.emit_theorem_paramfuncs());
@@ -1699,6 +1705,7 @@ mod tests {
             };
             let mut eqctx = EquivalenceContext::new(eq, &theorem_eq, &auxs_eq);
             eqctx.load_invariants(proj).unwrap();
+            eqctx.resolve_claims();
 
             let (theorem_dbg, auxs_dbg) = DebugTransform.transform_theorem(theorem).unwrap();
             let left_inst = theorem_dbg.find_game_instance(eq.left_name()).unwrap();
@@ -1787,8 +1794,9 @@ mod tests {
             };
             let mut eqctx = EquivalenceContext::new(eq, &theorem_eq, &auxs_eq);
             eqctx.load_invariants(proj).unwrap();
+            eqctx.resolve_claims();
 
-            let mut claims = eq.proof_tree_by_oracle_name("PKGEN");
+            let mut claims = eqctx.claims_by_oracle_name("PKGEN");
             claims.extend(eqctx.generate_game_or_package_invariant_claims());
             let claim = claims
                 .iter()

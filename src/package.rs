@@ -169,6 +169,7 @@ pub struct Composition {
 
     pub file_name: String,
     pub file_contents: String,
+    pub type_params: Vec<String>,
 }
 
 impl Composition {

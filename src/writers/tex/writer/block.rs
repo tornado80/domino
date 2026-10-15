@@ -133,6 +133,16 @@ impl<'a, 'comp> BlockWriter<'a, 'comp> {
                 self.expression_to_tex(lhs),
                 self.expression_to_tex(rhs)
             ),
+            ExpressionKind::Sub(lhs, rhs) => format!(
+                "({} - {})",
+                self.expression_to_tex(lhs),
+                self.expression_to_tex(rhs)
+            ),
+            ExpressionKind::Mul(lhs, rhs) => format!(
+                "({} \\cdot {})",
+                self.expression_to_tex(lhs),
+                self.expression_to_tex(rhs)
+            ),
             ExpressionKind::TableAccess(ident, expr) => format!(
                 "{}[{}]",
                 util::ident_to_tex(ident),
@@ -163,6 +173,16 @@ impl<'a, 'comp> BlockWriter<'a, 'comp> {
                         .collect::<Vec<_>>()
                 )
             ),
+            ExpressionKind::Xor(exprs) => format!(
+                "\\left({}\\right)",
+                util::logic_to_matrix(
+                    " \\oplus ",
+                    &exprs
+                        .iter()
+                        .map(|expr| self.expression_to_tex(expr))
+                        .collect::<Vec<_>>()
+                )
+            ),
             ExpressionKind::Tuple(exprs) => {
                 format!(
                     "\\left({}\\right)",
@@ -172,7 +192,7 @@ impl<'a, 'comp> BlockWriter<'a, 'comp> {
             ExpressionKind::FnCall(name, args) => {
                 format!(
                     "\\O{{{}}}({})",
-                    util::ident_to_tex(name),
+                    name.ident().replace("_", "\\_"),
                     args.iter()
                         .map(|expr| self.expression_to_tex(expr))
                         .collect::<Vec<_>>()
@@ -351,7 +371,6 @@ impl<'a, 'comp> BlockWriter<'a, 'comp> {
             }
 
             Statement::For(var, from, to, _, _) => {
-                println!("{var:?}");
                 if let Identifier::PackageIdentifier(PackageIdentifier::CodeLoopVar(
                     PackageOracleCodeLoopVarIdentifier {
                         start_comp,

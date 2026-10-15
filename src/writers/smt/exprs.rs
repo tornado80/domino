@@ -306,13 +306,13 @@ impl From<Type> for SmtExpr {
             TypeKind::Bits(length) => SmtExpr::Atom(format!("Bits_{}", length.resolved_suffix())),
             TypeKind::Maybe(t) => SmtExpr::List(vec![SmtExpr::Atom("Maybe".into()), (*t).into()]),
             TypeKind::Boolean => SmtExpr::Atom("Bool".to_string()),
-            TypeKind::Empty => SmtExpr::Atom("Empty".to_string()),
             TypeKind::Integer => SmtExpr::Atom("Int".into()),
             TypeKind::Table(t_idx, t_val) => SmtExpr::List(vec![
                 SmtExpr::Atom("Array".into()),
                 (*t_idx).into(),
                 Type::maybe(*t_val).into(),
             ]),
+            TypeKind::Tuple(types) if types.is_empty() => SmtExpr::Atom("Tuple0".into()),
             TypeKind::Tuple(types) => SmtExpr::List({
                 let mut els = vec![SmtExpr::Atom(format!("Tuple{}", types.len()))];
                 for t in types {
@@ -320,6 +320,8 @@ impl From<Type> for SmtExpr {
                 }
                 els
             }),
+            TypeKind::Empty => SmtExpr::Atom("Empty".to_string()),
+            TypeKind::UserDefined(udefty) => SmtExpr::Atom(format!("{udefty}")),
             kind => {
                 panic!("not implemented: {kind:?}")
             }
@@ -339,6 +341,7 @@ impl From<&Type> for SmtExpr {
                 (&**t_idx).into(),
                 Type::maybe(*t_val.clone()).into(),
             ]),
+            TypeKind::Tuple(types) if types.is_empty() => SmtExpr::Atom("Tuple0".into()),
             TypeKind::Tuple(types) => SmtExpr::List({
                 let mut els = vec![SmtExpr::Atom(format!("Tuple{}", types.len()))];
                 for t in types {
@@ -347,6 +350,7 @@ impl From<&Type> for SmtExpr {
                 els
             }),
             TypeKind::Empty => SmtExpr::Atom("Empty".to_string()),
+            TypeKind::UserDefined(udefty) => SmtExpr::Atom(format!("{udefty}")),
             _ => {
                 panic!("not implemented: {t:?}")
             }

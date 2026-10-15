@@ -4,8 +4,12 @@ use std::{
 };
 
 use crate::{
+    gamehops::equivalence::{
+        smtrewrite::SmtStatementKind,
+        {ClaimType, ResolvedClaim},
+    },
     hacks,
-    theorem::{Claim, ClaimType, GameInstance, RandomnessMappingInjectivityCheck, RandomnessType},
+    theorem::{GameInstance, RandomnessMappingInjectivityCheck, RandomnessType},
     transforms::samplify::SampleInfo,
     types::{Type, TypeKind},
     writers::smt::{
@@ -130,6 +134,8 @@ impl<'a> EquivalenceContext<'a> {
     pub(crate) fn emit_invariant(&self) -> Vec<SmtExpr> {
         self.invariants
             .iter()
+            .chain(self.left_invariants.iter())
+            .chain(self.right_invariants.iter())
             .map(|stmt| stmt.expr.clone())
             .collect()
     }
@@ -197,7 +203,10 @@ impl<'a> EquivalenceContext<'a> {
         .into()
     }
 
-    pub(crate) fn emit_game_or_package_invariant_start_assert(&self, claim: &Claim) -> SmtExpr {
+    pub(crate) fn emit_game_or_package_invariant_start_assert(
+        &self,
+        claim: &ResolvedClaim,
+    ) -> SmtExpr {
         let gctx = match claim.ty {
             ClaimType::LeftGameInvariant | ClaimType::LeftPackageInvariant => {
                 self.left_game_inst_ctx()
@@ -228,7 +237,7 @@ impl<'a> EquivalenceContext<'a> {
     /// with the single combined refutation.
     pub(crate) fn claim_assumptions_and_goal(
         &self,
-        claim: &Claim,
+        claim: &ResolvedClaim,
         oracle_name: &str,
     ) -> (Vec<SmtExpr>, SmtExpr) {
         let gctx_left = self.left_game_inst_ctx();
@@ -255,6 +264,9 @@ impl<'a> EquivalenceContext<'a> {
         let pkg_params_left = &octx_left.pkg_inst_ctx().pkg_inst().params;
         let pkg_params_right = &octx_right.pkg_inst_ctx().pkg_inst().params;
 
+        let pkg_types_left = &octx_left.pkg_inst_ctx().pkg_inst().types;
+        let pkg_types_right = &octx_right.pkg_inst_ctx().pkg_inst().types;
+
         let args: Vec<_> = self
             .oracle_sig_by_exported_name(oracle_name)
             .unwrap()
@@ -276,6 +288,7 @@ impl<'a> EquivalenceContext<'a> {
             game_params: game_params_left,
             pkg_name: pkg_name_left,
             pkg_params: pkg_params_left,
+            pkg_types: pkg_types_left,
             oracle_name,
             oracle_import_name: oracle_name,
         };
@@ -286,6 +299,7 @@ impl<'a> EquivalenceContext<'a> {
             game_params: game_params_right,
             pkg_name: pkg_name_right,
             pkg_params: pkg_params_right,
+            pkg_types: pkg_types_right,
             oracle_name,
             oracle_import_name: oracle_name,
         };
@@ -340,14 +354,6 @@ impl<'a> EquivalenceContext<'a> {
                 .into()
         };
 
-        let build_invariant_new_call = |name: &str| -> SmtExpr {
-            (
-                name,
-                &state_left.new_global_const_name(game_inst_name_left, oracle_name.to_string()),
-                &state_right.new_global_const_name(game_inst_name_right, oracle_name.to_string()),
-            )
-                .into()
-        };
         let build_left_invariant_new_call = |name: &str| -> SmtExpr {
             (
                 name,
@@ -366,16 +372,14 @@ impl<'a> EquivalenceContext<'a> {
         let dep_calls: Vec<_> = claim
             .dependencies()
             .iter()
-            .map(|dep_name| {
-                let claim_type = ClaimType::guess_from_name(dep_name);
-                match claim_type {
-                    ClaimType::Lemma => build_lemma_call.clone()(dep_name),
-                    ClaimType::Relation => build_relation_call(dep_name),
-                    ClaimType::Invariant
-                    | ClaimType::LeftPackageInvariant
-                    | ClaimType::RightPackageInvariant
-                    | ClaimType::LeftGameInvariant
-                    | ClaimType::RightGameInvariant => unreachable!(),
+            .map(|dep| match dep.ty {
+                ClaimType::Lemma => build_lemma_call.clone()(&dep.name),
+                ClaimType::Relation => build_relation_call(&dep.name),
+                ClaimType::LeftPackageInvariant
+                | ClaimType::RightPackageInvariant
+                | ClaimType::LeftGameInvariant
+                | ClaimType::RightGameInvariant => {
+                    unreachable!("Not a valid dependency: {} - {:?}", dep.name, dep.ty)
                 }
             })
             .collect();
@@ -383,7 +387,6 @@ impl<'a> EquivalenceContext<'a> {
         let postcond_call = match claim.ty {
             ClaimType::Lemma => build_lemma_call.clone()(&claim.name),
             ClaimType::Relation => build_relation_call(&claim.name),
-            ClaimType::Invariant => build_invariant_new_call(&claim.name),
             ClaimType::LeftPackageInvariant => build_left_invariant_new_call(&claim.name),
             ClaimType::RightPackageInvariant => build_right_invariant_new_call(&claim.name),
             ClaimType::LeftGameInvariant => build_left_invariant_new_call(&claim.name),
@@ -395,37 +398,28 @@ impl<'a> EquivalenceContext<'a> {
             build_invariant_old_call("invariant"),
         ];
 
-        for pkg in &gctx_left.game().pkgs {
-            if !pkg.pkg.invariants.is_empty() {
-                dependencies_code.push(build_left_invariant_old_call(&format!(
-                    "package-invariant!{}-{}!",
-                    game_inst_name_left,
-                    pkg.name()
-                )));
-            }
-        }
-        for pkg in &gctx_right.game().pkgs {
-            if !pkg.pkg.invariants.is_empty() {
-                dependencies_code.push(build_right_invariant_old_call(&format!(
-                    "package-invariant!{}-{}!",
-                    game_inst_name_right,
-                    pkg.name()
-                )));
-            }
-        }
-
-        if !gctx_left.game().invariants.is_empty() {
-            dependencies_code.push(build_left_invariant_old_call(&format!(
-                "game-invariant!{}!",
-                game_inst_name_left,
-            )));
-        }
-        if !gctx_right.game().invariants.is_empty() {
-            dependencies_code.push(build_right_invariant_old_call(&format!(
-                "game-invariant!{}!",
-                game_inst_name_right,
-            )));
-        }
+        dependencies_code.extend(
+            self.left_invariants
+                .iter()
+                .filter_map(|stmt| match stmt.kind {
+                    SmtStatementKind::GameInvariant { .. }
+                    | SmtStatementKind::PackageInvariant { .. } => {
+                        Some(build_left_invariant_old_call(&stmt.kind.name()))
+                    }
+                    _ => None,
+                }),
+        );
+        dependencies_code.extend(
+            self.right_invariants
+                .iter()
+                .filter_map(|stmt| match stmt.kind {
+                    SmtStatementKind::GameInvariant { .. }
+                    | SmtStatementKind::PackageInvariant { .. } => {
+                        Some(build_right_invariant_old_call(&stmt.kind.name()))
+                    }
+                    _ => None,
+                }),
+        );
 
         for dep in dep_calls {
             dependencies_code.push(dep)
@@ -436,7 +430,11 @@ impl<'a> EquivalenceContext<'a> {
 
     /// The single-refutation claim assertion `prove` uses:
     /// `(assert (not (=> (and <deps>) <goal>)))`.
-    pub(crate) fn emit_oracle_claim_assert(&self, claim: &Claim, oracle_name: &str) -> SmtExpr {
+    pub(crate) fn emit_oracle_claim_assert(
+        &self,
+        claim: &ResolvedClaim,
+        oracle_name: &str,
+    ) -> SmtExpr {
         let (deps, goal) = self.claim_assumptions_and_goal(claim, oracle_name);
         crate::writers::smt::exprs::SmtAssert(SmtNot(SmtImplies(SmtAnd(deps), goal))).into()
     }
@@ -450,7 +448,11 @@ impl<'a> EquivalenceContext<'a> {
     /// [`emit_oracle_claim_assert`](Self::emit_oracle_claim_assert) produces.
     // Consumed by `domino debug` (story 06); no non-test caller on this branch yet.
     #[allow(dead_code)]
-    pub(crate) fn emit_claim_assumptions(&self, claim: &Claim, oracle_name: &str) -> Vec<SmtExpr> {
+    pub(crate) fn emit_claim_assumptions(
+        &self,
+        claim: &ResolvedClaim,
+        oracle_name: &str,
+    ) -> Vec<SmtExpr> {
         let (deps, _goal) = self.claim_assumptions_and_goal(claim, oracle_name);
         deps.into_iter()
             .map(|dep| crate::writers::smt::exprs::SmtAssert(dep).into())
@@ -462,80 +464,13 @@ impl<'a> EquivalenceContext<'a> {
     /// are already on the stack.
     // Consumed by `domino debug` (story 06); no non-test caller on this branch yet.
     #[allow(dead_code)]
-    pub(crate) fn emit_claim_goal_negated(&self, claim: &Claim, oracle_name: &str) -> SmtExpr {
+    pub(crate) fn emit_claim_goal_negated(
+        &self,
+        claim: &ResolvedClaim,
+        oracle_name: &str,
+    ) -> SmtExpr {
         let (_deps, goal) = self.claim_assumptions_and_goal(claim, oracle_name);
         crate::writers::smt::exprs::SmtAssert(SmtNot(goal)).into()
-    }
-
-    /// The generated package- and game-invariant claims for this equivalence, i.e. the claims
-    /// that are not written by the user but derived from the presence of `invariant:` files on
-    /// the packages and games.
-    ///
-    /// Lifted out of `EquivalenceSmtDriver` so `domino debug` (story 06) can enumerate the same
-    /// claim set the prover checks without duplicating the logic.
-    pub(crate) fn generate_game_or_package_invariant_claims(&self) -> Vec<Claim> {
-        fn package_invariant_claims(
-            gctx: GameInstanceContext<'_>,
-            claim_type: ClaimType,
-        ) -> Vec<Claim> {
-            gctx.game()
-                .pkgs
-                .iter()
-                .filter_map(|pkg| {
-                    if pkg.pkg.invariants.is_empty() {
-                        None
-                    } else {
-                        Some(Claim {
-                            admitted: false,
-                            dependencies: vec!["no-abort".to_string()],
-                            ty: claim_type,
-                            name: format!(
-                                "package-invariant!{}-{}!",
-                                gctx.game_inst_name(),
-                                pkg.name()
-                            ),
-                        })
-                    }
-                })
-                .collect()
-        }
-
-        fn game_invariant_claim(
-            gctx: GameInstanceContext<'_>,
-            claim_type: ClaimType,
-        ) -> Option<Claim> {
-            if gctx.game().invariants.is_empty() {
-                None
-            } else {
-                Some(Claim {
-                    admitted: false,
-                    dependencies: vec!["no-abort".to_string()],
-                    ty: claim_type,
-                    name: format!("game-invariant!{}!", gctx.game_inst_name()),
-                })
-            }
-        }
-
-        let mut claims = vec![];
-        claims.extend(package_invariant_claims(
-            self.left_game_inst_ctx(),
-            ClaimType::LeftPackageInvariant,
-        ));
-        claims.extend(package_invariant_claims(
-            self.right_game_inst_ctx(),
-            ClaimType::RightPackageInvariant,
-        ));
-        if let Some(claim) =
-            game_invariant_claim(self.left_game_inst_ctx(), ClaimType::LeftGameInvariant)
-        {
-            claims.push(claim);
-        }
-        if let Some(claim) =
-            game_invariant_claim(self.right_game_inst_ctx(), ClaimType::RightGameInvariant)
-        {
-            claims.push(claim);
-        }
-        claims
     }
 
     fn randomness_mapping_candidates(&self, oracle_name: &str) -> Vec<RandomnessMappingEntry> {
@@ -545,23 +480,23 @@ impl<'a> EquivalenceContext<'a> {
             .exports
             .iter()
             .find(|export| export.name() == oracle_name)
-            .unwrap_or_else(|| panic!("could not find left export {oracle_name}"));
+            .unwrap_or_else(|| unreachable!("oracle resolution should have caught this: could not find left export {oracle_name}"));
         let right_export = self
             .right_game_inst_ctx()
             .game()
             .exports
             .iter()
             .find(|export| export.name() == oracle_name)
-            .unwrap_or_else(|| panic!("could not find right export {oracle_name}"));
+            .unwrap_or_else(|| unreachable!("oracle resolution should have caught this: could not find right export {oracle_name}"));
 
         let left_offsets = self
             .max_offsets_left()
             .get(left_export)
-            .unwrap_or_else(|| panic!("could not find max offsets for left export {oracle_name}"));
+            .unwrap_or_else(|| unreachable!("sample_max_counter_extractor should have filled this: could not find max offsets for left export {oracle_name}"));
         let right_offsets = self
             .max_offsets_right()
             .get(right_export)
-            .unwrap_or_else(|| panic!("could not find max offsets for right export {oracle_name}"));
+            .unwrap_or_else(|| unreachable!("sample_max_counter_extractor should have filled this: could not find max offsets for right export {oracle_name}"));
 
         let mut left_entries: Vec<_> = left_offsets
             .iter()
@@ -703,7 +638,7 @@ impl<'a> EquivalenceContext<'a> {
 
         base_declarations.extend(hacks::MaybeDeclaration);
         base_declarations.push(hacks::ReturnValueDeclaration.into());
-        base_declarations.extend(hacks::TuplesDeclaration(1..32));
+        base_declarations.extend(hacks::TuplesDeclaration(0..32));
         base_declarations.extend(hacks::EmptyDeclaration);
         base_declarations.push(hacks::SampleIdDeclaration.into());
 
@@ -807,78 +742,7 @@ impl<'a> EquivalenceContext<'a> {
     }
 
     pub(crate) fn emit_return_value_helpers(&self, oracle_name: &str) -> Vec<SmtExpr> {
-        let left_gctx = self.left_game_inst_ctx();
-        let left_octx = left_gctx.exported_oracle_ctx_by_name(oracle_name).unwrap();
-        let left_pctx = left_octx.pkg_inst_ctx();
-
-        let right_gctx = self.right_game_inst_ctx();
-        let right_octx = right_gctx.exported_oracle_ctx_by_name(oracle_name).unwrap();
-        let right_pctx = right_octx.pkg_inst_ctx();
-
-        let left_return_value = left_octx.return_value_const_pattern(oracle_name);
-        let right_return_value = right_octx.return_value_const_pattern(oracle_name);
-
-        let left_is_abort = ReturnIsAbortConst {
-            game_inst_name: left_gctx.game_inst().name(),
-            pkg_inst_name: left_pctx.pkg_inst_name(),
-            oracle_name,
-            ty: left_octx.oracle_return_type(),
-        };
-
-        let right_is_abort = ReturnIsAbortConst {
-            game_inst_name: right_gctx.game_inst().name(),
-            pkg_inst_name: right_pctx.pkg_inst_name(),
-            oracle_name,
-            ty: right_octx.oracle_return_type(),
-        };
-
-        let consts: [(_, SmtExpr); 3] = [
-            (
-                "<equal-aborts>",
-                SmtEq2 {
-                    lhs: left_is_abort.value(left_return_value.name()),
-                    rhs: right_is_abort.value(right_return_value.name()),
-                }
-                .into(),
-            ),
-            (
-                "<no-aborts>",
-                SmtAnd(vec![
-                    SmtNot(left_is_abort.value(left_return_value.name())).into(),
-                    SmtNot(right_is_abort.value(right_return_value.name())).into(),
-                ])
-                .into(),
-            ),
-            (
-                "<same-outputs>",
-                SmtEq2 {
-                    lhs: left_return_value.name(),
-                    rhs: right_return_value.name(),
-                }
-                .into(),
-            ),
-        ];
-
-        consts
-            .into_iter()
-            .flat_map(|(name, value)| {
-                let declare = declare_const(name, Sort::Bool);
-                let constrain = SmtAssert(SmtEq2 {
-                    lhs: name,
-                    rhs: value,
-                });
-
-                [declare, constrain.into()]
-            })
-            .chain(std::iter::once(
-                self.relation_definition_equal_aborts(oracle_name).into(),
-            ))
-            .chain(std::iter::once(
-                self.relation_definition_left_no_abort(oracle_name).into(),
-            ))
-            .chain(std::iter::once(
-                self.relation_definition_right_no_abort(oracle_name).into(),
-            ))
+        std::iter::once(self.relation_definition_equal_aborts(oracle_name).into())
             .chain(std::iter::once(
                 self.relation_definition_no_abort(oracle_name).into(),
             ))
@@ -886,8 +750,6 @@ impl<'a> EquivalenceContext<'a> {
                 self.relation_definition_same_output(oracle_name).into(),
             ))
             .collect()
-
-        // out
     }
 
     /// Declares (and mostly constrains) the base constants for the equivalence check.
@@ -1187,8 +1049,10 @@ impl<'a> EquivalenceContext<'a> {
         for (decl_ctr, assert_ctr, assert_zero_ctr) in build_rands(self.sample_info_left(), left) {
             out.push(decl_ctr);
             out.push(assert_ctr);
-            // it is important for randomness mapping to assert that old counter is zero
-            // otherwise offset is needed
+            // For offset-based randomness mapping, we treat the user-provided
+            // counters as actual randomness counters instead of adding them to
+            // the old counters (base counters). This requires asserting that
+            // old counters are zero and makes the SMT code simpler.
             out.push(assert_zero_ctr);
         }
 
@@ -1196,8 +1060,10 @@ impl<'a> EquivalenceContext<'a> {
         {
             out.push(decl_ctr);
             out.push(assert_ctr);
-            // it is important for randomness mapping to assert that old counter is zero
-            // otherwise offset is needed
+            // For offset-based randomness mapping, we treat the user-provided
+            // counters as actual randomness counters instead of adding them to
+            // the old counters (base counters). This requires asserting that
+            // old counters are zero and makes the SMT code simpler.
             out.push(assert_zero_ctr);
         }
 
@@ -1454,6 +1320,7 @@ fn build_returns(
 
         let pkg_inst_name = &pkg_inst.name;
         let pkg_params = &pkg_inst.params;
+        let pkg_types = &pkg_inst.types;
         let pkg_name = &pkg_inst.pkg.name;
         let oracle_name = &sig.name;
         let oracle_import_name = export.name();
@@ -1474,6 +1341,7 @@ fn build_returns(
             game_params,
             pkg_name,
             pkg_params,
+            pkg_types,
             oracle_name,
             oracle_import_name,
         };
@@ -1616,9 +1484,9 @@ mod story04_tests {
     //! `emit_constant_declarations(None)`) against committed goldens and check the two new
     //! debugger-facing emitters compose back to the single refutation `prove` uses.
 
+    use crate::gamehops::equivalence::{ClaimType, ResolvedClaim, ResolvedDependency};
     use crate::gamehops::GameHop;
     use crate::project::Project as _;
-    use crate::theorem::{Claim, ClaimType};
     use crate::transforms::{theorem_transforms::EquivalenceTransform, TheoremTransform};
     use crate::writers::smt::contexts::EquivalenceContext;
     use crate::writers::smt::exprs::{SmtAnd, SmtAssert, SmtExpr, SmtImplies, SmtNot};
@@ -1629,13 +1497,19 @@ mod story04_tests {
 
     /// A claim that exercises every arm of `claim_assumptions_and_goal`: a `Lemma` goal, a
     /// `Relation` dependency (name starts with `relation`) and a `Lemma` dependency.
-    fn mixed_claim() -> Claim {
-        Claim {
+    fn mixed_claim() -> ResolvedClaim {
+        ResolvedClaim {
             name: "same-output".to_string(),
             ty: ClaimType::Lemma,
             dependencies: vec![
-                "relation-no-abort".to_string(),
-                "lemma-kem-correctness".to_string(),
+                ResolvedDependency {
+                    name: "relation-no-abort".to_string(),
+                    ty: ClaimType::Relation,
+                },
+                ResolvedDependency {
+                    name: "lemma-kem-correctness".to_string(),
+                    ty: ClaimType::Lemma,
+                },
             ],
             admitted: false,
         }

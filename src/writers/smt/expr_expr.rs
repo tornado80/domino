@@ -153,12 +153,13 @@ impl From<&Expression> for SmtExpr {
             //     &SelfStatePattern,
             // )
             //     .into(),
-            ExpressionKind::Bot => panic!("bot is broken"),
+            ExpressionKind::Bot => ("mk-empty".to_string()).into(), // SmtExpr::Atom("(mk-empty)".to_string()),
             ExpressionKind::TableAccess(table, index) => SmtExpr::List(vec![
                 SmtExpr::Atom("select".into()),
                 table.into(),
                 (&**index).into(),
             ]),
+            ExpressionKind::Tuple(exprs) if exprs.is_empty() => SmtExpr::Atom("mk-tuple0".into()),
             ExpressionKind::Tuple(exprs) => {
                 let mut l = vec![SmtExpr::Atom(format!("mk-tuple{}", exprs.len()))];
 
