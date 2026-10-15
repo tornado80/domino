@@ -1,14 +1,9 @@
 package ClientTmp {
-    types {
-        Elem,
-    }
-
     import oracles {
-        GetPair() -> (Elem, Elem),
+        GetPair() -> (Bool, Bool),
     }
 
-
-    oracle Query() -> Elem {
+    oracle Query() -> Bool {
         tmp <- invoke GetPair();
         (x, y) <- tmp;
         return (x and y);

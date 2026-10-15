@@ -1,33 +1,20 @@
 composition SplitInvokeGame {
-    types {
-        Elem,
-    }
-
     const b: Bool;
 
     instance pair = Pair {
         params {
             b: b,
         }
-
-        types {
-            Elem: Elem,
-        }
-
     }
 
-    instance client = Client {
-        types {
-            Elem: Elem,
-        }
+    instance client = Client {}
 
-    }
     compose {
         adversary: {
             Query: client,
-        }
+        },
         client: {
             GetPair: pair,
-        }
+        },
     }
 }
