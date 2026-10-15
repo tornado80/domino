@@ -164,8 +164,8 @@ pub fn render_summary(run: &DebugRun) -> String {
     s.push_str("======================\n");
     let _ = writeln!(
         s,
-        "{:<14}{}, proofstep {}",
-        "theorem", run.theorem, run.proofstep
+        "{:<14}{}, gamehop {}",
+        "theorem", run.theorem, run.gamehop
     );
     let _ = writeln!(
         s,
@@ -668,7 +668,7 @@ const prunedRow = (pb, parentId) => ({
 
 // ---- header ---------------------------------------------------------------
 document.getElementById("h-title").textContent =
-  `${T.theorem} · proofstep ${T.proofstep} · ${T.left_game} == ${T.right_game}`;
+  `${T.theorem} · gamehop ${T.gamehop} · ${T.left_game} == ${T.right_game}`;
 document.getElementById("h-sub").textContent =
   `oracle ${T.oracle} · claim ${T.claim}` + (T.admitted ? " · ADMITTED (nothing checked)" : "");
 
@@ -1383,7 +1383,7 @@ mod tests {
         DebugRun {
             schema: TRACE_SCHEMA,
             theorem: "demo".into(),
-            proofstep: 0,
+            gamehop: 0,
             left_game: "Game_L".into(),
             right_game: "Game_R".into(),
             oracle: "O".into(),

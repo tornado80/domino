@@ -2158,7 +2158,7 @@ UsefulOracle() -> (Integer, Bits(n)) {
 
     /// `ir::count_terminals` is a purely syntactic upper bound; with no
     /// `BranchOracle` the executor walks exactly the syntactic paths, so the two
-    /// must agree exactly on every side of every proofstep listed in the story.
+    /// must agree exactly on every side of every gamehop listed in the story.
     #[test]
     fn count_terminals_equals_unpruned_path_count() {
         use crate::debug::ir::count_terminals;

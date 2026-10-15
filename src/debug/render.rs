@@ -8,7 +8,7 @@
 //!   writes [`side_by_side`]'s output to `inlined.txt`, the file the `L<n>` path
 //!   labels index into.
 //! - [`render_side_by_side`] — the full `domino inline` command: transform a
-//!   theorem, inline one oracle for both sides of an equivalence proofstep, and
+//!   theorem, inline one oracle for both sides of an equivalence gamehop, and
 //!   render the result with a header.
 //!
 //! The two columns are numbered **independently**: left line `n` is `Label == n`
@@ -76,22 +76,22 @@ pub fn columns(left: &str, right: &str, line_numbers: bool) -> String {
 #[derive(Debug, thiserror::Error, miette::Diagnostic)]
 pub enum RenderError {
     #[error(
-        "theorem `{theorem}` has no proofstep {index} \
-         (it has {len} proofstep(s), numbered starting at 0)"
+        "theorem `{theorem}` has no gamehop {index} \
+         (it has {len} gamehop(s), numbered starting at 0)"
     )]
-    #[diagnostic(code(inline::proofstep_out_of_range))]
-    ProofstepOutOfRange {
+    #[diagnostic(code(inline::gamehop_out_of_range))]
+    GamehopOutOfRange {
         theorem: String,
         index: usize,
         len: usize,
     },
 
     #[error(
-        "proofstep {index} of theorem `{theorem}` is a {kind}; \
-         `domino inline` only supports equivalence proofsteps"
+        "gamehop {index} of theorem `{theorem}` is a {kind}; \
+         `domino inline` only supports equivalence gamehops"
     )]
     #[diagnostic(code(inline::not_an_equivalence))]
-    ProofstepNotEquivalence {
+    GamehopNotEquivalence {
         theorem: String,
         index: usize,
         kind: &'static str,
@@ -107,7 +107,7 @@ pub enum RenderError {
 }
 
 /// Render the inlined code of `oracle_name` for both sides of the equivalence
-/// proved at `proofstep` of `theorem`, side by side.
+/// proved at `gamehop` of `theorem`, side by side.
 ///
 /// `line_numbers = false` omits the numeric gutter (useful for diffing two runs).
 ///
@@ -115,7 +115,7 @@ pub enum RenderError {
 /// here.
 pub fn render_side_by_side(
     theorem: &Theorem,
-    proofstep: usize,
+    gamehop: usize,
     oracle_name: &str,
     line_numbers: bool,
 ) -> Result<String, RenderError> {
@@ -123,16 +123,16 @@ pub fn render_side_by_side(
 
     let hop = theorem
         .game_hops
-        .get(proofstep)
-        .ok_or_else(|| RenderError::ProofstepOutOfRange {
+        .get(gamehop)
+        .ok_or_else(|| RenderError::GamehopOutOfRange {
             theorem: theorem.name.clone(),
-            index: proofstep,
+            index: gamehop,
             len: theorem.game_hops.len(),
         })?;
 
-    let not_eq = |kind| RenderError::ProofstepNotEquivalence {
+    let not_eq = |kind| RenderError::GamehopNotEquivalence {
         theorem: theorem.name.clone(),
-        index: proofstep,
+        index: gamehop,
         kind,
     };
     let eq = match hop {
@@ -157,7 +157,7 @@ pub fn render_side_by_side(
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "theorem {}, proofstep {proofstep} ({} == {}), oracle {oracle_name}",
+        "theorem {}, gamehop {gamehop} ({} == {}), oracle {oracle_name}",
         theorem.name,
         eq.left_name(),
         eq.right_name(),
@@ -222,7 +222,7 @@ mod tests {
             let out = render_side_by_side(theorem, 0, "UsefulOracle", true).unwrap();
 
             assert!(out.lines().next().unwrap().starts_with(
-                "theorem Proof, proofstep 0 \
+                "theorem Proof, gamehop 0 \
                  (medium_composition == small_composition), oracle UsefulOracle"
             ));
 
@@ -259,14 +259,14 @@ mod tests {
     fn errors_are_specific() {
         with_raw_theorem("example-projects/hello-world", "Proof", |theorem| {
             match render_side_by_side(theorem, 9, "UsefulOracle", true) {
-                Err(RenderError::ProofstepOutOfRange { len, .. }) => assert_eq!(len, 2),
-                other => panic!("expected ProofstepOutOfRange, got {other:?}"),
+                Err(RenderError::GamehopOutOfRange { len, .. }) => assert_eq!(len, 2),
+                other => panic!("expected GamehopOutOfRange, got {other:?}"),
             }
             match render_side_by_side(theorem, 1, "UsefulOracle", true) {
-                Err(RenderError::ProofstepNotEquivalence { kind, .. }) => {
+                Err(RenderError::GamehopNotEquivalence { kind, .. }) => {
                     assert_eq!(kind, "reduction")
                 }
-                other => panic!("expected ProofstepNotEquivalence, got {other:?}"),
+                other => panic!("expected GamehopNotEquivalence, got {other:?}"),
             }
             match render_side_by_side(theorem, 0, "NoSuchOracle", true) {
                 Err(RenderError::Inline(InlineError::OracleNotExported { .. })) => {}
@@ -278,7 +278,7 @@ mod tests {
     #[test]
     fn snapshot_hello_world_useful_oracle() {
         // Fixture regenerated with:
-        //   domino inline --proof Proof --proofstep 0 --oracle UsefulOracle \
+        //   domino inline --theorem Proof --gamehop 0 --oracle UsefulOracle \
         //     > testdata/story03/inline-hello-world.txt
         // (run in example-projects/hello-world). Pins the full output, column
         // padding and trailing whitespace included.

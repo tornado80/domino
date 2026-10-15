@@ -1530,7 +1530,7 @@ mod story04_tests {
                 GameHop::Equivalence(eq) => Some(eq),
                 _ => None,
             })
-            .expect("proofstep 0 is an equivalence");
+            .expect("gamehop 0 is an equivalence");
 
         let eqctx = EquivalenceContext::new(eq, &theorem, &auxs);
         f(&eqctx);

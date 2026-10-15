@@ -98,7 +98,7 @@ impl SmtOut {
 /// Header metadata for the emitted files — a snapshot of the run's identity.
 struct Meta {
     theorem: String,
-    proofstep: usize,
+    gamehop: usize,
     left_game: String,
     right_game: String,
     oracle: String,
@@ -109,7 +109,7 @@ impl Meta {
     fn of(run: &DebugRun) -> Self {
         Self {
             theorem: run.theorem.clone(),
-            proofstep: run.proofstep,
+            gamehop: run.gamehop,
             left_game: run.left_game.clone(),
             right_game: run.right_game.clone(),
             oracle: run.oracle.clone(),
@@ -283,8 +283,8 @@ impl SmtWriter {
     fn file_header(&self) -> String {
         let m = &self.meta;
         format!(
-            "; domino debug — theorem {}, proofstep {}, {} == {}\n; oracle {}, claim {}\n",
-            m.theorem, m.proofstep, m.left_game, m.right_game, m.oracle, m.claim
+            "; domino debug — theorem {}, gamehop {}, {} == {}\n; oracle {}, claim {}\n",
+            m.theorem, m.gamehop, m.left_game, m.right_game, m.oracle, m.claim
         )
     }
 }

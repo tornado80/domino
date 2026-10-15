@@ -46,10 +46,10 @@ pub(crate) enum Commands {
 
     Gamehops(Gamehops),
 
-    /// Symbolically execute both sides of an equivalence proofstep and debug one claim.
+    /// Symbolically execute both sides of an equivalence gamehop and debug one claim.
     Debug(Debug),
 
-    /// Inline the code of an oracle for both sides of an equivalence proofstep, side by side.
+    /// Inline the code of an oracle for both sides of an equivalence gamehop, side by side.
     Inline(Inline),
 
     /// Export one HTML page per theorem: every game instance's composition
@@ -66,7 +66,7 @@ pub(crate) struct Html {
     pub(crate) path: Option<std::path::PathBuf>,
     /// Only export this theorem (default: all theorems).
     #[clap(long)]
-    pub(crate) proof: Option<String>,
+    pub(crate) theorem: Option<String>,
     /// Solver for the composition-diagram layout (as `domino latex`). Without
     /// one, a simple solver-free layout is drawn.
     #[clap(short, long, default_value = "z3")]
@@ -90,14 +90,14 @@ pub(crate) struct Inline {
     /// directory and its ancestors for an `ssp.toml`.
     #[clap(long)]
     pub(crate) path: Option<std::path::PathBuf>,
-    /// Name of the theorem the equivalence proofstep belongs to.
+    /// Name of the theorem the equivalence gamehop belongs to.
     #[clap(long)]
-    pub(crate) proof: String,
-    /// Index (starting at 0) of the equivalence proofstep within the theorem,
-    /// as printed by `domino proofsteps`.
+    pub(crate) theorem: String,
+    /// Index (starting at 0) of the equivalence gamehop within the theorem,
+    /// as printed by `domino gamehops`.
     #[clap(long)]
-    pub(crate) proofstep: usize,
-    /// Name of the oracle to inline, as exported by the games in the proofstep.
+    pub(crate) gamehop: usize,
+    /// Name of the oracle to inline, as exported by the games in the gamehop.
     #[clap(long)]
     pub(crate) oracle: String,
     /// Print without line numbers (useful for diffing two runs).
@@ -114,10 +114,10 @@ pub(crate) struct Debug {
     pub(crate) path: Option<std::path::PathBuf>,
     /// Name of the theorem.
     #[clap(long)]
-    pub(crate) proof: String,
-    /// Index (starting at 0) of the equivalence proofstep, as printed by `domino proofsteps`.
+    pub(crate) theorem: String,
+    /// Index (starting at 0) of the equivalence gamehop, as printed by `domino gamehops`.
     #[clap(long)]
-    pub(crate) proofstep: usize,
+    pub(crate) gamehop: usize,
     /// Exported oracle name.
     #[clap(long)]
     pub(crate) oracle: String,

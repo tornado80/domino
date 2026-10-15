@@ -83,12 +83,12 @@ do what you want. Use:
 ```bash
 source ~/.cache/domino/cvc5-lib-env.sh   # once per shell
 cargo run -p domino --features cvc5-lib -- debug \
-  --proof <THEOREM> --proofstep <N> --oracle <ORACLE> --claim <CLAIM>
+  --theorem <THEOREM> --gamehop <N> --oracle <ORACLE> --claim <CLAIM>
 ```
 
-`--proof`/`--proofstep`/`--oracle`/`--claim` describe which equivalence proofstep and claim to
-debug; run `domino proofsteps` (also needs `-p domino -- proofsteps`, no `cvc5-lib` required) from
-inside a project directory to list the valid `--proof`/`--proofstep` values.
+`--theorem`/`--gamehop`/`--oracle`/`--claim` describe which equivalence gamehop and claim to
+debug; run `domino gamehops` (also needs `-p domino -- gamehops`, no `cvc5-lib` required) from
+inside a project directory to list the valid `--theorem`/`--gamehop` values.
 
 ## Usage
 

@@ -127,11 +127,11 @@ pub enum DebugError {
     #[error("no theorem named `{name}` in this project")]
     TheoremNotFound { name: String },
 
-    #[error("proofstep {index} is out of range (the theorem has {len} proofsteps: 0..{len})")]
-    ProofstepOutOfRange { index: usize, len: usize },
+    #[error("gamehop {index} is out of range (the theorem has {len} gamehops: 0..{len})")]
+    GamehopOutOfRange { index: usize, len: usize },
 
-    #[error("proofstep {index} is a {kind}; `domino debug` only supports equivalence proofsteps")]
-    ProofstepNotEquivalence { index: usize, kind: &'static str },
+    #[error("gamehop {index} is a {kind}; `domino debug` only supports equivalence gamehops")]
+    GamehopNotEquivalence { index: usize, kind: &'static str },
 
     #[error("oracle `{oracle}` is not exported by game instance `{game_inst}`")]
     OracleNotExported { oracle: String, game_inst: String },
@@ -207,7 +207,7 @@ pub struct DebugRun {
     /// `trace.json` schema version. Always [`TRACE_SCHEMA`].
     pub schema: u32,
     pub theorem: String,
-    pub proofstep: usize,
+    pub gamehop: usize,
     pub left_game: String,
     pub right_game: String,
     pub oracle: String,
@@ -478,7 +478,7 @@ impl DebugRun {
 pub fn run_debug_command<P, B>(
     project: &P,
     req_proof: &str,
-    req_proofstep: usize,
+    req_gamehop: usize,
     oracle: &str,
     claim_name: &str,
     opts: &DebugOptions,
@@ -505,23 +505,23 @@ where
     let n_hops = theorem.game_hops.len();
     let hop = theorem
         .game_hops
-        .get(req_proofstep)
-        .ok_or(DebugError::ProofstepOutOfRange {
-            index: req_proofstep,
+        .get(req_gamehop)
+        .ok_or(DebugError::GamehopOutOfRange {
+            index: req_gamehop,
             len: n_hops,
         })?;
     let eq = match hop {
         GameHop::Equivalence(eq) => eq,
         GameHop::Hybrid(hyb) => hyb.equivalence(),
         GameHop::Reduction(_) => {
-            return Err(DebugError::ProofstepNotEquivalence {
-                index: req_proofstep,
+            return Err(DebugError::GamehopNotEquivalence {
+                index: req_gamehop,
                 kind: "reduction",
             })
         }
         GameHop::Conjecture(_) => {
-            return Err(DebugError::ProofstepNotEquivalence {
-                index: req_proofstep,
+            return Err(DebugError::GamehopNotEquivalence {
+                index: req_gamehop,
                 kind: "conjecture",
             })
         }
@@ -638,7 +638,7 @@ where
     let mut run = DebugRun {
         schema: TRACE_SCHEMA,
         theorem: eq.theorem_name().to_string(),
-        proofstep: req_proofstep,
+        gamehop: req_gamehop,
         left_game: eq.left_name().to_string(),
         right_game: eq.right_name().to_string(),
         oracle: oracle.to_string(),
@@ -1474,8 +1474,8 @@ pub fn render_tree(run: &DebugRun) -> String {
 
     let _ = writeln!(
         out,
-        "theorem {}, proofstep {} ({} == {})",
-        run.theorem, run.proofstep, run.left_game, run.right_game
+        "theorem {}, gamehop {} ({} == {})",
+        run.theorem, run.gamehop, run.left_game, run.right_game
     );
     let _ = writeln!(out, "oracle {}, claim {}", run.oracle, run.claim);
 

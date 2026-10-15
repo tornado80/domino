@@ -203,8 +203,8 @@ fn debug(d: &Debug) -> Result<(), Error> {
 
     let run = run_debug_command(
         &project,
-        &d.proof,
-        d.proofstep,
+        &d.theorem,
+        d.gamehop,
         &d.oracle,
         &d.claim,
         &opts,
@@ -242,12 +242,12 @@ fn inline(i: &Inline) -> Result<(), Error> {
     let project = project::DirectoryProject::load(project_root, &files)?;
 
     let theorem = project
-        .get_theorem(&i.proof)
-        .ok_or_else(|| TheoremNotFound(i.proof.clone()))?;
+        .get_theorem(&i.theorem)
+        .ok_or_else(|| TheoremNotFound(i.theorem.clone()))?;
 
     let listing = sspverif::debug::render::render_side_by_side(
         theorem,
-        i.proofstep,
+        i.gamehop,
         &i.oracle,
         !i.no_line_numbers,
     )?;
@@ -263,7 +263,7 @@ fn html(h: &Html) -> Result<(), Error> {
     let files = project::DirectoryFiles::load(&project_root)?;
     let project = project::DirectoryProject::load(project_root.clone(), &files)?;
 
-    let names: Vec<String> = match &h.proof {
+    let names: Vec<String> = match &h.theorem {
         Some(name) => {
             project
                 .get_theorem(name)
