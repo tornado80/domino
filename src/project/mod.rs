@@ -120,6 +120,9 @@ pub trait Project {
         {
             ui.start();
             let theorem = self.get_theorem(theorem_key).unwrap();
+            // Always shown, before any SMT work: an unmarked assumption is trusted, so this
+            // line is the only guard against a forgotten `derived`.
+            ui.println(&theorem.derivation.summary(&theorem.name))?;
 
             if !config.theorem_requested(theorem_key) {
                 ui.skip();

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::{
+    derivation::Derivation,
     expressions::Expression,
     gamehops::{
         reduction::{Assumption, Reduction},
@@ -284,6 +285,8 @@ pub struct Theorem<'a> {
     pub proofs: Vec<Proof<'a>>,
     pub game_hops: Vec<GameHop<'a>>,
     pub pkgs: Vec<Package>,
+    /// Which assumptions the hops establish, and what the theorem trusts.
+    pub derivation: Derivation,
 }
 
 impl<'a> Theorem<'a> {

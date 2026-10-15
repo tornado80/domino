@@ -64,7 +64,14 @@ impl UI for IndicatifUI {
     type LatexUI = IndicatifLatexUI;
 
     fn println(&self, line: &str) -> std::io::Result<()> {
-        self.multi_progress.println(line)
+        // `MultiProgress::println` drops the line when the bars are hidden (for
+        // example when stdout is not a terminal).
+        if self.multi_progress.is_hidden() {
+            println!("{line}");
+            Ok(())
+        } else {
+            self.multi_progress.println(line)
+        }
     }
 
     fn gamehop_ui(&self) -> Self::GamehopUI {

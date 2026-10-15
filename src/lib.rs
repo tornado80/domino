@@ -36,6 +36,7 @@ pub mod project;
 
 pub mod util;
 
+pub mod derivation;
 pub mod proof;
 pub mod theorem;
 

@@ -1,0 +1,19 @@
+composition Derived6 {
+    const m: Integer;
+    const z: Bits(m);
+    const k: Integer;
+
+    instance key = KeyRealMoreParams {
+        params {
+            n: m,
+            zeron: z,
+        }
+    }
+
+    compose {
+        adversary: {
+            Set: key,
+            Get: key,
+        },
+    }
+}

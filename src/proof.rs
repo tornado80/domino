@@ -51,10 +51,14 @@ impl Specialization {
 
 impl<'a> Proof<'a> {
     /// Tries to find a sequence of game hops that proves that the game instance with name
-    /// `left_name` is indistinguishable from the game instance with name `right_name`
+    /// `left_name` is indistinguishable from the game instance with name `right_name`.
+    ///
+    /// Only the hops for which `edge_allowed` holds are used. The proof keeps all of
+    /// `gamehops`, so the hop indices of the path are indices into `gamehops`.
     pub fn try_new(
         instances: &[GameInstance],
         gamehops: &[GameHop<'a>],
+        edge_allowed: impl Fn(&GameHop) -> bool,
         name: String,
         left_name: String,
         right_name: String,
@@ -136,8 +140,13 @@ impl<'a> Proof<'a> {
                     hops,
                 });
             } else {
-                let reach =
-                    reachable_games(instances, gamehops, &mut specialization, current_inst_idx);
+                let reach = reachable_games(
+                    instances,
+                    gamehops,
+                    &edge_allowed,
+                    &mut specialization,
+                    current_inst_idx,
+                );
 
                 // next_inst_idx: offset into specializations, i.e. designating a Game Instance
                 // hop_idx: offset into gamehops
@@ -347,15 +356,20 @@ fn other_game(
 }
 
 /// Returns a vector of index pairs that point to specialized game instances that can be reached
-/// with a single game hop, as well as that game hop's index.
+/// with a single allowed game hop, as well as that game hop's index.
 fn reachable_games(
     instances: &[GameInstance],
     gamehops: &[GameHop],
+    edge_allowed: impl Fn(&GameHop) -> bool,
     specialization: &mut Vec<Specialization>,
     game: usize,
 ) -> Vec<(usize, usize)> {
     let mut positions = Vec::new();
-    for (idx, hop) in gamehops.iter().enumerate() {
+    for (idx, hop) in gamehops
+        .iter()
+        .enumerate()
+        .filter(|(_, hop)| edge_allowed(hop))
+    {
         if let Some(position) = other_game(instances, specialization, game, hop) {
             positions.push((position, idx));
         }

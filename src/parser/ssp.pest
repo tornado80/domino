@@ -56,6 +56,9 @@ kw_empty_bitstring = _{ "empty-bitstring" }
 kw_theorem = _{ "theorem" }
 kw_assumption = _{ "assumption" }
 kw_assumptions = _{ "assumptions" }
+// `derived` only when another identifier follows, so an assumption may still be named `derived`.
+kw_derived = { derived_word ~ &identifier }
+derived_word = @{ "derived" ~ !( ASCII_ALPHANUMERIC | "_" ) }
 kw_propositions = _{ "propositions" }
 kw_reduction = _{ "reduction" }
 kw_equivalence = _{ "equivalence" }
@@ -257,7 +260,9 @@ theorem_spec_list = { ( types | const_decl | instance_decl | hybrid_instance_dec
   assumptions = { kw_assumptions ~ "{" ~ ( assumption_entry )* ~ "}" }
 
     /// An assumption entry relating two games with a distinguishing advantage.
-    assumption_entry = { identifier ~ ":" ~ identifier ~ "~" ~ identifier }
+    /// `derived` marks a claim that the theorem's own hops must establish; an
+    /// unmarked entry is a base assumption and is trusted.
+    assumption_entry = { kw_derived? ~ identifier ~ ":" ~ identifier ~ "~" ~ identifier }
 
   /// Block containing the propositions (security claims) this theorem establishes.
   propositions = { kw_propositions ~ "{" ~ ( proposition_entry )* ~ "}" }

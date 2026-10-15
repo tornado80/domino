@@ -37,6 +37,17 @@ pub struct Assumption {
     pub name: String,
     pub left_name: String,
     pub right_name: String,
+    pub kind: AssumptionKind,
+}
+
+/// Whether the theorem trusts an assumption or must establish it from its own hops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssumptionKind {
+    /// Trusted without proof. This is the default for an unmarked entry.
+    Base,
+    /// Marked `derived`: established only by a hop path whose reductions cite
+    /// assumptions that are established without it (see `crate::derivation`).
+    Derived,
 }
 
 #[derive(Debug, Clone)]

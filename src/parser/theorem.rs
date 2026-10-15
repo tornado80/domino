@@ -5,9 +5,13 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::{
     debug_assert_matches,
+    derivation::{self, Failure, Proposition},
     expressions::{Expression, ExpressionKind},
     gamehops::{
-        conjecture::Conjecture, equivalence::Equivalence, hybrid::Hybrid, reduction::Assumption,
+        conjecture::Conjecture,
+        equivalence::Equivalence,
+        hybrid::Hybrid,
+        reduction::{Assumption, AssumptionKind},
         GameHop,
     },
     identifier::{
@@ -24,7 +28,8 @@ use crate::{
             AssumptionMappingLeftGameInstanceIsNotFromAssumption,
             AssumptionMappingTypeParameterMismatchError, InductionStepUnprovableError,
             ReductionContainsDifferentPackagesError,
-            ReductionPackageInstanceTypeParameterMismatchError, UnprovenTheoremError,
+            ReductionPackageInstanceTypeParameterMismatchError, UnestablishedClaimError,
+            UnestablishedClaimsError,
         },
         Rule,
     },
@@ -73,7 +78,10 @@ pub(crate) struct ParseTheoremContext<'src> {
     pub instances: Vec<GameInstance>,
     pub instances_table: HashMap<String, (usize, GameInstance, Span<'src>)>,
     pub assumptions: Vec<Assumption>,
-    pub propositions: Vec<Proof<'src>>,
+    /// The span of each entry of `assumptions`, in the same order.
+    pub assumption_spans: Vec<SourceSpan>,
+    /// Recorded when parsed; proven at the end of the theorem, after all hops are known.
+    pub propositions: Vec<(Proposition, SourceSpan)>,
     pub game_hops: Vec<GameHop<'src>>,
     /// Hybrid game instance name -> the name its declaration gives the loop
     /// variable (internally `hybrid$loop`).
@@ -103,6 +111,7 @@ impl<'src> ParseContext<'src> {
             instances: vec![],
             instances_table: HashMap::new(),
             assumptions: vec![],
+            assumption_spans: vec![],
             propositions: vec![],
             game_hops: vec![],
             hybrid_loop_vars: HashMap::new(),
@@ -236,7 +245,7 @@ pub enum ParseTheoremError {
 
     #[diagnostic(transparent)]
     #[error(transparent)]
-    UnprovenTheorem(#[from] UnprovenTheoremError),
+    UnestablishedClaims(#[from] UnestablishedClaimsError),
 
     #[diagnostic(transparent)]
     #[error(transparent)]
@@ -365,18 +374,19 @@ pub fn handle_theorem<'src>(
         }
     }
 
+    let (derivation, proofs) = derive_claims(&ctx)?;
+
     let ParseTheoremContext {
         theorem_name,
         types: theorem_types,
         consts,
         instances,
         assumptions,
-        propositions,
         game_hops,
         ..
     } = ctx;
 
-    if propositions.is_empty() {
+    if proofs.is_empty() {
         log::warn!("No propositions defined, only verifying gamehops");
     }
 
@@ -394,9 +404,51 @@ pub fn handle_theorem<'src>(
         consts,
         instances,
         assumptions,
-        proofs: propositions,
+        proofs,
         game_hops,
         pkgs: pkgs.into_values().collect(),
+        derivation,
+    })
+}
+
+/// Establishes the derived assumptions and proves the propositions (see
+/// [`derivation::derive`]). Reports every claim that is not established in one error.
+fn derive_claims<'src>(
+    ctx: &ParseTheoremContext<'src>,
+) -> Result<(derivation::Derivation, Vec<Proof<'src>>), UnestablishedClaimsError> {
+    let propositions: Vec<_> = ctx.propositions.iter().map(|(p, _)| p.clone()).collect();
+    derivation::derive(
+        &ctx.instances,
+        &ctx.game_hops,
+        &ctx.assumptions,
+        &propositions,
+    )
+    .map_err(|failures| UnestablishedClaimsError {
+        theorem_name: ctx.theorem_name.to_string(),
+        related: failures
+            .into_iter()
+            .map(|failure| {
+                let (claim_kind, claim_name, at, reason) = match failure {
+                    Failure::Assumption { index, reason } => (
+                        "derived assumption",
+                        &ctx.assumptions[index].name,
+                        ctx.assumption_spans[index],
+                        reason,
+                    ),
+                    Failure::Proposition { index, reason } => {
+                        let (proposition, span) = &ctx.propositions[index];
+                        ("proposition", &proposition.name, *span, reason)
+                    }
+                };
+                UnestablishedClaimError {
+                    source_code: ctx.named_source(),
+                    at,
+                    claim_kind,
+                    claim_name: claim_name.clone(),
+                    reason,
+                }
+            })
+            .collect(),
     })
 }
 
@@ -897,8 +949,14 @@ fn handle_assumptions(
     ast: Pairs<Rule>,
 ) -> Result<(), ParseTheoremError> {
     for pair in ast {
+        let span = pair.as_span();
+        let mut inner = pair.into_inner().peekable();
+        let kind = match inner.next_if(|token| token.as_rule() == Rule::kw_derived) {
+            Some(_) => AssumptionKind::Derived,
+            None => AssumptionKind::Base,
+        };
         let ((name, _), (left_name, left_name_span), (right_name, right_name_span)) =
-            handle_string_triplet(&mut pair.into_inner());
+            handle_string_triplet(&mut inner);
 
         ctx.game_instance(&left_name)
             .ok_or(UndefinedGameInstanceError {
@@ -920,7 +978,9 @@ fn handle_assumptions(
             name,
             left_name,
             right_name,
-        })
+            kind,
+        });
+        ctx.assumption_spans.push((span.start()..span.end()).into());
     }
 
     Ok(())
@@ -951,19 +1011,13 @@ fn handle_propositions(
             .into());
         }
 
-        let proof = Proof::try_new(
-            &ctx.instances,
-            &ctx.game_hops,
-            name.clone(),
+        let proposition = Proposition {
+            name,
             left_name,
             right_name,
-        )
-        .ok_or(UnprovenTheoremError {
-            source_code: ctx.named_source(),
-            at: (span.start()..span.end()).into(),
-            theorem_name: name,
-        })?;
-        ctx.propositions.push(proof)
+        };
+        ctx.propositions
+            .push((proposition, (span.start()..span.end()).into()));
     }
 
     Ok(())
@@ -1334,7 +1388,7 @@ fn handle_lemma_line(
 }
 
 fn handle_string_triplet<'src>(
-    ast: &mut Pairs<'src, Rule>,
+    ast: &mut impl Iterator<Item = Pair<'src, Rule>>,
 ) -> (
     (String, Span<'src>),
     (String, Span<'src>),

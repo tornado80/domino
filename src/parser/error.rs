@@ -496,17 +496,31 @@ pub struct MissingGameTypeParamDefinitionError {
     pub missing_params: String,
 }
 
+/// Every derived assumption and proposition of a theorem that is not established.
 #[derive(Debug, Diagnostic, Error)]
-#[error("theorem does not follow from the game hops")]
-#[diagnostic(code(ssbee::code::unproven_theorem))]
-pub struct UnprovenTheoremError {
+#[error("{} claims of theorem {theorem_name} are not established", related.len())]
+#[diagnostic(code(domino::code::unestablished_claims))]
+pub struct UnestablishedClaimsError {
+    pub theorem_name: String,
+
+    #[related]
+    pub related: Vec<UnestablishedClaimError>,
+}
+
+#[derive(Debug, Diagnostic, Error)]
+#[error("{claim_kind} {claim_name} is not established: {reason}")]
+#[diagnostic(code(domino::code::unestablished_claim))]
+pub struct UnestablishedClaimError {
     #[source_code]
     pub source_code: miette::NamedSource<String>,
 
-    #[label("this theorem here")]
+    #[label("this claim here")]
     pub at: SourceSpan,
 
-    pub theorem_name: String,
+    /// `derived assumption` or `proposition`.
+    pub claim_kind: &'static str,
+    pub claim_name: String,
+    pub reason: crate::derivation::Unestablished,
 }
 
 #[derive(Debug, Diagnostic, Error)]
