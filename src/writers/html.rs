@@ -2,15 +2,22 @@
 
 //! `domino html`: one self-contained HTML page per theorem.
 //!
-//! The page has one tab per proposition. A tab is a grid with one column per
-//! game instance on the path [`Proof::try_new`] finds from the proposition's
-//! left game to its right game (in path order, with the hop between each pair
-//! of neighbours), and one row per exported oracle. The header cell of each
-//! column is the game's composition diagram; every other cell is the oracle
-//! fully inlined across package boundaries as readable code
-//! ([`render_oracle_view`]), with the column's constant specialization
-//! applied, in both a full and a lossy rendering the page toggles between.
-//! A theorem without propositions gets a single tab over its game hops.
+//! The page has one view per proposition and one per assumption, picked from
+//! two drop-downs, and a proof tree view (`proof_tree`) whose proved nodes
+//! open the view of their path. The URL fragment names the view (`#tree`,
+//! `#p:<proposition>`, `#a:<assumption>`).
+//!
+//! A proposition's view is a grid with one column per game instance on the
+//! path [`Proof::try_new`] finds from the proposition's left game to its right
+//! game (in path order, with the hop between each pair of neighbours), and one
+//! row per exported oracle. The header cell of each column is the game's
+//! composition diagram; every other cell is the oracle fully inlined across
+//! package boundaries as readable code ([`render_oracle_view`]), with the
+//! column's constant specialization applied, in both a full and a lossy
+//! rendering the page toggles between. With [`HtmlOptions::graphs_only`] the
+//! grid has the diagrams only. A derived assumption's view is the path that
+//! establishes it; a base assumption's view is its two games. A theorem
+//! without propositions gets a single view over its game hops.
 //!
 //! The proof search crosses a hybrid hop in one step, from a game matching
 //! `H[false]` to one matching `H[true]` with the loop variable left free. A
@@ -42,13 +49,15 @@ use crate::package::{Composition, Edge, Export, OracleSig};
 use crate::packageinstance::PackageInstance;
 use crate::parser::ast::Identifier as _;
 use crate::parser::reduction::ReductionMapping;
-use crate::proof::{assignments, game_is_compatible, ConstAssignment};
+use crate::proof::{assignments, game_is_compatible, ConstAssignment, Proof};
 use crate::theorem::{GameInstance, Theorem};
 use crate::transforms::theorem_transforms::{EquivalenceTransformError, ViewTransform};
 use crate::transforms::TheoremTransform;
 use crate::types::TypeKind;
 use crate::util::smtsolver::SmtSolverBackend;
 use crate::writers::util::graph::GraphLayout;
+
+use super::proof_tree;
 
 /// Pixels per tikz unit (1cm in the LaTeX export).
 const SCALE: f64 = 50.0;
@@ -217,12 +226,17 @@ fn loop_value(expr: &Expression, loop_var: &str) -> String {
     name_loop_var(&render_expr(expr), loop_var)
 }
 
-/// One tab of the page.
+/// One view of the page over a sequence of games.
 struct Tab<'t> {
     kind: TabKind,
+    /// The view's name in the page and its URL fragment: `p:<proposition>`,
+    /// `a:<assumption>` or `hops`.
+    key: String,
     title: String,
     subtitle: String,
     steps: Vec<Step<'t>>,
+    /// The proposition that proves a base assumption's games.
+    proved_by: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -231,8 +245,30 @@ enum TabKind {
     Proposition,
     /// Every game over all hops, for a theorem without propositions.
     AllHops,
-    /// The two games of one assumption, side by side.
+    /// The two games of one base assumption, side by side.
     Assumption,
+    /// The path that establishes a derived assumption.
+    Derived,
+}
+
+impl TabKind {
+    /// Whether the columns are a path the proof search found.
+    fn on_path(self) -> bool {
+        matches!(self, TabKind::Proposition | TabKind::Derived)
+    }
+
+    fn is_assumption(self) -> bool {
+        matches!(self, TabKind::Assumption | TabKind::Derived)
+    }
+}
+
+/// What `domino html` puts on a page.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HtmlOptions {
+    /// Open the page on the lossy listings.
+    pub lossy: bool,
+    /// Only the composition diagrams: no inlined oracles and no listing options.
+    pub graphs_only: bool,
 }
 
 /// A dashed frame around the packages of a game instance that a reduction
@@ -255,19 +291,42 @@ struct Listings {
 /// Render the HTML page for `theorem` (the *untransformed* theorem).
 ///
 /// `backend` lays out the composition diagrams; `graph_cache` is where the
-/// layouts are cached (shared with the LaTeX export's format). `lossy` picks
-/// the listing rendering the page opens with.
+/// layouts are cached (shared with the LaTeX export's format).
 pub fn render_theorem_html<B: SmtSolverBackend>(
     theorem: &Theorem,
     backend: Option<&B>,
     graph_cache: &Path,
-    lossy: bool,
+    options: HtmlOptions,
 ) -> Result<String, EquivalenceTransformError> {
-    let (theorem_dbg, _aux) = ViewTransform.transform_theorem(theorem)?;
-    let tabs = tabs(theorem);
+    // Only the listings need the inlining transform.
+    let theorem_dbg = match options.graphs_only {
+        true => None,
+        false => Some(ViewTransform.transform_theorem(theorem)?.0),
+    };
+    let derived: BTreeMap<String, Proof> = theorem
+        .assumptions
+        .iter()
+        .filter_map(|a| {
+            let proof = theorem
+                .derivation
+                .proof_of(&theorem.instances, &theorem.game_hops, a)?;
+            Some((a.name.clone(), proof))
+        })
+        .collect();
+    let tabs = tabs(theorem, &derived);
+    let claims = proof_tree::claim_graph(theorem, &derived);
+    let has_tree = !claims.roots.is_empty();
 
     let mut listings: HashMap<ListingKey, Listings> = HashMap::new();
     let mut out = String::new();
+    let listing_tools = if options.graphs_only {
+        ""
+    } else {
+        "<label><input type=\"checkbox\" id=\"opt-lossy\"> lossy</label>\
+         <label><input type=\"checkbox\" id=\"opt-wrap\"> wrap lines</label>\
+         <span class=\"zoom\"><button id=\"zoom-out\" title=\"smaller code\">A−</button>\
+         <button id=\"zoom-in\" title=\"larger code\">A+</button></span>"
+    };
     let _ = write!(
         out,
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
@@ -275,11 +334,7 @@ pub fn render_theorem_html<B: SmtSolverBackend>(
          <title>{name}</title><style>{STYLE}</style></head>\
          <body class=\"{body_class}\">\n<header>\n\
          <div class=\"titlebar\"><h1>theorem <code>{name}</code></h1>\
-         <div class=\"tools\">\
-         <label><input type=\"checkbox\" id=\"opt-lossy\"> lossy</label>\
-         <label><input type=\"checkbox\" id=\"opt-wrap\"> wrap lines</label>\
-         <span class=\"zoom\"><button id=\"zoom-out\" title=\"smaller code\">A−</button>\
-         <button id=\"zoom-in\" title=\"larger code\">A+</button></span>\
+         <div class=\"tools\">{listing_tools}\
          <button id=\"pp-toggle\" title=\"show / hide the package pane\">packages</button>\
          <span class=\"legend\" title=\"colour of Boolean parameters: fixed in the game definition, \
          set by the theorem's game instance, or a proof parameter\">bits:\
@@ -287,31 +342,14 @@ pub fn render_theorem_html<B: SmtSolverBackend>(
          <span class=\"hint\"><kbd>←</kbd><kbd>→</kbd> previous / next game · click a package or a game name for its code · <span class=\"assm-key\">- - -</span> assumption packages · <span class=\"ren-key\">New:Old</span> renamed oracle</span>\
          </div></div>\n",
         name = esc(&theorem.name),
-        body_class = if lossy { "show-lossy" } else { "" },
+        body_class = match (options.graphs_only, options.lossy) {
+            (true, _) => "graphs-only",
+            (false, true) => "show-lossy",
+            (false, false) => "",
+        },
     );
 
-    let _ = write!(out, "<nav class=\"tabs\">");
-    let mut in_assumptions = false;
-    for (t, tab) in tabs.iter().enumerate() {
-        let assumption = tab.kind == TabKind::Assumption;
-        if assumption && !in_assumptions {
-            in_assumptions = true;
-            out.push_str("<span class=\"tabgroup\">assumptions</span>");
-        }
-        let _ = write!(
-            out,
-            "<button class=\"tab{}\" data-tab=\"{t}\"{}><b>{}</b> <span>{}</span></button>",
-            if assumption { " assm" } else { "" },
-            if assumption {
-                format!(" data-assumption=\"{}\"", esc(&tab.title))
-            } else {
-                String::new()
-            },
-            esc(&tab.title),
-            esc(&tab.subtitle),
-        );
-    }
-    out.push_str("</nav>\n");
+    out.push_str(&view_picker(&tabs, has_tree));
 
     out.push_str("<details class=\"hops\"><summary>all game hops</summary><ol start=\"0\">");
     for hop in &theorem.game_hops {
@@ -324,8 +362,20 @@ pub fn render_theorem_html<B: SmtSolverBackend>(
     }
     out.push_str("</ol></details>\n</header>\n");
 
-    for (t, tab) in tabs.iter().enumerate() {
-        let _ = writeln!(out, "<section class=\"tabpane\" data-tab=\"{t}\">");
+    if has_tree {
+        let _ = writeln!(
+            out,
+            "<section class=\"tabpane treepane\" data-key=\"tree\">{}</section>",
+            proof_tree::render(&claims)
+        );
+    }
+
+    for tab in &tabs {
+        let _ = writeln!(
+            out,
+            "<section class=\"tabpane\" data-key=\"{}\">",
+            esc(&tab.key)
+        );
 
         // The path as a clickable breadcrumb: one chip per column, the hop
         // between neighbours in between, and the columns of an expanded
@@ -373,6 +423,18 @@ pub fn render_theorem_html<B: SmtSolverBackend>(
             if step.hybrid.is_some() && next_hybrid.is_none() {
                 out.push_str("</span>");
             }
+        }
+        if let Some(proposition) = &tab.proved_by {
+            let _ = write!(
+                out,
+                "<a class=\"provedby\" href=\"#p:{0}\" title=\"the tool trusts this base \
+                 assumption; mark it `derived` to have it checked\">proved by proposition \
+                 <code>{0}</code> →</a>",
+                esc(proposition)
+            );
+        }
+        if tab.kind == TabKind::Derived {
+            out.push_str("<span class=\"provedby\">derived: the path that establishes it</span>");
         }
         out.push_str("</nav>\n");
 
@@ -441,7 +503,12 @@ pub fn render_theorem_html<B: SmtSolverBackend>(
         }
         out.push_str("</tr></thead>\n<tbody>\n");
 
-        for oracle in &oracles {
+        // Without the transformed theorem (graphs only), there are no listings.
+        let oracles = match &theorem_dbg {
+            Some(theorem_dbg) => oracles.iter().map(|o| (o, theorem_dbg)).collect(),
+            None => Vec::new(),
+        };
+        for (oracle, theorem_dbg) in oracles {
             let _ = write!(
                 out,
                 "<tr><th class=\"oname\"><code>{}</code></th>",
@@ -453,7 +520,7 @@ pub fn render_theorem_html<B: SmtSolverBackend>(
                     continue;
                 }
                 let loop_var = loop_var(theorem, step.game);
-                let l = listing(&mut listings, &theorem_dbg, step, loop_var, oracle);
+                let l = listing(&mut listings, theorem_dbg, step, loop_var, oracle);
                 out.push_str("<td>");
                 for (class, text) in [("full", &l.full), ("lossy", &l.lossy)] {
                     match text {
@@ -574,10 +641,24 @@ fn literal(value: &str) -> Expression {
     }
 }
 
-/// The proof tabs, then one tab per assumption.
-fn tabs<'t>(theorem: &'t Theorem<'t>) -> Vec<Tab<'t>> {
+/// The proof tabs, then one tab per assumption: the path that establishes a
+/// derived assumption (by name in `derived`), the two games of a base one.
+fn tabs<'t>(theorem: &'t Theorem<'t>, derived: &'t BTreeMap<String, Proof<'t>>) -> Vec<Tab<'t>> {
     let mut tabs = proof_tabs(theorem);
     tabs.extend(theorem.assumptions.iter().map(|assumption| {
+        let key = format!("a:{}", assumption.name);
+        let title = assumption.name.clone();
+        let subtitle = format!("{} ~ {}", assumption.left_name, assumption.right_name);
+        if let Some(proof) = derived.get(&assumption.name) {
+            return Tab {
+                kind: TabKind::Derived,
+                key,
+                title,
+                subtitle,
+                steps: path_steps(theorem, proof),
+                proved_by: None,
+            };
+        }
         let step = |name: &str| Step {
             game: theorem
                 .find_game_instance(name)
@@ -588,9 +669,12 @@ fn tabs<'t>(theorem: &'t Theorem<'t>) -> Vec<Tab<'t>> {
         };
         Tab {
             kind: TabKind::Assumption,
-            title: assumption.name.clone(),
-            subtitle: format!("{} ~ {}", assumption.left_name, assumption.right_name),
+            key,
+            title,
+            subtitle,
             steps: vec![step(&assumption.left_name), step(&assumption.right_name)],
+            proved_by: proof_tree::proving_proposition(theorem, assumption)
+                .map(|p| p.name().to_string()),
         }
     }));
     tabs
@@ -598,13 +682,11 @@ fn tabs<'t>(theorem: &'t Theorem<'t>) -> Vec<Tab<'t>> {
 
 /// One tab per proposition, in file order, each over the path the proof
 /// search found. Without propositions: one tab over all game hops.
-///
-/// A hybrid hop on the path is expanded into the games of one loop step (see
-/// [`hybrid_steps`]).
 fn proof_tabs<'t>(theorem: &'t Theorem<'t>) -> Vec<Tab<'t>> {
     if theorem.proofs.is_empty() {
         return vec![Tab {
             kind: TabKind::AllHops,
+            key: "hops".to_string(),
             title: "game hops".to_string(),
             subtitle: "(no propositions)".to_string(),
             steps: games_in_hop_order(theorem)
@@ -616,45 +698,113 @@ fn proof_tabs<'t>(theorem: &'t Theorem<'t>) -> Vec<Tab<'t>> {
                     hybrid: None,
                 })
                 .collect(),
+            proved_by: None,
         }];
     }
 
     theorem
         .proofs
         .iter()
-        .map(|proof| {
-            let path: Vec<_> = proof.path().collect();
-            let hops: Vec<_> = proof.game_hops().collect();
-            let mut steps: Vec<Step> = Vec::new();
-            for (i, (spec, assignments)) in path.iter().enumerate() {
-                let game = theorem
-                    .find_game_instance(spec.name())
-                    .expect("the proof path only visits theorem game instances");
-                let via = match i.checked_sub(1).map(|h| hops[h]) {
-                    None => None,
-                    Some(GameHop::Hybrid(hybrid)) => {
-                        let (inner, exit) =
-                            hybrid_steps(theorem, hybrid, (path[i - 1].0, spec), game);
-                        steps.extend(inner);
-                        Some(exit)
-                    }
-                    Some(hop) => Some(Link::Hop(hop)),
-                };
-                steps.push(Step {
-                    game,
-                    assignments: dedup_pairs(assignments.iter()),
-                    via,
-                    hybrid: None,
-                });
-            }
-            Tab {
-                kind: TabKind::Proposition,
-                title: proof.name().to_string(),
-                subtitle: format!("{} ~ {}", proof.left_name(), proof.right_name()),
-                steps,
-            }
+        .map(|proof| Tab {
+            kind: TabKind::Proposition,
+            key: format!("p:{}", proof.name()),
+            title: proof.name().to_string(),
+            subtitle: format!("{} ~ {}", proof.left_name(), proof.right_name()),
+            steps: path_steps(theorem, proof),
+            proved_by: None,
         })
         .collect()
+}
+
+/// The columns of `proof`'s path. A hybrid hop on the path is expanded into
+/// the games of one loop step (see [`hybrid_steps`]).
+fn path_steps<'t>(theorem: &'t Theorem<'t>, proof: &'t Proof<'t>) -> Vec<Step<'t>> {
+    let path: Vec<_> = proof.path().collect();
+    let hops: Vec<_> = proof.game_hops().collect();
+    let mut steps: Vec<Step> = Vec::new();
+    for (i, (spec, assignments)) in path.iter().enumerate() {
+        let game = theorem
+            .find_game_instance(spec.name())
+            .expect("the proof path only visits theorem game instances");
+        let via = match i.checked_sub(1).map(|h| hops[h]) {
+            None => None,
+            Some(GameHop::Hybrid(hybrid)) => {
+                let (inner, exit) = hybrid_steps(theorem, hybrid, (path[i - 1].0, spec), game);
+                steps.extend(inner);
+                Some(exit)
+            }
+            Some(hop) => Some(Link::Hop(hop)),
+        };
+        steps.push(Step {
+            game,
+            assignments: dedup_pairs(assignments.iter()),
+            via,
+            hybrid: None,
+        });
+    }
+    steps
+}
+
+/// The view selectors: the proof tree, one drop-down for the propositions and
+/// one for the assumptions, grouped by what proves them.
+fn view_picker(tabs: &[Tab], has_tree: bool) -> String {
+    let option = |tab: &Tab| {
+        format!(
+            "<option value=\"{}\" title=\"{}\">{}</option>",
+            esc(&tab.key),
+            esc(&tab.subtitle),
+            esc(&tab.title),
+        )
+    };
+    let mut out = String::from("<nav class=\"views\">");
+    if has_tree {
+        out.push_str(
+            "<button class=\"viewbtn\" data-key=\"tree\" title=\"which assumptions each \
+             proposition reduces to\">proof tree</button>",
+        );
+    }
+    let props: Vec<&Tab> = tabs.iter().filter(|t| !t.kind.is_assumption()).collect();
+    let _ = write!(
+        out,
+        "<label class=\"pick\">{} <span class=\"count\">({})</span>\
+         <select id=\"pick-prop\"><option value=\"\" disabled>—</option>{}</select></label>",
+        if props.iter().any(|t| t.kind == TabKind::AllHops) {
+            "game hops"
+        } else {
+            "proposition"
+        },
+        props
+            .iter()
+            .filter(|t| t.kind == TabKind::Proposition)
+            .count(),
+        props.iter().map(|t| option(t)).collect::<String>(),
+    );
+    let groups: [(&str, &dyn Fn(&Tab) -> bool); 3] = [
+        ("derived", &|t| t.kind == TabKind::Derived),
+        ("base, proved by a proposition", &|t| {
+            t.kind == TabKind::Assumption && t.proved_by.is_some()
+        }),
+        ("base", &|t| {
+            t.kind == TabKind::Assumption && t.proved_by.is_none()
+        }),
+    ];
+    let assumptions = tabs.iter().filter(|t| t.kind.is_assumption()).count();
+    if assumptions > 0 {
+        let _ = write!(
+            out,
+            "<label class=\"pick\">assumption <span class=\"count\">({assumptions})</span>\
+             <select id=\"pick-assm\"><option value=\"\" disabled>—</option>"
+        );
+        for (label, member) in groups {
+            let options: String = tabs.iter().filter(|t| member(t)).map(option).collect();
+            if !options.is_empty() {
+                let _ = write!(out, "<optgroup label=\"{label}\">{options}</optgroup>");
+            }
+        }
+        out.push_str("</select></label>");
+    }
+    out.push_str("<span class=\"subtitle\"></span></nav>\n");
+    out
 }
 
 /// The `(theorem-level name, literal)` pairs of `assignments`, each once: two
@@ -1069,7 +1219,7 @@ fn outlines(theorem: &Theorem, tab: &Tab, c: usize) -> Vec<Outline> {
                 hop => hop.as_reduction(),
             })
             .collect(),
-        TabKind::Proposition => [tab.steps.get(c), tab.steps.get(c + 1)]
+        TabKind::Proposition | TabKind::Derived => [tab.steps.get(c), tab.steps.get(c + 1)]
             .into_iter()
             .flatten()
             .filter_map(|step| step.via.as_ref()?.reduction())
@@ -1079,7 +1229,7 @@ fn outlines(theorem: &Theorem, tab: &Tab, c: usize) -> Vec<Outline> {
     let game = step.game;
     let maps_game = |mapped: &str| {
         mapped == game.name()
-            || tab.kind == TabKind::Proposition
+            || tab.kind.on_path()
                 && step.hybrid.is_none()
                 && theorem
                     .find_game_instance(mapped)
@@ -1730,7 +1880,7 @@ fn fallback_geometry(comp: &Composition) -> Geometry {
     Geometry { boxes, arrows }
 }
 
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -1748,12 +1898,16 @@ const STYLE: &str = r#"
 :root { --bg:#ffffff; --fg:#1b1f24; --muted:#6a737d; --line:#d0d7de; --head:#f6f8fa;
         --accent:#0969da; --accent-bg:#ddf4ff; --pkg:#fff8e1; --pkgline:#8a6d00;
         --edge:#444c56; --proof:#b3261e; --inst:#8250df; --err:#b3261e; --assm:#cf222e;
-        --hyb:#1a7f37; --hyb-bg:#f0fbf3; --ren:#bc4c00; --code:12px; }
+        --hyb:#1a7f37; --hyb-bg:#f0fbf3; --ren:#bc4c00; --code:12px;
+        --t-prop:#ece6fb; --t-prop-b:#6b4fbb; --t-der:#e3eefa; --t-der-b:#2563a8;
+        --t-base:#e2f3e8; --t-base-b:#2f7d4f; --t-conj:#fff1e0; --t-conj-b:#b0622a; --t-heavy:#b0622a; }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --line:#30363d; --head:#161b22;
           --accent:#4493f8; --accent-bg:#132339; --pkg:#2d2610; --pkgline:#d4a72c;
           --edge:#adbac7; --proof:#ff7b72; --inst:#d2a8ff; --err:#ff7b72; --assm:#f85149;
-          --hyb:#3fb950; --hyb-bg:#0f2417; --ren:#f0883e; }
+          --hyb:#3fb950; --hyb-bg:#0f2417; --ren:#f0883e;
+          --t-prop:#2a2340; --t-prop-b:#a58cf0; --t-der:#14263b; --t-der-b:#6ea8fe;
+          --t-base:#13291c; --t-base-b:#56c288; --t-conj:#33230f; --t-conj-b:#e3955a; --t-heavy:#e3955a; }
 }
 html, body { height:100%; }
 body { background:var(--bg); color:var(--fg); margin:0; display:flex; flex-direction:column;
@@ -1769,13 +1923,18 @@ button { font:inherit; color:var(--fg); background:var(--head); border:1px solid
          border-radius:6px; padding:2px 8px; cursor:pointer; }
 button:hover { border-color:var(--accent); }
 kbd { border:1px solid var(--line); border-radius:4px; padding:0 4px; font-size:11px; margin-right:2px; }
-.tabs { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 6px; }
-.tab span { color:var(--muted); font-size:12px; }
-.tab.active { background:var(--accent-bg); border-color:var(--accent); }
-.tabgroup { align-self:center; margin-left:10px; padding-left:12px; border-left:1px solid var(--line);
-            color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
-.tab.assm b { color:var(--assm); }
-[data-assumption]:not(.tab) { cursor:pointer; }
+nav.views { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin:10px 0 6px; }
+.viewbtn.active { background:var(--accent-bg); border-color:var(--accent); }
+.pick { display:flex; gap:6px; align-items:center; color:var(--muted); font-size:13px; }
+.pick .count { font-size:11px; }
+.pick select { font:12px ui-monospace, Menlo, monospace; color:var(--fg); background:var(--head);
+               border:1px solid var(--line); border-radius:6px; padding:3px 6px; max-width:min(52ch, 80vw); }
+.pick select.active { background:var(--accent-bg); border-color:var(--accent); }
+nav.views .subtitle { color:var(--muted); font:12px ui-monospace, Menlo, monospace; }
+.provedby { margin-left:10px; color:var(--muted); font-size:12px; }
+a.provedby { color:var(--accent); text-decoration:none; }
+a.provedby:hover { text-decoration:underline; }
+[data-assumption] { cursor:pointer; }
 code[data-assumption]:hover, .via[data-assumption]:hover { text-decoration:underline; }
 .sim { color:var(--muted); font-size:13px; }
 details.hops { color:var(--muted); font-size:13px; margin-bottom:4px; }
@@ -1785,6 +1944,40 @@ details.hops .kind { display:inline-block; min-width:90px; }
 details.hops code { color:var(--fg); }
 section.tabpane { display:none; flex:1; min-height:0; flex-direction:column; padding:0 16px 12px; }
 section.tabpane.active { display:flex; }
+section.treepane.active { display:block; overflow:auto; }
+.treebody { max-width:none; }
+.treehelp { color:var(--muted); font-size:13px; margin:4px 0 8px; max-width:110ch; }
+.treelegend { display:flex; flex-wrap:wrap; gap:6px 16px; color:var(--muted); font-size:12px; margin-bottom:12px; }
+.treelegend .sw { display:inline-block; width:14px; height:10px; border-radius:3px; border:1.5px solid;
+                  margin-right:5px; vertical-align:-1px; }
+.treelegend .sw.heavy { height:0; border-width:1.5px 0 0; border-color:var(--t-heavy); border-radius:0; vertical-align:3px; }
+.treelegend .sw.cyc { height:0; border-width:1.5px 0 0; border-style:dashed; border-color:var(--assm); border-radius:0; vertical-align:3px; }
+.treecard { border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:16px; }
+.treecard h2 { font-size:15px; margin:0 0 4px; }
+.treecard h2 span { color:var(--muted); font:12px ui-monospace, Menlo, monospace; font-weight:normal; }
+.treecard .bound { color:var(--muted); font:12px ui-monospace, Menlo, monospace; margin-bottom:8px; }
+.treecard .bound b { color:var(--fg); font-weight:600; }
+.treewarn { color:var(--err); font-size:12px; margin-bottom:6px; }
+.treesvg { overflow-x:auto; }
+svg.tree { display:block; }
+svg.tree .tnode rect { stroke-width:1.5; }
+svg.tree .tname { font:600 12px ui-monospace, Menlo, monospace; fill:var(--fg); text-anchor:middle; }
+svg.tree .tsub { font:10px ui-monospace, Menlo, monospace; fill:var(--muted); text-anchor:middle; }
+svg.tree .tnode.link { cursor:pointer; }
+svg.tree .tnode.link:hover rect { stroke-width:3; }
+svg.tree .k-prop rect, .sw.k-prop { fill:var(--t-prop); background:var(--t-prop); stroke:var(--t-prop-b); border-color:var(--t-prop-b); }
+svg.tree .k-derived rect, .sw.k-derived { fill:var(--t-der); background:var(--t-der); stroke:var(--t-der-b); border-color:var(--t-der-b); }
+svg.tree .k-proved rect, .sw.k-proved { fill:var(--t-der); background:var(--t-der); stroke:var(--t-der-b); border-color:var(--t-der-b); stroke-dasharray:5 3; border-style:dashed; }
+svg.tree .k-base rect, .sw.k-base { fill:var(--t-base); background:var(--t-base); stroke:var(--t-base-b); border-color:var(--t-base-b); }
+svg.tree .k-conj rect, .sw.k-conj { fill:var(--t-conj); background:var(--t-conj); stroke:var(--t-conj-b); border-color:var(--t-conj-b); stroke-dasharray:3 3; border-style:dotted; }
+svg.tree .root rect { stroke-width:2.2; }
+svg.tree .tedge { fill:none; stroke:var(--edge); stroke-width:1.2; }
+svg.tree .tedge.heavy { stroke:var(--t-heavy); stroke-width:1.9; }
+svg.tree .tedge.cyc { stroke:var(--assm); stroke-dasharray:6 4; }
+svg.tree .thead { fill:var(--edge); } svg.tree .thead.heavy { fill:var(--t-heavy); } svg.tree .thead.cyc { fill:var(--assm); }
+svg.tree .tlabel { font:10px ui-monospace, Menlo, monospace; fill:var(--muted);
+                   paint-order:stroke; stroke:var(--bg); stroke-width:3px; stroke-linejoin:round; }
+svg.tree .tlabel.heavy { fill:var(--t-heavy); } svg.tree .tlabel.cyc { fill:var(--assm); }
 nav.path { flex:none; display:flex; flex-wrap:wrap; gap:4px 6px; align-items:center; margin:4px 0 8px; }
 .chip { font-family: ui-monospace, Menlo, monospace; font-size:12px; }
 .chip.visible { background:var(--accent-bg); border-color:var(--accent); }
@@ -1814,6 +2007,7 @@ tr.diagrams td { background:var(--bg); }
 pre { margin:0; font-size:var(--code); line-height:1.35; white-space:pre; }
 body.wrap pre { white-space:pre-wrap; overflow-wrap:anywhere; max-width:80ch; }
 body:not(.show-lossy) .lossy, body.show-lossy .full { display:none; }
+body.graphs-only th.corner { display:none; }
 .error { color:var(--err); white-space:pre-wrap; max-width:60ch; }
 svg.diagram { display:block; }
 svg .pkgbox { fill:var(--pkg); stroke:var(--pkgline); stroke-width:1.2; }
@@ -1858,8 +2052,9 @@ body.pp-open header, body.pp-open section.tabpane { margin-right:var(--pane); }
 .pp-body .cm { color:var(--muted); font-style:italic; }
 "#;
 
-/// Tabs, the lossy / wrap / zoom options (remembered per browser), column
-/// chips, and ←/→ to step between game columns.
+/// Views (proof tree, proposition and assumption drop-downs, URL fragment),
+/// the lossy / wrap / zoom options (remembered per browser), column chips,
+/// and ←/→ to step between game columns.
 const SCRIPT: &str = r#"
 (function () {
   const store = {
@@ -1867,9 +2062,12 @@ const SCRIPT: &str = r#"
     set(k, v) { try { localStorage.setItem('domino-html-' + k, v); } catch (e) {} },
   };
   const body = document.body;
-  const tabs = [...document.querySelectorAll('.tab')];
   const panes = [...document.querySelectorAll('.tabpane')];
   const pane = () => document.querySelector('.tabpane.active');
+  const pickProp = document.getElementById('pick-prop');
+  const pickAssm = document.getElementById('pick-assm');
+  const treeBtn = document.querySelector('.viewbtn[data-key="tree"]');
+  const subtitle = document.querySelector('nav.views .subtitle');
 
   // Package side pane.
   const ppane = document.getElementById('pkgpane');
@@ -1927,10 +2125,12 @@ const SCRIPT: &str = r#"
     if (node) { openPkg(node); return; }
     const gamelink = e.target.closest('.gamelink');
     if (gamelink) { openGame(gamelink); return; }
-    // A reduction's label or frame opens its assumption's tab.
-    const ref = e.target.closest('[data-assumption]:not(.tab)');
-    const tab = ref && tabs.find(b => b.dataset.assumption === ref.dataset.assumption);
-    if (tab) showTab(tab.dataset.tab);
+    // A proved node of the proof tree opens the game hops of its path.
+    const target = e.target.closest('[data-goto]');
+    if (target) { go(target.dataset.goto); return; }
+    // A reduction's label or frame opens its assumption's view.
+    const ref = e.target.closest('[data-assumption]');
+    if (ref) go('a:' + ref.dataset.assumption);
   });
   document.getElementById('pp-close').addEventListener('click', () => setPane(false));
   document.getElementById('pp-toggle').addEventListener('click',
@@ -1938,6 +2138,7 @@ const SCRIPT: &str = r#"
 
   function option(id, cls, key) {
     const box = document.getElementById(id);
+    if (!box) return;
     const saved = store.get(key);
     if (saved !== null) body.classList.toggle(cls, saved === '1');
     box.checked = body.classList.contains(cls);
@@ -1958,16 +2159,36 @@ const SCRIPT: &str = r#"
     refresh();
   }
   zoom(0);
-  document.getElementById('zoom-in').addEventListener('click', () => zoom(1));
-  document.getElementById('zoom-out').addEventListener('click', () => zoom(-1));
-
-  function showTab(t) {
-    tabs.forEach(b => b.classList.toggle('active', b.dataset.tab === String(t)));
-    panes.forEach(p => p.classList.toggle('active', p.dataset.tab === String(t)));
-    store.set('tab:' + document.title, String(t));
-    refresh();
+  const zoomIn = document.getElementById('zoom-in');
+  if (zoomIn) {
+    zoomIn.addEventListener('click', () => zoom(1));
+    document.getElementById('zoom-out').addEventListener('click', () => zoom(-1));
   }
-  tabs.forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+
+  // Views: the proof tree, a proposition (`p:<name>`, or `hops`) or an
+  // assumption (`a:<name>`). The URL fragment names the view, so the
+  // browser's back button returns to the tree.
+  function show(key) {
+    const target = panes.find(p => p.dataset.key === key);
+    if (!target) return false;
+    panes.forEach(p => p.classList.toggle('active', p === target));
+    const isAssm = key.startsWith('a:');
+    if (pickProp) { pickProp.value = !isAssm && key !== 'tree' ? key : ''; pickProp.classList.toggle('active', pickProp.value !== ''); }
+    if (pickAssm) { pickAssm.value = isAssm ? key : ''; pickAssm.classList.toggle('active', isAssm); }
+    if (treeBtn) treeBtn.classList.toggle('active', key === 'tree');
+    const picked = [pickProp, pickAssm].map(s => s && s.selectedOptions[0]).find(o => o && o.value);
+    subtitle.textContent = picked ? picked.title : '';
+    store.set('view:' + document.title, key);
+    refresh();
+    return true;
+  }
+  const fromHash = () => { try { return decodeURIComponent(location.hash.slice(1)); } catch (e) { return ''; } };
+  function go(key) {
+    if (fromHash() === key) show(key); else location.hash = key;
+  }
+  window.addEventListener('hashchange', () => show(fromHash()));
+  [pickProp, pickAssm].forEach(s => s && s.addEventListener('change', () => go(s.value)));
+  if (treeBtn) treeBtn.addEventListener('click', () => go('tree'));
 
   // Geometry of the active pane: the scroller, its game columns, and the left
   // edge of the area not covered by the sticky oracle-name column.
@@ -1986,7 +2207,7 @@ const SCRIPT: &str = r#"
   }
   function refresh() {
     const p = pane();
-    if (!p) return;
+    if (!p || !p.querySelector('.scroller')) return;
     const g = geo(p);
     g.sc.style.scrollPaddingLeft = g.cornerW + 'px';
     const chips = p.querySelectorAll('.chip');
@@ -2000,7 +2221,8 @@ const SCRIPT: &str = r#"
     p.querySelectorAll('.chip').forEach(ch =>
       ch.addEventListener('click', () => scrollToCol(p, parseInt(ch.dataset.col, 10))));
     let queued = false;
-    p.querySelector('.scroller').addEventListener('scroll', () => {
+    const sc = p.querySelector('.scroller');
+    if (sc) sc.addEventListener('scroll', () => {
       if (queued) return;
       queued = true;
       requestAnimationFrame(() => { queued = false; refresh(); });
@@ -2014,7 +2236,7 @@ const SCRIPT: &str = r#"
     if (e.target.closest && e.target.closest('input, textarea, select')) return;
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
     const p = pane();
-    if (!p) return;
+    if (!p || !p.querySelector('.scroller')) return;
     const g = geo(p);
     const lefts = g.cols.map(c => c.getBoundingClientRect().left - g.left);
     let target;
@@ -2030,7 +2252,7 @@ const SCRIPT: &str = r#"
     scrollToCol(p, target);
   });
 
-  const saved = parseInt(store.get('tab:' + document.title), 10);
-  showTab(saved >= 0 && saved < tabs.length ? saved : 0);
+  show(fromHash()) || show(store.get('view:' + document.title) || '') || show('tree')
+    || show(panes[0].dataset.key);
 })();
 "#;

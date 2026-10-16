@@ -60,6 +60,27 @@ impl Derivation {
         self.conjectures.iter().map(String::as_str).collect()
     }
 
+    /// A path that establishes the derived `assumption`: its reductions cite only
+    /// assumptions of smaller depth, so the path is well-founded. `None` for a base
+    /// assumption or one that is not established.
+    pub fn proof_of<'a>(
+        &self,
+        instances: &[GameInstance],
+        hops: &[GameHop<'a>],
+        assumption: &Assumption,
+    ) -> Option<Proof<'a>> {
+        if assumption.kind != AssumptionKind::Derived {
+            return None;
+        }
+        let depth = self.depth(&assumption.name)?;
+        PathSearch { instances, hops }.find(
+            &|cited| self.depth(cited).is_some_and(|d| d < depth),
+            &assumption.name,
+            &assumption.left_name,
+            &assumption.right_name,
+        )
+    }
+
     /// The one-line account of what the theorem trusts. Because an unmarked assumption is
     /// trusted, this line is the only guard against a forgotten `derived`; it must always
     /// be shown.

@@ -284,7 +284,11 @@ fn html(h: &Html) -> Result<(), Error> {
 
     for name in names {
         let theorem = project.get_theorem(&name).expect("listed theorem exists");
-        let page = sspverif::writers::html::render_theorem_html(theorem, backend, &cache, h.lossy)?;
+        let options = sspverif::writers::html::HtmlOptions {
+            lossy: h.lossy,
+            graphs_only: h.graphs_only,
+        };
+        let page = sspverif::writers::html::render_theorem_html(theorem, backend, &cache, options)?;
         let file = out_dir.join(format!("{name}.html"));
         std::fs::write(&file, page).map_err(|e| Error::Io(file.clone(), e))?;
         println!("{}", file.display());

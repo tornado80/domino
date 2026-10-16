@@ -48,7 +48,13 @@ fn theorem_source(body: &str) -> String {
 
 /// A reduction from `left` to `right` that cites `cited`, whose games are `cited_left`
 /// and `cited_right`.
-fn reduction(left: &str, right: &str, cited: &str, cited_left: &str, cited_right: &str) -> String {
+pub(super) fn reduction(
+    left: &str,
+    right: &str,
+    cited: &str,
+    cited_left: &str,
+    cited_right: &str,
+) -> String {
     format!(
         "    reduction {left} {right} {{\n      assumption {cited}\n      \
          map {cited_left} {left} {{ key: key }}\n      \
@@ -57,7 +63,7 @@ fn reduction(left: &str, right: &str, cited: &str, cited_left: &str, cited_right
 }
 
 /// Loads a theorem that must be accepted. The inputs are leaked: a `Theorem` borrows them.
-fn load(body: &str) -> Theorem<'static> {
+pub(super) fn load(body: &str) -> Theorem<'static> {
     let (pkgs, games) = Box::leak(Box::new(fixtures()));
     let source: &'static str = Box::leak(theorem_source(body).into_boxed_str());
     theorems::parse(source, "T.ssp", pkgs, games)

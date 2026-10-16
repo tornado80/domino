@@ -52,8 +52,9 @@ pub(crate) enum Commands {
     /// Inline the code of an oracle for both sides of an equivalence gamehop, side by side.
     Inline(Inline),
 
-    /// Export one HTML page per theorem: every game instance's composition
-    /// diagram and inlined oracles, one column per game in hop order.
+    /// Export one HTML page per theorem: the proof tree, and every game
+    /// instance's composition diagram and inlined oracles, one column per game
+    /// in hop order.
     Html(Html),
 }
 
@@ -76,8 +77,12 @@ pub(crate) struct Html {
     pub(crate) no_solver: bool,
     /// Open the pages showing the lossy listings (`Some(x)` as `x`, `None` as
     /// `⊥`, ...). Both renderings are always included; the page toggles them.
-    #[clap(long)]
+    #[clap(long, conflicts_with = "graphs_only")]
     pub(crate) lossy: bool,
+    /// Only the composition diagrams: no inlined oracle code and no listing
+    /// options (lossy, wrap, zoom).
+    #[clap(long)]
+    pub(crate) graphs_only: bool,
     /// Output directory. Defaults to `_build/html/`.
     #[clap(long)]
     pub(crate) out: Option<std::path::PathBuf>,
