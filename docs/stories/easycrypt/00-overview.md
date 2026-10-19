@@ -200,6 +200,18 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 68 | Each oracle is a lemma of its own, and oracles are proved in parallel (ADR 0013) | `68-oracle-lemmas-and-parallel-oracles.md` | 33, 35–38, 67 |
 | 69 | Side-invariant lemmas of the composition, joined with `conseq` (ADR 0014) | `69-side-invariant-lemmas.md` | 58, 64, 65, 68, symbolic-execution 25 |
 | 70 | A table write with an unknown value is a branch (ADR 0015) | `70-table-write-is-a-branch.md` | 16, 17, 18 |
+| 71 | Merge `domino-repo/main`: named package and game invariants | `71-merge-main-named-invariants.md` | — |
+| 72 | Claim kinds come from declarations, never from a name | `72-claim-kinds-from-declarations.md` | 71 |
+| 73 | Named invariants in EasyCrypt and in the debugger (ADR 0018) | `73-named-invariants-in-easycrypt-and-the-debugger.md` | 71, 72 |
+| 74 | Merge `amir/check-package-invariants-once` (PR 426): package invariants are checked once | `74-merge-check-package-invariants-once.md` | 72, 73, symbolic-execution 26 |
+| 75 | Open calls in the solver check of a package invariant (ADR 0017) | `75-open-calls-in-the-solver-check.md` | 74 |
+| 76 | Package lemmas and the package-invariant job (ADR 0016) | `76-package-lemmas-and-the-package-invariant-job.md` | 73, symbolic-execution 29 |
+| 77 | Side invariants built from package lemmas; the game-invariant start lemma (ADR 0016) | `77-side-invariants-from-package-lemmas.md` | 76 |
+
+Stories 71–77 and symbolic-execution 26–29 come from the grilling of 2026-10-12/20. The merges land
+in the order 71 → symbolic-execution 26 → 74. Not merged: the rest of Christoph Egger's stack (not
+stable) and `keks/ty-params` (it sits on the old stack). **Candidate, blocked, not designed:** the
+EasyCrypt translation of type parameters, once they are on `main`.
 
 Stories 48–52 come from the owner's review of the debug and progress pages. They are UI-only:
 translation does not change, and the export tree is byte-identical before and after each one. 48

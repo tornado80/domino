@@ -61,9 +61,15 @@ obligations are discharged per exported oracle.
 assumptions, before the claim's negated goal is checked. A dependency is a built-in fact
 (`no-abort`, `left-no-abort`, `right-no-abort`, `equal-aborts`), another claim, or a project lemma.
 
+**Claim kind** — what a claim or dependency name stands for: a built-in fact, a state relation, a
+project lemma, or a package or game invariant. The kind comes from what the name is declared as —
+built in, or a definition in the project's SMT-LIB files — and never from how the name is spelled.
+A name that is declared as none of these is an error, not a guess.
+_Avoid_: claim type guessed from a name prefix (`relation…`, `invariant…`).
+
 **Project lemma** — a lemma hand-written in the project's SMT-LIB file and named in a proofstep's
-`lemmas` block. It is never translated to EasyCrypt. _Distinguish_: the built-in facts above, which
-the code also types as lemmas.
+`lemmas` block, declared with `define-lemma`. It is never translated to EasyCrypt.
+_Distinguish_: the built-in facts above, which are a claim kind of their own, not lemmas.
 
 **State relation** — a predicate over the left and right game states, hand-written in SMT-LIB, that
 an equivalence maintains. One set of state relations per equivalence.
@@ -78,13 +84,15 @@ says which left sampling draws the same value as which right sampling. It may de
 and the oracle's arguments, so whether two particular samplings are paired is a question for the
 solver, not something read off the mapping's text.
 
-**Package invariant** — a predicate over the state of one package, hand-written in SMT-LIB and
-declared by the package template. It applies to every instance of the package, in every game
+**Package invariant** — a named predicate over the state of one package, hand-written in SMT-LIB
+and declared by the package template. A package may declare several; each is a claim of its own,
+known by its name and its package. It applies to every instance of the package, in every game
 instance that contains one. Domino assumes it before every oracle call and proves that every oracle
 call that does not abort keeps it.
 
-**Game invariant** — a predicate over the state of one game instance, hand-written in SMT-LIB and
-declared by its composition. It applies to every game instance of that composition. Domino assumes
+**Game invariant** — a named predicate over the state of one game instance, hand-written in SMT-LIB
+and declared by its composition. A composition may declare several; each is a claim of its own. It
+applies to every game instance of that composition. Domino assumes
 and proves it the same way as a package invariant.
 _Distinguish_: **state relation** and **invariant**. Those relate the two sides of an equivalence. A
 package invariant or a game invariant is about **one side** only.
@@ -98,6 +106,20 @@ execution*. Independent of the **listing** it walks them on.
 export produces. `domino debug` walks the Domino listing; the EasyCrypt listing is reached through
 `domino easycrypt export`.
 
+**Trivial branch** — a branch whose condition is `true` or `false` once the constants known to the
+listing are put in: the game instance's constants for a lockstep run or `domino inline`, only
+literals where parameters are free. It decides nothing on any path.
+
+**Folded listing** — a listing shown with its trivial branches removed: a branch that is always
+`false` disappears, and one that is always `true` is replaced by its body. It is another view of the
+same code, not other code: the debugger always executes the full listing, and every line of the
+folded listing points back to the line of the full listing it comes from.
+_Distinguish_: an **exit guard**, which is not trivial and is never folded away.
+
+**Early return** — a `return` in an inlined oracle that can run before the oracle's last statement.
+A listing shows it as a jump to a label right after the inlined body, so that the code it skips does
+not read as if it runs.
+
 **Sequential exploration** — the strategy that takes every path of the left oracle, then, under
 each, every path of the right oracle.
 
@@ -106,11 +128,20 @@ straight-line code up to its next *decision point*, and the two decision points 
 jointly. It is what an EasyCrypt pRHL proof does, which is why it exists.
 _Avoid_: synchronized execution (the word *synchronized* is reserved for the outcomes below).
 
-**One-sided execution** — the debugger's walk of one oracle of one composition on its own, with
-the composition's parameters left free. It builds a **side tree** (the paths of that one oracle) and
-checks the composition's package and game invariants on each path. It is not a strategy, because a
-strategy walks two oracles; it is what a hoare proof of a side-invariant lemma follows, the way an
-equivalence's proof follows the joint tree.
+**One-sided execution** — the debugger's walk of one oracle on its own, with its parameters left
+free. Of a composition's oracle it builds a **side tree** and checks the composition's game
+invariants on each path. Of a package's oracle it builds a **package tree** and checks the
+package's invariants on each path; every call the package makes to its imports is an *open call*.
+It is not a strategy, because a strategy walks two oracles; it is what a hoare proof of a
+side-invariant lemma or a package-invariant lemma follows, the way an equivalence's proof follows
+the joint tree.
+
+**Open call** — a call from a package to one of its imports when nothing is known about who
+provides it: it may abort, or return any value of its type, and it cannot touch the calling
+package's state. Each call site has its own unknown outcome, independent of every other call
+site, so two calls of the same import may return different values. The solver check of a package
+invariant, the package tree and the package-invariant lemma all see an import this way.
+_Avoid_: virtual package (an earlier model of the same freedom as a stateful stand-in package).
 
 **All-claim run** — a debugger run that names no claim and therefore checks the oracle's whole
 obligation set — its proof tree plus the generated package and game invariant claims — on one
@@ -270,11 +301,27 @@ but does not prove them. The equivalence's own proof only joins its oracle lemma
 side-invariant lemmas of its two compositions; it proves no oracle itself.
 
 **Side-invariant lemma** — the proof that one oracle of a composition keeps all of that
-composition's package invariants and its game invariant, for every value of the composition's
+composition's package invariants and its game invariants, for every value of the composition's
 parameters, as a lemma of its own in a file of its own. It belongs to the composition, not to an
-equivalence, so every equivalence that uses the composition uses the same lemma. A **side-invariant
-job** proves them for one composition; a proof job never does, and will not start an equivalence
-whose compositions have no side-invariant lemmas yet.
+equivalence, so every equivalence that uses the composition uses the same lemma. Its package
+invariants come from the package-invariant and frame lemmas of the composition's instances; only
+its game invariants are proved by walking the composition's oracle. A **side-invariant job** proves
+them for one composition; a proof job never does, and will not start an equivalence whose
+compositions have no side-invariant lemmas yet.
+
+**Package-invariant lemma** — the proof that one oracle of a package keeps that package's
+invariants, for every environment the package can be placed in: any module that provides its
+imports and cannot write its state. Nothing is known about what the imports do. It belongs to the
+package (one per package variant), never to a composition, so a package used in many compositions
+is proved once. A **package-invariant job** proves the package-invariant, frame and start lemmas of
+one package; a side-invariant job never does, and will not start a composition whose packages have
+no such lemmas yet.
+
+**Frame lemma** — the proof that one oracle of a package keeps any property of its environment's
+state that the environment's own oracles keep. It says nothing about the package's invariants and
+follows from the shape of the code alone. It is what carries a called package's invariant through
+the code of the package that calls it.
+_Distinguish_: **package-invariant lemma** (about the package's own state).
 
 **Session record** — what a proof job leaves about how far proving one oracle lemma got: the
 oracle's status and the tactics accepted at each joint node. The records of an equivalence's oracles
