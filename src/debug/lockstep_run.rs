@@ -1255,7 +1255,12 @@ mod tests {
         let invariant_goal = &run.meta.goals.claims[1];
         assert_eq!(invariant_goal.claim, "invariant");
         assert!(invariant_goal.parts.is_empty());
-        for claim in ["package-invariant!L-C!", "package-invariant!R-C!", "game-invariant!L!", "game-invariant!R!"] {
+        for claim in [
+            "package-invariant!main!L-C!",
+            "package-invariant!main!R-C!",
+            "game-invariant!main!L!",
+            "game-invariant!main!R!",
+        ] {
             assert!(!invariant_goal.smt.contains(claim), "{claim} in {}", invariant_goal.smt);
         }
         for pair in &run.outcome.pairs {
@@ -2316,11 +2321,14 @@ mod tests {
 
     // -- Story 23: the core claim set --------------------------------------------------------
 
-    const MY_LEMMA: &str = "relation-my-lemma";
+    const MY_LEMMA: &str = "general-relation!my-lemma!";
 
     fn story23_project() -> DirectoryProject<'static> {
+        project_at(PathBuf::from("testdata/debug/story23"))
+    }
+
+    fn project_at(dir: PathBuf) -> DirectoryProject<'static> {
         // the files are leaked: the project borrows them for the length of the test binary
-        let dir = PathBuf::from("testdata/debug/story23");
         let files: &'static DirectoryFiles =
             Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
         DirectoryProject::load(dir, files).unwrap()
@@ -2370,9 +2378,47 @@ mod tests {
         "equal-aborts",
         "same-output",
         "invariant",
-        "package-invariant!gl-p!",
-        "game-invariant!gl!",
+        "package-invariant!main!gl-p!",
+        "game-invariant!main!gl!",
     ];
+
+    /// Story 71: each named package invariant of an instance is a claim of its own, named by
+    /// the owner function.
+    #[test]
+    fn two_named_package_invariants_are_two_claims_of_an_all_claim_run() {
+        use crate::writers::smt::contexts::package_invariant_claim_name;
+        let dir = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new("cp")
+            .args(["-R", "testdata/debug/story23/."])
+            .arg(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let a = dir.path().join("packages/A.smt2");
+        let text = std::fs::read_to_string(&a).unwrap();
+        std::fs::write(&a, format!("{text}\n(define-package-invariant small\n  (< pkg.k 1000))\n"))
+            .unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let run = run_lockstep_on(
+            ListingKind::Domino,
+            ClaimSet::of(true, None),
+            &project_at(dir.path().to_path_buf()),
+            "Eq",
+            0,
+            "O",
+            &LockstepDebugOptions::default(),
+            &Cvc5LibBackend::new(true, None),
+            Some(out.path().to_path_buf()),
+            &mut NopObserver,
+            None,
+        )
+        .unwrap();
+        let names: Vec<_> = run.summary.claims.iter().map(|c| c.claim.clone()).collect();
+        for name in ["main", "small"] {
+            let claim = package_invariant_claim_name(name, "gl", "p");
+            assert_eq!(names.iter().filter(|n| **n == claim).count(), 1, "{claim} in {names:?}");
+        }
+    }
 
     #[test]
     fn the_easycrypt_listing_assumes_no_project_lemma() {

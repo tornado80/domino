@@ -21,6 +21,8 @@ use std::collections::{HashMap, HashSet};
 use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
 
+use crate::writers::smt::contexts::InvariantClaims;
+
 use crate::expressions::{Expression, ExpressionKind};
 use crate::gamehops::equivalence::Equivalence;
 use crate::identifier::game_ident::GameIdentifier;
@@ -1140,11 +1142,11 @@ pub struct InvariantOp {
     /// The EasyCrypt operator, qualified with its theory when the files that use it do not
     /// import it, e.g. `Comp_Hybrid2.PkgInv_Hybrid2_Prf`.
     pub name: String,
-    /// The one Domino claim it stands for in a side-invariant job (story 69):
-    /// `package-invariant!Hybrid2-Prf!` for a wrapper, `game-invariant!Hybrid2!` for a
-    /// `GameInv_` operator. `None` for every other operator, and in an oracle lemma, which only
-    /// assumes the side invariants.
-    pub claim: Option<String>,
+    /// The Domino claims it stands for in a side-invariant job (story 69): the package
+    /// invariants of `Hybrid2`'s instance `Prf` for a wrapper, the game invariants of
+    /// `Hybrid2` for a `GameInv_` operator. `None` for every other operator, and in an oracle
+    /// lemma, which only assumes the side invariants.
+    pub claim: Option<InvariantClaims>,
     /// The raw SMT name of the state relation, for a `StateRelation_` operator only.
     pub relation: Option<String>,
 }
@@ -1223,7 +1225,6 @@ pub fn leaf_part_ops(
 /// claims that one-sided execution of `C` checks (symbolic-execution story 25). Empty for a
 /// composition without side invariants.
 pub fn side_invariant_ops(comp: &crate::package::Composition) -> Vec<InvariantOp> {
-    use crate::writers::smt::contexts::{game_invariant_claim_name, package_invariant_claim_name};
     if !side::has_side_invariants(comp) {
         return Vec::new();
     }
@@ -1233,7 +1234,10 @@ pub fn side_invariant_ops(comp: &crate::package::Composition) -> Vec<InvariantOp
     let mut templates: Vec<InvariantOp> = Vec::new();
     for inst in side::invariant_instances(comp) {
         ops.push(InvariantOp {
-            claim: Some(package_invariant_claim_name(&comp.name, inst.name())),
+            claim: Some(InvariantClaims::Package {
+                owner: comp.name.clone(),
+                pkg_inst: inst.name().to_string(),
+            }),
             ..InvariantOp::plain(qualified(pkg_inv_op_name(&name, inst.name())))
         });
         let template = pkg_inv_template_name(&inst.pkg.name);
@@ -1244,7 +1248,9 @@ pub fn side_invariant_ops(comp: &crate::package::Composition) -> Vec<InvariantOp
     ops.extend(templates);
     if !comp.invariants.is_empty() {
         ops.push(InvariantOp {
-            claim: Some(game_invariant_claim_name(&comp.name)),
+            claim: Some(InvariantClaims::Game {
+                owner: comp.name.clone(),
+            }),
             ..InvariantOp::plain(qualified(game_inv_op_name(&name)))
         });
     }
@@ -2328,18 +2334,19 @@ impl SmtParser<InvariantError> for InvariantParserState<'_> {
 
     fn handle_define_lemma(
         &mut self,
-        funname: &str,
+        lemma_name: &str,
+        oracle_name: &str,
         _args: Vec<Sexp>,
         _body: Sexp,
     ) -> Result<Sexp, InvariantError> {
         self.items.push(EcItem::Comment(format!(
-            "skipped `define-lemma {funname}` (not translated)"
+            "skipped `define-lemma {lemma_name} {oracle_name}` (not translated)"
         )));
-        self.skipped.push(format!("define-lemma {funname}"));
+        self.skipped.push(format!("define-lemma {lemma_name} {oracle_name}"));
         Ok(Sexp::Atom(String::new()))
     }
 
-    fn handle_define_game_invariant(&mut self, _body: Sexp) -> Result<Sexp, InvariantError> {
+    fn handle_define_game_invariant(&mut self, _invname: &str, _body: Sexp) -> Result<Sexp, InvariantError> {
         Err(SideInvariantError::InEquivalenceFile {
             file: self.file.clone(),
             form: side::Kind::Game.form(),
@@ -2347,7 +2354,11 @@ impl SmtParser<InvariantError> for InvariantParserState<'_> {
         .into())
     }
 
-    fn handle_define_package_invariant(&mut self, _body: Sexp) -> Result<Sexp, InvariantError> {
+    fn handle_define_package_invariant(
+        &mut self,
+        _invname: &str,
+        _body: Sexp,
+    ) -> Result<Sexp, InvariantError> {
         Err(SideInvariantError::InEquivalenceFile {
             file: self.file.clone(),
             form: side::Kind::Package.form(),
@@ -2851,13 +2862,13 @@ mod tests {
     fn define_lemma_is_skipped_with_a_comment_and_reported() {
         let mut state = fresh_state();
         state
-            .parse_stmts("(define-lemma foo-Send1 (a b c d) true)")
+            .parse_stmts("(define-lemma foo Send1 (a b c d) true)")
             .unwrap();
-        assert_eq!(state.skipped, vec!["define-lemma foo-Send1".to_string()]);
+        assert_eq!(state.skipped, vec!["define-lemma foo Send1".to_string()]);
         assert_eq!(
             state.items,
             vec![EcItem::Comment(
-                "skipped `define-lemma foo-Send1` (not translated)".to_string()
+                "skipped `define-lemma foo Send1` (not translated)".to_string()
             )]
         );
     }

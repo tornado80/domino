@@ -10,8 +10,8 @@
 //!   `GameInv_<C>`, and `side_inv_<C>`, which joins them under `!abort`
 //!   ([`composition_items`]). Each wrapper and `GameInv_<C>` stands for one Domino claim.
 //!
-//! A one-sided invariant file holds exactly one invariant form of the right kind, and nothing
-//! else: that is all that works in Domino for every project.
+//! A one-sided invariant file holds only invariant forms of the right kind. An owner with
+//! several named invariants gets one operator, their conjunction (story 71; story 73 splits it).
 
 use miette::Diagnostic;
 use thiserror::Error;
@@ -42,14 +42,6 @@ pub enum SideInvariantError {
         owner: String,
         expected: &'static str,
         form: String,
-    },
-
-    /// A second invariant form for the same package or composition.
-    #[error("{owner} has a second `{form}` in invariant file `{file}`; only one is permitted")]
-    SecondInvariant {
-        file: String,
-        owner: String,
-        form: &'static str,
     },
 
     /// A `define-game-invariant` in a package file, or the opposite.
@@ -150,12 +142,20 @@ impl SmtParser<InvariantError> for SideFileParser {
         }
     }
 
-    fn handle_define_package_invariant(&mut self, body: Sexp) -> Result<SideStmt, InvariantError> {
+    fn handle_define_package_invariant(
+        &mut self,
+        _invname: &str,
+        body: Sexp,
+    ) -> Result<SideStmt, InvariantError> {
         self.forms.push((Kind::Package, body));
         Ok(SideStmt::Form)
     }
 
-    fn handle_define_game_invariant(&mut self, body: Sexp) -> Result<SideStmt, InvariantError> {
+    fn handle_define_game_invariant(
+        &mut self,
+        _invname: &str,
+        body: Sexp,
+    ) -> Result<SideStmt, InvariantError> {
         self.forms.push((Kind::Game, body));
         Ok(SideStmt::Form)
     }
@@ -181,22 +181,27 @@ impl SmtParser<InvariantError> for SideFileParser {
 
     fn handle_define_lemma(
         &mut self,
-        funname: &str,
+        lemma_name: &str,
+        oracle_name: &str,
         _args: Vec<Sexp>,
         _body: Sexp,
     ) -> Result<SideStmt, InvariantError> {
-        Err(self.forbidden(format!("define-lemma {funname}")))
+        Err(self.forbidden(format!("define-lemma {lemma_name} {oracle_name}")))
     }
 }
 
-/// The one invariant form of kind `kind` across `files`, with the file it is in.
-fn the_one_form(
+/// The invariant of kind `kind` across `files`, with the first file that has a form. An owner
+/// may declare several named invariants; until each name gets its own operator (story 73, ADR
+/// 0018) the result is their conjunction, `(and <body1> <body2> …)`, in file and source order.
+/// One form gives its body unchanged.
+fn the_invariant(
     project: &impl Project,
     files: &[String],
     owner: &str,
     kind: Kind,
 ) -> Result<(String, Sexp), InvariantError> {
-    let mut found: Option<(String, Sexp)> = None;
+    let mut first_file: Option<String> = None;
+    let mut bodies = Vec::new();
     for file in files {
         let contents = project
             .read_input_file(file)
@@ -212,36 +217,30 @@ fn the_one_form(
         };
         parser.parse_stmts(&contents)?;
         for (form_kind, body) in parser.forms {
-            check_form(file, owner, kind, form_kind, found.is_some())?;
-            found = Some((file.clone(), body));
+            check_form(file, owner, kind, form_kind)?;
+            first_file.get_or_insert_with(|| file.clone());
+            bodies.push(body);
         }
     }
-    found.ok_or_else(|| {
-        SideInvariantError::NoInvariant {
+    let Some(file) = first_file else {
+        return Err(SideInvariantError::NoInvariant {
             files: files.to_vec(),
             owner: owner.to_string(),
             form: kind.form(),
         }
-        .into()
-    })
+        .into());
+    };
+    let body = if bodies.len() == 1 {
+        bodies.remove(0)
+    } else {
+        Sexp::List(std::iter::once(Sexp::Atom("and".to_string())).chain(bodies).collect())
+    };
+    Ok((file, body))
 }
 
-fn check_form(
-    file: &str,
-    owner: &str,
-    want: Kind,
-    got: Kind,
-    have_one: bool,
-) -> Result<(), SideInvariantError> {
+fn check_form(file: &str, owner: &str, want: Kind, got: Kind) -> Result<(), SideInvariantError> {
     if got != want {
         return Err(SideInvariantError::WrongKind {
-            file: file.to_string(),
-            owner: owner.to_string(),
-            form: got.form(),
-        });
-    }
-    if have_one {
-        return Err(SideInvariantError::SecondInvariant {
             file: file.to_string(),
             owner: owner.to_string(),
             form: got.form(),
@@ -360,7 +359,7 @@ pub(crate) fn composition_items<P: Project>(
         let op = game_inv_op_name(name);
         ops.define_named(&op, &format!("the game invariant of `{}`", comp.name))?;
         let owner = format!("composition `{}`", comp.name);
-        let (file, body) = the_one_form(ctx.project, &comp.invariants, &owner, Kind::Game)?;
+        let (file, body) = the_invariant(ctx.project, &comp.invariants, &owner, Kind::Game)?;
         let lookup = game_lookup(comp, &prefix)?;
         let body = translate(ctx, &file, &lookup, &body)?;
         items.push(op_def(&op, "g", record_ty.clone(), body));
@@ -404,7 +403,7 @@ fn package_template<P: Project>(
 ) -> Result<EcItem, EcExportError> {
     let package = inst.pkg.name.as_str();
     let owner = format!("package `{package}`");
-    let (file, body) = the_one_form(ctx.project, &inst.pkg.invariants, &owner, Kind::Package)?;
+    let (file, body) = the_invariant(ctx.project, &inst.pkg.invariants, &owner, Kind::Package)?;
     let fields = pkg_state_fields(inst, &mut Names::new())?;
     if fields.is_empty() {
         return Err(InvariantError::from(SideInvariantError::StatelessPackageInvariant {
@@ -480,6 +479,7 @@ mod tests {
 
     use super::super::tests::{find_equivalence, item_text, load_project};
     use super::super::{build_invariant_file, invariant_ops, leaf_part_ops, side_invariant_ops, OpRegistry};
+    use crate::writers::smt::contexts::InvariantClaims;
     use super::*;
     use crate::project::{DirectoryFiles, DirectoryProject};
     use crate::writers::easycrypt::export::{export_theorem, ExportedTheorem};
@@ -625,10 +625,20 @@ mod tests {
         assert!(e.contains("`./packages/Helper.smt2`") && e.contains("define-fun nonneg"), "{e}");
     }
 
+    /// Story 71: an owner with several named invariants has one operator, their conjunction.
     #[test]
-    fn a_second_invariant_form_is_a_hard_error_naming_the_file() {
-        let e = error_of("TwoForms");
-        assert!(e.contains("`./packages/Two-b.smt2`") && e.contains("second"), "{e}");
+    fn two_named_invariants_of_a_package_are_one_conjoined_operator() {
+        let exported = export(STORY58, "TwoForms").unwrap();
+        let text = exported
+            .files
+            .iter()
+            .find(|(_, text)| text.contains("op PkgInv_Two "))
+            .map(|(_, text)| text.as_str())
+            .expect("a file defines PkgInv_Two");
+        assert_eq!(count(text, "op PkgInv_Two "), 1, "{text}");
+        let def = &text[text.find("op PkgInv_Two ").unwrap()..];
+        let def = &def[..def.find(".\n").unwrap_or(def.len())];
+        assert!(def.contains("/\\"), "{def}");
     }
 
     #[test]
@@ -705,9 +715,9 @@ mod tests {
             &["invariant".to_string(), "relation-a-b".to_string(), "state=".to_string()],
             &["eq-prf".to_string()],
         );
-        let rows: Vec<(&str, Option<&str>, Option<&str>)> = ops
+        let rows: Vec<(&str, Option<&InvariantClaims>, Option<&str>)> = ops
             .iter()
-            .map(|o| (o.name.as_str(), o.claim.as_deref(), o.relation.as_deref()))
+            .map(|o| (o.name.as_str(), o.claim.as_ref(), o.relation.as_deref()))
             .collect();
         assert_eq!(
             rows,
@@ -735,7 +745,7 @@ mod tests {
         let comp = theorem.find_game_instance("Hybrid2").unwrap().game();
         let rows: Vec<(String, Option<String>)> = side_invariant_ops(comp)
             .into_iter()
-            .map(|o| (o.name, o.claim))
+            .map(|o| (o.name, o.claim.map(|c| c.claim("main"))))
             .collect();
         assert_eq!(
             rows,
@@ -743,12 +753,12 @@ mod tests {
                 ("Comp_Hybrid2.side_inv_Hybrid2".to_string(), None),
                 (
                     "Comp_Hybrid2.PkgInv_Hybrid2_Prf".to_string(),
-                    Some("package-invariant!Hybrid2-Prf!".to_string())
+                    Some("package-invariant!main!Hybrid2-Prf!".to_string())
                 ),
                 ("PkgInv_PRF".to_string(), None),
                 (
                     "Comp_Hybrid2.GameInv_Hybrid2".to_string(),
-                    Some("game-invariant!Hybrid2!".to_string())
+                    Some("game-invariant!main!Hybrid2!".to_string())
                 ),
             ]
         );

@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::theorem::RandomnessMappingInjectivityCheck;
 use crate::{
-    gamehops::equivalence::error::{ClaimTheoremFailedError, Error, Result},
+    gamehops::equivalence::{
+        error::{ClaimTheoremFailedError, Error, Result},
+    },
     package::Export,
     project::Project,
     theorem::Claim,

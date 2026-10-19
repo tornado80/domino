@@ -126,7 +126,7 @@ fn a_run_killed_mid_oracle_leaves_its_last_write_intact() {
     let file = theorem.join("Eq_medium_composition_small_composition.ec");
     let report = theorem.join("progress/Eq_medium_composition_small_composition/report.txt");
     let mut child = tactics(
-        "hello-world-oracle-rename-new",
+        "../test-projects/test-oracle-rename",
         &dir.join("out"),
         &easycrypt,
         &["--write-granularity", "node", "--no-quick-close"],
@@ -189,7 +189,7 @@ fn a_run_killed_at_the_default_granularity_leaves_a_compiling_file_and_a_record_
     let theorem = out.join("Proof");
     let file = theorem.join("Eq_medium_composition_small_composition.ec");
     let mut child = tactics(
-        "hello-world-oracle-rename-new",
+        "../test-projects/test-oracle-rename",
         &out,
         &easycrypt,
         &["--no-quick-close"],
@@ -239,7 +239,7 @@ fn a_run_killed_at_the_default_granularity_leaves_a_compiling_file_and_a_record_
             "none",
             "--project",
         ])
-        .arg(workspace().join("example-projects/hello-world-oracle-rename-new"))
+        .arg(workspace().join("test-projects/test-oracle-rename"))
         .arg("--out")
         .arg(&out)
         .arg("--no-quick-close")

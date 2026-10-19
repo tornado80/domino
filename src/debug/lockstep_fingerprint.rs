@@ -188,7 +188,7 @@ mod tests {
     use crate::project::{DirectoryFiles, DirectoryProject};
     use std::path::Path;
 
-    const PROJECT: &str = "example-projects/hello-world-oracle-rename-new";
+    const PROJECT: &str = "test-projects/test-oracle-rename";
     const ORACLE: &str = "ChangeNameUsefulOracle";
 
     fn fingerprint(dir: &Path) -> Fingerprint {

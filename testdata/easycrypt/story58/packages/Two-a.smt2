@@ -1,2 +1,2 @@
-(define-package-invariant
+(define-package-invariant main
   (>= pkg.ctr 0))

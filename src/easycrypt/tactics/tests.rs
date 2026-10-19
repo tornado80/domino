@@ -5,6 +5,7 @@ use super::*;
 use crate::debug::driver::{ClaimVerdict, PartVerdict, TerminalView, Verdict};
 use crate::debug::lockstep::{PairRecord, PairSide, EQUAL_OUTPUT};
 use crate::easycrypt::job::{session_dir, AdmitRecord};
+use crate::writers::smt::contexts::InvariantClaims;
 use crate::easycrypt::session::split_sentences;
 
 fn pair_view_for_tests(p: &PairRecord, part: &Part) -> &'static str {
@@ -1408,7 +1409,7 @@ mod live {
     // ------------------------------------------------------------------
 
     /// Two oracles, one with a `domino-fails` admit; a few seconds.
-    const TWO_ORACLES: &str = "example-projects/hello-world-oracle-rename-new";
+    const TWO_ORACLES: &str = "test-projects/test-oracle-rename";
 
     fn walk(write_granularity: WriteGranularity) -> TacticsOptions {
         TacticsOptions {
@@ -3147,12 +3148,15 @@ done
 /// its own part verdict where `invariant` is not verified.
 #[test]
 fn a_one_sided_invariant_part_has_the_view_of_its_own_part_verdict() {
-    let part = |op: &str, claim: &str| Part::SideInvariant {
+    let part = |op: &str, owner: &str| Part::SideInvariant {
         op: op.into(),
-        claim: claim.into(),
+        claim: InvariantClaims::Package {
+            owner: owner.into(),
+            pkg_inst: "Prf".into(),
+        },
     };
-    let left = part("PkgInv_l_Prf", "package-invariant!Real_Hybrid3-Prf!");
-    let right = part("PkgInv_r_Prf", "package-invariant!Ideal_Hybrid3-Prf!");
+    let left = part("PkgInv_l_Prf", "Real_Hybrid3");
+    let right = part("PkgInv_r_Prf", "Ideal_Hybrid3");
     let p = pair(
         Verdict::Verified,
         fails(),
@@ -3179,7 +3183,7 @@ fn a_part_on_a_pair_with_invariant_verified_is_verified() {
     assert_eq!(pair_view_for_tests(&p, &Part::Relation("a".into())), "verified");
     let side = Part::SideInvariant {
         op: "GameInv_G".into(),
-        claim: "game-invariant!G!".into(),
+        claim: InvariantClaims::Game { owner: "G".into() },
     };
     assert_eq!(pair_view_for_tests(&p, &side), "verified");
     let unreachable = pair(Verdict::Verified, Verdict::pair_infeasible(), &[], false);

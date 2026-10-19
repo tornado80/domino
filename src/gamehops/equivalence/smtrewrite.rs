@@ -40,19 +40,55 @@ pub fn without_custom_smt_warning<T>(f: impl FnOnce() -> T) -> T {
     out
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum SmtStatementKind {
-    StateRelation,
-    GeneralRelation,
-    PackageInvariant,
-    GameInvariant,
-    Function,
+    StateRelation {
+        name: String,
+    },
+    GeneralRelation {
+        name: String,
+        oracle: String,
+    },
+    PackageInvariant {
+        name: String,
+        package: String,
+        game: String,
+    },
+    GameInvariant {
+        name: String,
+        game: String,
+    },
+    Function {
+        name: String,
+    },
     Other,
+}
+
+impl SmtStatementKind {
+    pub fn name(&self) -> String {
+        match self {
+            SmtStatementKind::StateRelation { name } | SmtStatementKind::Function { name } => {
+                name.clone()
+            }
+            SmtStatementKind::GeneralRelation { name, oracle } => {
+                format!("general-relation!{name}!{oracle}!")
+            }
+            SmtStatementKind::GameInvariant { name, game } => {
+                crate::writers::smt::contexts::game_invariant_claim_name(name, game)
+            }
+            SmtStatementKind::PackageInvariant {
+                name,
+                package,
+                game,
+            } => crate::writers::smt::contexts::package_invariant_claim_name(name, game, package),
+            SmtStatementKind::Other => String::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct SmtStmt {
-    pub sort: SmtStatementKind,
+    pub kind: SmtStatementKind,
     pub expr: SmtExpr,
 }
 
@@ -79,7 +115,7 @@ impl From<SmtExpr> for SmtStmt {
         }
 
         SmtStmt {
-            sort: SmtStatementKind::Other,
+            kind: SmtStatementKind::Other,
             expr: value,
         }
     }
@@ -353,12 +389,14 @@ impl SmtParser<Error> for SmtRewrite<'_> {
         let expr = ("define-fun", funname, args, ty, body).into();
 
         Ok(SmtStmt {
-            sort: SmtStatementKind::Function,
+            kind: SmtStatementKind::Function {
+                name: funname.to_string(),
+            },
             expr,
         })
     }
 
-    fn handle_define_game_invariant(&mut self, body: SmtExpr) -> Result<SmtStmt> {
+    fn handle_define_game_invariant(&mut self, invname: &str, body: SmtExpr) -> Result<SmtStmt> {
         let Some(game) = self.game else {
             return Err(Error::RewriteNeedsGameContext {
                 defn: format!("(define-game-invariant {body})"),
@@ -390,9 +428,14 @@ impl SmtParser<Error> for SmtRewrite<'_> {
         }
         .into();
 
+        let kind = SmtStatementKind::GameInvariant {
+            name: invname.to_string(),
+            game: self.game.unwrap().name().to_string(),
+        };
+
         let expr = (
             "define-fun",
-            &crate::writers::smt::contexts::game_invariant_claim_name(game.name()),
+            &kind.name(),
             vec![(
                 SmtExpr::Atom("game".to_string()),
                 SmtExpr::Atom(gamestate_sort),
@@ -403,13 +446,10 @@ impl SmtParser<Error> for SmtRewrite<'_> {
         )
             .into();
 
-        Ok(SmtStmt {
-            sort: SmtStatementKind::GameInvariant,
-            expr,
-        })
+        Ok(SmtStmt { kind, expr })
     }
 
-    fn handle_define_package_invariant(&mut self, body: SmtExpr) -> Result<SmtStmt> {
+    fn handle_define_package_invariant(&mut self, invname: &str, body: SmtExpr) -> Result<SmtStmt> {
         let (Some(game), Some(package)) = (self.game, self.package) else {
             return Err(Error::RewriteNeedsPackageContext {
                 defn: format!("(define-package-invariant {body})"),
@@ -439,9 +479,15 @@ impl SmtParser<Error> for SmtRewrite<'_> {
         }
         .into();
 
+        let kind = SmtStatementKind::PackageInvariant {
+            name: invname.to_string(),
+            package: self.package.unwrap().name().to_string(),
+            game: self.game.unwrap().name().to_string(),
+        };
+
         let expr = (
             "define-fun",
-            &crate::writers::smt::contexts::package_invariant_claim_name(game.name(), package.name()),
+            &kind.name(),
             vec![(
                 SmtExpr::Atom("game".to_string()),
                 SmtExpr::Atom(gamestate_sort),
@@ -452,10 +498,7 @@ impl SmtParser<Error> for SmtRewrite<'_> {
         )
             .into();
 
-        Ok(SmtStmt {
-            sort: SmtStatementKind::PackageInvariant,
-            expr,
-        })
+        Ok(SmtStmt { kind, expr })
     }
 
     fn handle_define_state_relation(
@@ -557,14 +600,17 @@ impl SmtParser<Error> for SmtRewrite<'_> {
             .into();
 
         Ok(SmtStmt {
-            sort: SmtStatementKind::StateRelation,
+            kind: SmtStatementKind::StateRelation {
+                name: funname.to_string(),
+            },
             expr,
         })
     }
 
     fn handle_define_lemma(
         &mut self,
-        funname: &str,
+        lemma_name: &str,
+        oracle_name: &str,
         args: Vec<SmtExpr>,
         body: SmtExpr,
     ) -> Result<SmtStmt> {
@@ -587,15 +633,6 @@ impl SmtParser<Error> for SmtRewrite<'_> {
             params: &right_game_inst.consts,
         };
 
-        let Some(oracle_name) = funname
-            .rfind("-")
-            .map(|i| &funname[i + 1..funname.len() - 1])
-        else {
-            return Err(Error::IllegalLemmaName {
-                lemma_name: funname.to_string(),
-            });
-        };
-
         let Some(left_oracle_export) = left_game_inst
             .game()
             .exports
@@ -603,7 +640,7 @@ impl SmtParser<Error> for SmtRewrite<'_> {
             .find(|export| export.name() == oracle_name)
         else {
             return Err(Error::UnknownLemmaName {
-                lemma_name: funname.to_string(),
+                lemma_name: lemma_name.to_string(),
                 oracle_name: oracle_name.to_string(),
             });
         };
@@ -622,7 +659,7 @@ impl SmtParser<Error> for SmtRewrite<'_> {
             .find(|export| export.name() == oracle_name)
         else {
             return Err(Error::UnknownLemmaName {
-                lemma_name: funname.to_string(),
+                lemma_name: lemma_name.to_string(),
                 oracle_name: oracle_name.to_string(),
             });
         };
@@ -760,12 +797,15 @@ impl SmtParser<Error> for SmtRewrite<'_> {
                 .into(),
         ];
         newargs.extend(args.into_iter().skip(4));
-        let expr = ("define-fun", funname, newargs, "Bool", bindreturn).into();
 
-        Ok(SmtStmt {
-            sort: SmtStatementKind::GeneralRelation,
-            expr,
-        })
+        let kind = SmtStatementKind::GeneralRelation {
+            name: lemma_name.to_string(),
+            oracle: oracle_name.to_string(),
+        };
+
+        let expr = ("define-fun", kind.name(), newargs, "Bool", bindreturn).into();
+
+        Ok(SmtStmt { kind, expr })
     }
 }
 

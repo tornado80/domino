@@ -135,6 +135,8 @@ impl<'a> EquivalenceContext<'a> {
     pub(crate) fn emit_invariant(&self) -> Vec<SmtExpr> {
         self.invariants
             .iter()
+            .chain(self.left_invariants.iter())
+            .chain(self.right_invariants.iter())
             .map(|stmt| stmt.expr.clone())
             .collect()
     }
@@ -414,31 +416,28 @@ impl<'a> EquivalenceContext<'a> {
             build_invariant_old_call("invariant"),
         ];
 
-        for pkg in &gctx_left.game().pkgs {
-            if !pkg.pkg.invariants.is_empty() {
-                dependencies_code.push(build_left_invariant_old_call(
-                    &package_invariant_claim_name(game_inst_name_left, pkg.name()),
-                ));
-            }
-        }
-        for pkg in &gctx_right.game().pkgs {
-            if !pkg.pkg.invariants.is_empty() {
-                dependencies_code.push(build_right_invariant_old_call(
-                    &package_invariant_claim_name(game_inst_name_right, pkg.name()),
-                ));
-            }
-        }
-
-        if !gctx_left.game().invariants.is_empty() {
-            dependencies_code.push(build_left_invariant_old_call(&game_invariant_claim_name(
-                game_inst_name_left,
-            )));
-        }
-        if !gctx_right.game().invariants.is_empty() {
-            dependencies_code.push(build_right_invariant_old_call(&game_invariant_claim_name(
-                game_inst_name_right,
-            )));
-        }
+        dependencies_code.extend(
+            self.left_invariants
+                .iter()
+                .filter_map(|stmt| match stmt.kind {
+                    SmtStatementKind::GameInvariant { .. }
+                    | SmtStatementKind::PackageInvariant { .. } => {
+                        Some(build_left_invariant_old_call(&stmt.kind.name()))
+                    }
+                    _ => None,
+                }),
+        );
+        dependencies_code.extend(
+            self.right_invariants
+                .iter()
+                .filter_map(|stmt| match stmt.kind {
+                    SmtStatementKind::GameInvariant { .. }
+                    | SmtStatementKind::PackageInvariant { .. } => {
+                        Some(build_right_invariant_old_call(&stmt.kind.name()))
+                    }
+                    _ => None,
+                }),
+        );
 
         (dependencies_code, dep_calls, postcond_call)
     }
@@ -511,66 +510,35 @@ impl<'a> EquivalenceContext<'a> {
     /// Lifted out of `EquivalenceSmtDriver` so `domino debug` (story 06) can enumerate the same
     /// claim set the prover checks without duplicating the logic.
     pub(crate) fn generate_game_or_package_invariant_claims(&self) -> Vec<Claim> {
-        fn package_invariant_claims(
-            gctx: GameInstanceContext<'_>,
-            claim_type: ClaimType,
-        ) -> Vec<Claim> {
-            gctx.game()
-                .pkgs
+        fn invariant_claims(stmts: &[crate::gamehops::equivalence::smtrewrite::SmtStmt], package: ClaimType, game: ClaimType) -> Vec<Claim> {
+            stmts
                 .iter()
-                .filter_map(|pkg| {
-                    if pkg.pkg.invariants.is_empty() {
-                        None
-                    } else {
-                        Some(Claim {
-                            admitted: false,
-                            dependencies: vec!["no-abort".to_string()],
-                            ty: claim_type,
-                            name: package_invariant_claim_name(
-                                gctx.game_inst_name(),
-                                pkg.name(),
-                            ),
-                        })
-                    }
+                .filter_map(|stmt| {
+                    let ty = match stmt.kind {
+                        SmtStatementKind::PackageInvariant { .. } => package,
+                        SmtStatementKind::GameInvariant { .. } => game,
+                        _ => return None,
+                    };
+                    Some(Claim {
+                        admitted: false,
+                        dependencies: vec!["no-abort".to_string()],
+                        ty,
+                        name: stmt.kind.name(),
+                    })
                 })
                 .collect()
         }
 
-        fn game_invariant_claim(
-            gctx: GameInstanceContext<'_>,
-            claim_type: ClaimType,
-        ) -> Option<Claim> {
-            if gctx.game().invariants.is_empty() {
-                None
-            } else {
-                Some(Claim {
-                    admitted: false,
-                    dependencies: vec!["no-abort".to_string()],
-                    ty: claim_type,
-                    name: game_invariant_claim_name(gctx.game_inst_name()),
-                })
-            }
-        }
-
-        let mut claims = vec![];
-        claims.extend(package_invariant_claims(
-            self.left_game_inst_ctx(),
+        let mut claims = invariant_claims(
+            &self.left_invariants,
             ClaimType::LeftPackageInvariant,
-        ));
-        claims.extend(package_invariant_claims(
-            self.right_game_inst_ctx(),
+            ClaimType::LeftGameInvariant,
+        );
+        claims.extend(invariant_claims(
+            &self.right_invariants,
             ClaimType::RightPackageInvariant,
+            ClaimType::RightGameInvariant,
         ));
-        if let Some(claim) =
-            game_invariant_claim(self.left_game_inst_ctx(), ClaimType::LeftGameInvariant)
-        {
-            claims.push(claim);
-        }
-        if let Some(claim) =
-            game_invariant_claim(self.right_game_inst_ctx(), ClaimType::RightGameInvariant)
-        {
-            claims.push(claim);
-        }
         claims
     }
 
@@ -688,7 +656,7 @@ impl<'a> EquivalenceContext<'a> {
     pub(crate) fn state_relation_names(&self) -> Vec<String> {
         self.invariants
             .iter()
-            .filter(|stmt| matches!(stmt.sort, SmtStatementKind::StateRelation))
+            .filter(|stmt| matches!(stmt.kind, SmtStatementKind::StateRelation { .. }))
             .filter_map(|stmt| match &stmt.expr {
                 SmtExpr::List(items) => match items.as_slice() {
                     [SmtExpr::Atom(kw), SmtExpr::Atom(name), ..] if kw == "define-fun" => {
@@ -1704,19 +1672,54 @@ fn build_rands(
         .collect()
 }
 
-/// The claim of the package invariant of package instance `pkg_inst` in the state of `owner`:
-/// `package-invariant!<owner>-<pkg_inst>!`. The owner of the state is a game instance in lockstep
+/// The claim of the package invariant `name` of package instance `pkg_inst` in the state of
+/// `owner`: `package-invariant!<name>!<owner>-<pkg_inst>!`. The owner of the state is a game instance in lockstep
 /// execution and a composition in one-sided execution (symbolic-execution story 25). The one
 /// owner of this name.
-pub(crate) fn package_invariant_claim_name(owner: &str, pkg_inst: &str) -> String {
-    format!("package-invariant!{owner}-{pkg_inst}!")
+pub(crate) fn package_invariant_claim_name(name: &str, owner: &str, pkg_inst: &str) -> String {
+    format!("package-invariant!{name}!{owner}-{pkg_inst}!")
 }
 
-/// The claim of the game invariant on the state of `owner` (a game instance or a composition,
-/// as for [`package_invariant_claim_name`]): `game-invariant!<owner>!`. The one owner of this
+/// The claim of the game invariant `name` on the state of `owner` (a game instance or a
+/// composition, as for [`package_invariant_claim_name`]): `game-invariant!<name>!<owner>!`. The one owner of this
 /// name.
-pub(crate) fn game_invariant_claim_name(owner: &str) -> String {
-    format!("game-invariant!{owner}!")
+pub(crate) fn game_invariant_claim_name(name: &str, owner: &str) -> String {
+    format!("game-invariant!{name}!{owner}!")
+}
+
+/// The claims of every named invariant of one kind on one owner: what one EasyCrypt
+/// side-invariant operator (`PkgInv_<C>_<Inst>`, `GameInv_<C>`) stands for while it is the
+/// conjunction of the named invariants (story 71; story 73 gives each name its own operator).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvariantClaims {
+    /// The package invariants of package instance `pkg_inst` in the state of `owner`.
+    Package { owner: String, pkg_inst: String },
+    /// The game invariants on the state of `owner`.
+    Game { owner: String },
+}
+
+impl InvariantClaims {
+    /// The claim of the invariant called `name` of this owner, from the owner functions.
+    pub(crate) fn claim(&self, name: &str) -> String {
+        match self {
+            InvariantClaims::Package { owner, pkg_inst } => {
+                package_invariant_claim_name(name, owner, pkg_inst)
+            }
+            InvariantClaims::Game { owner } => game_invariant_claim_name(name, owner),
+        }
+    }
+
+    /// Whether `claim` is the claim of one of the named invariants of this owner.
+    pub(crate) fn contains(&self, claim: &str) -> bool {
+        let prefix = match self {
+            InvariantClaims::Package { .. } => "package-invariant!",
+            InvariantClaims::Game { .. } => "game-invariant!",
+        };
+        claim
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.split_once('!'))
+            .is_some_and(|(name, _)| self.claim(name) == claim)
+    }
 }
 
 #[cfg(test)]

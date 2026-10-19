@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 mod emit;
 
-pub(crate) use emit::{game_invariant_claim_name, package_invariant_claim_name};
+pub(crate) use emit::{game_invariant_claim_name, package_invariant_claim_name, InvariantClaims};
 
 use crate::{
     gamehops::equivalence::{smtrewrite::SmtStmt, Equivalence},
@@ -39,6 +39,8 @@ pub struct EquivalenceContext<'a> {
     theorem: &'a Theorem<'a>,
     auxs: &'a <EquivalenceTransform as TheoremTransform>::Aux,
     invariants: Vec<SmtStmt>,
+    left_invariants: Vec<SmtStmt>,
+    right_invariants: Vec<SmtStmt>,
 }
 
 // simple getters
@@ -53,6 +55,8 @@ impl<'a> EquivalenceContext<'a> {
             theorem,
             auxs,
             invariants: Vec::new(),
+            left_invariants: Vec::new(),
+            right_invariants: Vec::new(),
         }
     }
 
@@ -66,6 +70,14 @@ impl<'a> EquivalenceContext<'a> {
 
     pub(crate) fn append_invariants(&mut self, mut new_invariants: Vec<SmtStmt>) {
         self.invariants.append(&mut new_invariants);
+    }
+
+    pub(crate) fn append_left_invariants(&mut self, mut new_invariants: Vec<SmtStmt>) {
+        self.left_invariants.append(&mut new_invariants);
+    }
+
+    pub(crate) fn append_right_invariants(&mut self, mut new_invariants: Vec<SmtStmt>) {
+        self.right_invariants.append(&mut new_invariants);
     }
 }
 
@@ -116,8 +128,6 @@ impl<'a> EquivalenceContext<'a> {
         let return_type = left_octx.oracle_return_type();
 
         Relation {
-            game_inst_name_left: left_gctx.game_inst_name(),
-            game_inst_name_right: right_gctx.game_inst_name(),
             relation_name,
             oracle_name,
             state_datatype_left,

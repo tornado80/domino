@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-const PROJECT: &str = "hello-world-oracle-rename-new";
+const PROJECT: &str = "../test-projects/test-oracle-rename";
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")

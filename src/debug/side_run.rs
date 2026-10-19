@@ -9,7 +9,7 @@
 //! instance named `C` whose every parameter is a theorem constant that nothing constrains: the
 //! theorem's own constant of that name and type when there is one, otherwise a new constant
 //! `<C>_<param>`. So the package and game invariant claims are named for the composition
-//! (`package-invariant!<C>-<PkgInst>!`, `game-invariant!<C>!`) by their one owners
+//! (`package-invariant!<name>!<C>-<PkgInst>!`, `game-invariant!<name>!<C>!`) by their one owners
 //! ([`package_invariant_claim_name`], [`game_invariant_claim_name`]), and the definitions of the
 //! invariants get the same names.
 //!
@@ -508,16 +508,16 @@ mod tests {
         .unwrap()
     }
 
-    const PKG: &str = "package-invariant!S-p!";
-    const GAME: &str = "game-invariant!S!";
+    const PKG: &str = "package-invariant!main!S-p!";
+    const GAME: &str = "game-invariant!main!S!";
 
     #[test]
     fn claim_names_are_of_the_composition_from_the_one_owners() {
-        assert_eq!(package_invariant_claim_name("S", "p"), PKG);
-        assert_eq!(game_invariant_claim_name("S"), GAME);
+        assert_eq!(package_invariant_claim_name("main", "S", "p"), PKG);
+        assert_eq!(game_invariant_claim_name("main", "S"), GAME);
         // lockstep execution's names do not change: they are of the game instance
-        assert_eq!(package_invariant_claim_name("s", "p"), "package-invariant!s-p!");
-        assert_eq!(game_invariant_claim_name("s"), "game-invariant!s!");
+        assert_eq!(package_invariant_claim_name("main", "s", "p"), "package-invariant!main!s-p!");
+        assert_eq!(game_invariant_claim_name("main", "s"), "game-invariant!main!s!");
     }
 
     #[test]

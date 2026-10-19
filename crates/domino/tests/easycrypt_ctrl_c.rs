@@ -26,14 +26,15 @@ fn scratch(test: &str) -> PathBuf {
 /// for the run to find its oracle.
 const ORACLE_GOAL: &str = r#"{"id":1,"concl":{"kind":"equivF","pp":"equiv[d_UsefulOracle]","left":{"proc":{"path":"Top.Comp_MediumComposition.Game_MediumComposition./d_UsefulOracle","top":"Top.Comp_MediumComposition.Game_MediumComposition","name":"d_UsefulOracle"}},"right":{"proc":{"path":"Top.Comp_SmallComposition.Game_SmallComposition./d_UsefulOracle","top":"Top.Comp_SmallComposition.Game_SmallComposition","name":"d_UsefulOracle"}}},"text":"the oracle goal"}"#;
 
-/// A stand-in `easycrypt cli -json`: every sentence is accepted and leaves hello-world's oracle
+/// A stand-in `easycrypt cli -json` (a request is one JSON line, `{"sentence":…}`, story 61):
+/// every sentence is accepted and leaves hello-world's oracle
 /// goal, except `admit.`, which the walk sends first on it (the goal is not a program, so the
 /// walk falls back and admits). That one runs until a `SIGINT` (answered `interrupted`), or,
 /// with `ignore_sigint`, for 20 s. When it starts, the file `admitting` appears in `dir`.
 fn stand_in(dir: &Path, ignore_sigint: bool) -> PathBuf {
     let answer = |status: &str| {
         format!(
-            r#"{{"version":"domino-json/2","state":1,"status":"{status}","messages":[],"proof":{{"front":{ORACLE_GOAL},"kinds":["formula"]}}}}"#
+            r#"{{"version":"domino-json/3","state":1,"status":"{status}","messages":[],"proof":{{"front":{ORACLE_GOAL},"kinds":["formula"]}}}}"#
         )
     };
     std::fs::write(dir.join("ok.json"), answer("ok") + "\n").unwrap();
@@ -49,7 +50,7 @@ int=0
 trap {on_int} INT
 while IFS= read -r line; do
   case "$line" in
-    admit.*)
+    *'"sentence":"admit.'*)
       : > admitting
       n=0
       while [ $int = 0 ] && [ $n -lt 200 ]; do sleep 0.1; n=$((n+1)); done
@@ -166,8 +167,7 @@ fn ctrl_c_interrupts_the_running_sentence_seals_the_oracle_and_exits_130() {
         .unwrap();
     assert!(
         text.contains(
-            "(* d_UsefulOracle *)\n+ proc; inline.\n  admit. (* domino: router open-goal; \
-             reason: interrupted; Domino: n/a *)\n"
+            "(* d_UsefulOracle *)\n+ proc; inline.\n  admit. (* domino: router open-goal; interrupted *)\n"
         ),
         "{text}"
     );

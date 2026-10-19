@@ -33,6 +33,7 @@ use super::ResumeMode;
 use super::script::{Mark, Script};
 use crate::easycrypt::job::{AdmitRecord, ClosedNode};
 use crate::writers::easycrypt::invariant::{state_relation_op_name, InvariantOp};
+use crate::writers::smt::contexts::InvariantClaims;
 
 type R<T> = Result<T, SessionError>;
 
@@ -363,8 +364,8 @@ pub(super) enum Part {
     /// A state relation, by the name of its `define-state-relation`.
     Relation(String),
     /// A side invariant of a side-invariant lemma (story 69): a `PkgInv_<C>_<Inst>` wrapper
-    /// or `GameInv_<C>`, by its EasyCrypt name, with the one Domino claim it stands for.
-    SideInvariant { op: String, claim: String },
+    /// or `GameInv_<C>`, by its EasyCrypt name, with the Domino claims it stands for.
+    SideInvariant { op: String, claim: InvariantClaims },
 }
 
 impl Part {
@@ -494,15 +495,19 @@ pub(super) fn pair_view(pair: &PairRecord, part: &Part) -> DominoView {
 }
 
 /// What Domino says about `part` on a terminal of a side tree (story 69), whose claims are the
-/// package and game invariants of the composition: a side invariant part has the view of its
-/// own claim (`Inconclusive` when the side tree has no verdict for it), and every other part
-/// the worst view of all the claims. One-sided execution checks no claim at a terminal that
+/// package and game invariants of the composition: a side invariant part has the worst view of
+/// its own claims (`Inconclusive` when the side tree has no verdict for any of them), and every
+/// other part the worst view of all the claims. One-sided execution checks no claim at a terminal that
 /// aborts (its verdicts are `unreachable`).
 fn side_pair_view(pair: &PairRecord, part: &Part) -> DominoView {
     match part {
         Part::SideInvariant { claim, .. } => pair
-            .verdict_of(claim)
-            .map_or(DominoView::Inconclusive, view_of_verdict),
+            .claims
+            .iter()
+            .filter(|c| claim.contains(&c.claim))
+            .map(|c| view_of_verdict(&c.verdict))
+            .reduce(DominoView::worst)
+            .unwrap_or(DominoView::Inconclusive),
         _ => pair
             .claims
             .iter()

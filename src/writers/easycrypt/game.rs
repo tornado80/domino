@@ -819,7 +819,7 @@ mod tests {
         // instance (`rand`) — an adapter is required, and its procs forward
         // to `Pkg_Inst_Rand.d_UsefulOracle`.
         let files = load(
-            "example-projects/hello-world-oracle-rename-new",
+            "test-projects/test-oracle-rename",
             "Proof",
         );
         let f = files.iter().find(|f| f.name == "MediumComposition").unwrap();

@@ -3253,8 +3253,8 @@ mod story19_tests {
     fn a_single_claim_run_keeps_its_dependencies_in_the_base_frame() {
         let single = one("Branch", "needs-positive");
         let everything = all("Branch");
-        assert!(single.base_frame_smt.contains("(assert (<relation-positive"));
-        assert!(!everything.base_frame_smt.contains("(assert (<relation-positive"));
+        assert!(single.base_frame_smt.contains("(assert (general-relation!positive!"));
+        assert!(!everything.base_frame_smt.contains("(assert (general-relation!positive!"));
         // with its dependencies asserted up front, the path where `positive` is false is not
         // a pair at all: it is pruned (the frame is unsat there), not reported unreachable
         assert!(single.claim_summaries.is_empty());
