@@ -1093,6 +1093,8 @@ mod tests {
             name: "TestComp".to_string(),
             consts: vec![],
             invariants: vec![],
+            file_name: String::new(),
+            file_contents: String::new(),
         };
         // The writer consumes `easycryptify`'s output (story 16), exactly as
         // `export_theorem` hands it over via `EasyCryptTransform`.
@@ -1623,6 +1625,8 @@ mod tests {
             name: "C".to_string(),
             consts: vec![],
             invariants: vec![],
+            file_name: String::new(),
+            file_contents: String::new(),
         };
         let keys = compute_all_keys(&comp);
         assert_ne!(keys[0], keys[1]);
@@ -1646,6 +1650,8 @@ mod tests {
             name: "C".to_string(),
             consts: vec![],
             invariants: vec![],
+            file_name: String::new(),
+            file_contents: String::new(),
         };
         let keys = compute_all_keys(&comp);
         assert_eq!(keys[0], keys[1]);
@@ -1668,6 +1674,8 @@ mod tests {
             name: "C".to_string(),
             consts: vec![],
             invariants: vec![],
+            file_name: String::new(),
+            file_contents: String::new(),
         };
         let keys = compute_all_keys(&comp);
         assert_eq!(keys[0], keys[1]);

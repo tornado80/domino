@@ -5,6 +5,7 @@
 //!
 //! [`ir`] holds the AST-level inlined representation of one exported oracle,
 //! together with the textual listing its line-number labels index into.
+//! [`view`] renders the same inlining as readable code for `domino html`.
 
 pub mod claims;
 pub mod driver;
@@ -14,8 +15,8 @@ pub mod index;
 pub mod ir;
 pub mod layout;
 pub mod lockstep;
-pub mod lockstep_report;
 pub mod lockstep_fingerprint;
+pub mod lockstep_report;
 pub mod lockstep_run;
 pub mod lockstep_viewer;
 pub mod progress;
@@ -25,6 +26,7 @@ pub mod side;
 pub mod side_run;
 pub mod smtout;
 pub mod sweep;
+pub mod view;
 
 #[cfg(test)]
 mod easycryptify_differential;

@@ -2814,6 +2814,8 @@ return ec_result
             name: "Comp".to_string(),
             consts: vec![],
             invariants: vec![],
+            file_name: String::new(),
+            file_contents: String::new(),
         }
     }
 

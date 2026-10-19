@@ -157,6 +157,11 @@ enum Error {
     // blanket `#[from]` can't yet mislabel an unrelated failure.
     #[error("io error writing the EasyCrypt export")]
     EcExportIo(#[from] std::io::Error),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Transform(#[from] sspverif::transforms::theorem_transforms::EquivalenceTransformError),
+    #[error("could not write {0}: {1}")]
+    Io(std::path::PathBuf, std::io::Error),
     #[cfg(feature = "cvc5-lib")]
     #[error(transparent)]
     #[diagnostic(transparent)]
@@ -263,9 +268,9 @@ fn stage_line(mode: ProgressMode, line: &str) {
 
 #[cfg(feature = "cvc5-lib")]
 fn debug(d: &Debug) -> Result<(), Error> {
+    use sspverif::debug::claims::ClaimSet;
     use sspverif::debug::driver::{run_debug_command, DebugError, DebugOptions};
     use sspverif::debug::index::{self, Level};
-    use sspverif::debug::claims::ClaimSet;
     use sspverif::debug::layout::{self, DOMINO_DEBUG_DIR};
     use sspverif::debug::lockstep_report::render_summary as render_lockstep_summary;
     use sspverif::debug::lockstep_run::{run_lockstep_domino, LockstepDebugOptions};
@@ -435,7 +440,8 @@ fn debug(d: &Debug) -> Result<(), Error> {
         let first = &plan.targets[0];
         let level = Level::of_filters(
             d.proof.as_deref(),
-            d.proofstep.map(|_| (first.left.as_str(), first.right.as_str())),
+            d.proofstep
+                .map(|_| (first.left.as_str(), first.right.as_str())),
         );
         // A run of one oracle writes no index of its own; it keeps the ones above it current.
         let written = if d.oracle.is_some() && d.proofstep.is_some() {
@@ -650,7 +656,13 @@ fn export_in_memory<P: project::Project>(
     project: &P,
     theorem_names: &[String],
     logging: &mut sspverif::writers::easycrypt::progress::LoggingExportObserver<'_>,
-) -> Result<Vec<(String, sspverif::writers::easycrypt::export::ExportedTheorem)>, Error> {
+) -> Result<
+    Vec<(
+        String,
+        sspverif::writers::easycrypt::export::ExportedTheorem,
+    )>,
+    Error,
+> {
     use sspverif::writers::easycrypt::progress::{ExportEvent, ExportObserver};
     let mut exports = Vec::with_capacity(theorem_names.len());
     for (i, name) in theorem_names.iter().enumerate() {
@@ -660,8 +672,9 @@ fn export_in_memory<P: project::Project>(
             index: i + 1,
             total: theorem_names.len(),
         });
-        let exported =
-            sspverif::writers::easycrypt::export::export_theorem_observed(theorem, project, logging)?;
+        let exported = sspverif::writers::easycrypt::export::export_theorem_observed(
+            theorem, project, logging,
+        )?;
         logging.on_event(&ExportEvent::TheoremFinished { name });
         exports.push((name.clone(), exported));
     }
@@ -692,12 +705,8 @@ fn easycrypt(e: &Easycrypt) -> Result<(), Error> {
             };
             easycrypt_translate(export, &project, &project_root, &out_base, &theorem_names)
         }
-        EasycryptCommand::Prove(p) => {
-            easycrypt_prove(p, &project, &project_root, &out_base)
-        }
-        EasycryptCommand::CheckAlignment(c) => {
-            easycrypt_check_alignment(c, &project, &out_base)
-        }
+        EasycryptCommand::Prove(p) => easycrypt_prove(p, &project, &project_root, &out_base),
+        EasycryptCommand::CheckAlignment(c) => easycrypt_check_alignment(c, &project, &out_base),
         EasycryptCommand::Debug(d) => easycrypt_debug(d, &project, &out_base),
     }
 }
@@ -795,10 +804,15 @@ fn easycrypt_prove<P: project::Project + Sync>(
 
         let theorem_names = proof_job_theorem(project, &p.theorem)?;
         // fail early and clearly: a `-json`-capable EasyCrypt is a prerequisite
-        drop(sspverif::easycrypt::session::Session::start(&std::env::temp_dir())?);
+        drop(sspverif::easycrypt::session::Session::start(
+            &std::env::temp_dir(),
+        )?);
 
         for name in &theorem_names {
-            stage_line(p.progress, &format!("easycrypt prove: translating {name} in memory"));
+            stage_line(
+                p.progress,
+                &format!("easycrypt prove: translating {name} in memory"),
+            );
         }
         let mut observer = export_observer(p.progress);
         let mut logging = LoggingExportObserver::new(observer.as_mut());
@@ -921,7 +935,10 @@ fn easycrypt_debug<P: project::Project>(
                     d.progress,
                     &format!(
                         "easycrypt debug: one-sided execution of {composition} → {}",
-                        theorem_out.join("!debug!").join(format!("SideInv_{composition}")).display()
+                        theorem_out
+                            .join("!debug!")
+                            .join(format!("SideInv_{composition}"))
+                            .display()
                     ),
                 );
                 let entries = sspverif::easycrypt::debug::debug_side_invariants(
@@ -1071,6 +1088,43 @@ fn format(f: &Format) -> Result<(), Error> {
     Ok(())
 }
 
+fn html(h: &Html) -> Result<(), Error> {
+    let project_root = match &h.path {
+        Some(path) => path.clone(),
+        None => project::directory::find_project_root()?,
+    };
+    let files = project::DirectoryFiles::load(&project_root)?;
+    let project = project::DirectoryProject::load(project_root.clone(), &files)?;
+
+    let names: Vec<String> = match &h.proof {
+        Some(name) => {
+            project
+                .get_theorem(name)
+                .ok_or_else(|| TheoremNotFound(name.clone()))?;
+            vec![name.clone()]
+        }
+        None => project.theorems().map(String::from).collect(),
+    };
+
+    let out_dir = h
+        .out
+        .clone()
+        .unwrap_or_else(|| project_root.join("_build/html"));
+    std::fs::create_dir_all(&out_dir).map_err(|e| Error::Io(out_dir.clone(), e))?;
+    let cache = project_root.join("_build/graph");
+    let backend = sspverif::util::smtsolver::process::ProcessSmtSolverBackend::new(h.smtsolver);
+    let backend = (!h.no_solver).then_some(&backend);
+
+    for name in names {
+        let theorem = project.get_theorem(&name).expect("listed theorem exists");
+        let page = sspverif::writers::html::render_theorem_html(theorem, backend, &cache, h.lossy)?;
+        let file = out_dir.join(format!("{name}.html"));
+        std::fs::write(&file, page).map_err(|e| Error::Io(file.clone(), e))?;
+        println!("{}", file.display());
+    }
+    Ok(())
+}
+
 fn main() -> miette::Result<()> {
     miette::set_hook(Box::new(|_| {
         Box::new(
@@ -1091,6 +1145,7 @@ fn main() -> miette::Result<()> {
         Commands::Debug(d) => debug(d),
         Commands::Inline(i) => inline(i),
         Commands::Easycrypt(e) => easycrypt(e),
+        Commands::Html(h) => html(h),
     };
 
     result.map_err(miette::Report::new)

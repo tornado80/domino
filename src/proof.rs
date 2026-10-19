@@ -26,7 +26,7 @@ pub struct Proof<'a> {
 
 /// A value assigned to a constant, already encoded as a string.
 #[derive(Debug, Clone)]
-struct ConstAssignment {
+pub struct ConstAssignment {
     name: GameConstIdentifier,
     original_value: Expression,
     assigned_value: Expression,
@@ -178,10 +178,40 @@ impl<'a> Proof<'a> {
         self.hops.iter().map(|hopid| &self.gamehops[*hopid])
     }
 
+    /// The found path from left to right: each game instance with the constants
+    /// its specialization fixes. `game_hops()` has one hop between each pair of
+    /// consecutive entries.
+    pub fn path(&self) -> impl Iterator<Item = (&GameInstance, &[ConstAssignment])> {
+        self.sequence.iter().map(|instid| {
+            let spec = &self.specialization[*instid];
+            (&spec.game_instance, spec.const_assignments.as_slice())
+        })
+    }
+
     pub fn instances(&self) -> impl Iterator<Item = &GameInstance> {
         self.sequence
             .iter()
             .map(|instid| &self.specialization[*instid].game_instance)
+    }
+}
+
+impl ConstAssignment {
+    /// The name of the identifier the general game instance assigns to the
+    /// constant (usually a theorem constant).
+    pub fn original_name(&self) -> String {
+        match self.original_value.kind() {
+            ExpressionKind::Identifier(ident) => ident.ident(),
+            _ => unreachable!("`assignments` only records identifier originals"),
+        }
+    }
+
+    /// The literal the specialization assigns, as written in the source.
+    pub fn assigned_value(&self) -> String {
+        match self.assigned_value.kind() {
+            ExpressionKind::BooleanLiteral(lit) => lit.clone(),
+            ExpressionKind::IntegerLiteral(lit) => lit.to_string(),
+            _ => unreachable!("`assignments` only records literal assignments"),
+        }
     }
 }
 
@@ -246,12 +276,16 @@ fn specialize<'a>(
             .consts
             .into_iter()
             .map(|(var, val)| {
-                if let ExpressionKind::Identifier(_) = val.kind() {
+                if let ExpressionKind::Identifier(ident) = val.kind() {
                     if let Some(assignment) = match_assignments
                         .iter()
                         .find(|assign| assign.original_value == val)
                     {
-                        (var, assignment.assigned_value.clone())
+                        if ident.ident() == "hybrid$loop" {
+                            (var, val)
+                        } else {
+                            (var, assignment.assigned_value.clone())
+                        }
                     } else {
                         (var, val)
                     }
@@ -332,7 +366,7 @@ fn game_is_equivalent(lhs: &GameInstance, rhs: &GameInstance) -> bool {
 }
 
 /// Check that the left game instance is a more specialized version of the right game instance.
-fn game_is_compatible(specific: &GameInstance, general: &GameInstance) -> bool {
+pub(crate) fn game_is_compatible(specific: &GameInstance, general: &GameInstance) -> bool {
     if specific.game.name != general.game.name {
         return false;
     }
@@ -372,9 +406,12 @@ fn game_is_compatible(specific: &GameInstance, general: &GameInstance) -> bool {
                 }
             })
             .unwrap();
-        if matches!(val.kind(), ExpressionKind::Identifier(_)) {
-            if let ExpressionKind::Identifier(ident) = other_val.kind() {
+        if let ExpressionKind::Identifier(ident) = val.kind() {
+            if let ExpressionKind::Identifier(other_ident) = other_val.kind() {
                 if ident.ident() == "hybrid$loop" {
+                    return true;
+                };
+                if other_ident.ident() == "hybrid$loop" {
                     return true;
                 };
             }
@@ -407,7 +444,7 @@ fn game_is_compatible(specific: &GameInstance, general: &GameInstance) -> bool {
 }
 
 /// Extract the assignments where the the game is more specific than the reference.
-fn assignments(game: &GameInstance, reference: &GameInstance) -> Vec<ConstAssignment> {
+pub(crate) fn assignments(game: &GameInstance, reference: &GameInstance) -> Vec<ConstAssignment> {
     debug_assert!(game_is_compatible(game, reference));
 
     game.consts

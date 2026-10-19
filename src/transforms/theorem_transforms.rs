@@ -72,7 +72,7 @@ impl super::TheoremTransform for EquivalenceTransform {
         let results = theorem
             .instances
             .iter()
-            .map(|game_inst| transform_game_inst_common(game_inst, ControlFlowLowering::Treeify));
+            .map(|game_inst| transform_game_inst_common(game_inst, PipelineOptions::EQUIVALENCE));
         let (instances, auxs) = itertools::process_results(results, |res| res.unzip())?;
         let theorem = theorem.with_new_instances(instances);
 
@@ -108,7 +108,7 @@ impl super::TheoremTransform for DebugTransform {
         let results = theorem
             .instances
             .iter()
-            .map(|game_inst| transform_game_inst_common(game_inst, ControlFlowLowering::None));
+            .map(|game_inst| transform_game_inst_common(game_inst, PipelineOptions::DEBUG));
         let (instances, auxs) = itertools::process_results(results, |res| res.unzip())?;
         let theorem = theorem.with_new_instances(instances);
 
@@ -141,9 +141,10 @@ impl super::TheoremTransform for EasyCryptTransform {
         &self,
         theorem: &'a crate::theorem::Theorem<'a>,
     ) -> Result<(crate::theorem::Theorem<'a>, Self::Aux), Self::Err> {
-        let results = theorem.instances.iter().map(|game_inst| {
-            transform_game_inst_common(game_inst, ControlFlowLowering::EasyCryptify)
-        });
+        let results = theorem
+            .instances
+            .iter()
+            .map(|game_inst| transform_game_inst_common(game_inst, PipelineOptions::EASYCRYPT));
         let (instances, auxs) = itertools::process_results(results, |res| res.unzip())?;
         let theorem = theorem.with_new_instances(instances);
 
@@ -151,25 +152,96 @@ impl super::TheoremTransform for EasyCryptTransform {
     }
 }
 
-/// The one point where the three pipelines differ: how control flow after an
-/// `if` / early exit is lowered for the consumer.
+/// Like [`DebugTransform`], but for read-only views of a theorem (`domino html`)
+/// that never emit a randomness mapping and so don't need
+/// [`GameInstAux::max_offsets`].
+///
+/// Such views render *every* game instance of a theorem, including ones that
+/// only appear in reduction hops and whose sampling loops have symbolic bounds
+/// (e.g. `for j: 1 <= j <= w` in the Yao example). `loopunroll` cannot unroll
+/// those, so `sample_max_counter_extractor` would reject the whole theorem.
+/// Here that is not an error: the affected instance just gets empty
+/// `max_offsets`, and [`crate::debug::view::render_oracle_view`] prints the
+/// loop as-is.
+///
+/// It also skips `deconstructinvoke` and `unwrapify`: they only split
+/// statements into `invoke-result-N` / `unwrap-N` temporaries for the SMT
+/// encoding and the debugger's IR, which a reader is better off without.
+pub struct ViewTransform;
+
+impl super::TheoremTransform for ViewTransform {
+    type Err = EquivalenceTransformError;
+
+    type Aux = Vec<(String, GameInstAux)>;
+
+    fn transform_theorem<'a>(
+        &self,
+        theorem: &'a crate::theorem::Theorem<'a>,
+    ) -> Result<(crate::theorem::Theorem<'a>, Self::Aux), Self::Err> {
+        let results = theorem
+            .instances
+            .iter()
+            .map(|game_inst| transform_game_inst_common(game_inst, PipelineOptions::VIEW));
+        let (instances, auxs) = itertools::process_results(results, |res| res.unzip())?;
+        let theorem = theorem.with_new_instances(instances);
+
+        Ok((theorem, auxs))
+    }
+}
+
+/// How control flow after an `if` / early exit is lowered for the consumer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ControlFlowLowering {
     /// [`EquivalenceTransform`]: `treeify` (the SMT writer's nested `ite`).
     Treeify,
-    /// [`DebugTransform`]: none — keep the source's 1:1 statement structure.
+    /// [`DebugTransform`] and [`ViewTransform`]: none — keep the source's 1:1
+    /// statement structure.
     None,
     /// [`EasyCryptTransform`]: `easycryptify`, run after `tableinitialize`.
     EasyCryptify,
 }
 
-/// Shared pipeline for [`EquivalenceTransform`] ([`ControlFlowLowering::Treeify`]),
-/// [`DebugTransform`] ([`ControlFlowLowering::None`]) and [`EasyCryptTransform`]
-/// ([`ControlFlowLowering::EasyCryptify`]). The three must never drift, so the
-/// only difference between them lives here.
+/// The knobs on which [`EquivalenceTransform`], [`DebugTransform`],
+/// [`EasyCryptTransform`] and [`ViewTransform`] differ; everything else in the
+/// pipeline is shared.
+#[derive(Clone, Copy)]
+struct PipelineOptions {
+    lowering: ControlFlowLowering,
+    /// Fail on a sampling loop `loopunroll` could not unroll. When `false`, the
+    /// instance gets empty `max_offsets` instead.
+    require_max_offsets: bool,
+    /// Run `deconstructinvoke` and `unwrapify`.
+    split_temporaries: bool,
+}
+
+impl PipelineOptions {
+    const EQUIVALENCE: Self = Self {
+        lowering: ControlFlowLowering::Treeify,
+        require_max_offsets: true,
+        split_temporaries: true,
+    };
+    const DEBUG: Self = Self {
+        lowering: ControlFlowLowering::None,
+        require_max_offsets: true,
+        split_temporaries: true,
+    };
+    const EASYCRYPT: Self = Self {
+        lowering: ControlFlowLowering::EasyCryptify,
+        require_max_offsets: true,
+        split_temporaries: true,
+    };
+    const VIEW: Self = Self {
+        lowering: ControlFlowLowering::None,
+        require_max_offsets: false,
+        split_temporaries: false,
+    };
+}
+
+/// Shared pipeline for every theorem transform of this module. They must never
+/// drift, so the only differences between them live here, selected by `opts`.
 fn transform_game_inst_common(
     game_inst: &GameInstance,
-    lowering: ControlFlowLowering,
+    opts: PipelineOptions,
 ) -> Result<(GameInstance, (String, GameInstAux)), EquivalenceTransformError> {
     let comp = game_inst.game();
 
@@ -188,15 +260,25 @@ fn transform_game_inst_common(
      * loops are counted once per unrolled iteration) and after oracle
      * resolution (to follow resolved oracle invocations).
      */
-    let (comp, _) = deconstructinvoke::Transformation(&comp)
-        .transform()
-        .expect("splitinvoke failed unexpectedly");
+    let comp = if opts.split_temporaries {
+        deconstructinvoke::Transformation(&comp)
+            .transform()
+            .expect("splitinvoke failed unexpectedly")
+            .0
+    } else {
+        comp
+    };
     let (comp, sample_info) = samplify::Transformation(&comp)
         .transform()
         .expect("samplify transformation failed unexpectedly");
-    let (comp, _) = unwrapify::Transformation(&comp)
-        .transform()
-        .expect("unwrapify transformation failed unexpectedly");
+    let comp = if opts.split_temporaries {
+        unwrapify::Transformation(&comp)
+            .transform()
+            .expect("unwrapify transformation failed unexpectedly")
+            .0
+    } else {
+        comp
+    };
     let (comp, _) = resolveoracles::Transformation(&comp)
         .transform()
         .unwrap_or_else(|ResolutionError(failed_oracle_stmts)| {
@@ -212,8 +294,14 @@ fn transform_game_inst_common(
         .transform()
         .expect("unroll transformation failed unexpectedly");
     let (comp, max_offsets) =
-        sample_max_counter_extractor::Transformation(&comp, &sample_info.positions).transform()?;
-    let comp = if lowering == ControlFlowLowering::Treeify {
+        match sample_max_counter_extractor::Transformation(&comp, &sample_info.positions)
+            .transform()
+        {
+            Ok(result) => result,
+            Err(_) if !opts.require_max_offsets => (comp, Default::default()),
+            Err(err) => return Err(err.into()),
+        };
+    let comp = if opts.lowering == ControlFlowLowering::Treeify {
         treeify::Transformation(&comp)
             .transform()
             .expect("treeify transformation failed unexpectedly")
@@ -224,7 +312,7 @@ fn transform_game_inst_common(
     let (comp, _) = tableinitialize::Transformation(&comp)
         .transform()
         .expect("tableinitialize transformation failed unexpectedly");
-    let comp = if lowering == ControlFlowLowering::EasyCryptify {
+    let comp = if opts.lowering == ControlFlowLowering::EasyCryptify {
         easycryptify::Transformation(&comp).transform()?.0
     } else {
         comp

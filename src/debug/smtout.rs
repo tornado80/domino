@@ -265,7 +265,9 @@ impl SmtWriter {
         }
 
         if self_contained {
-            s.push_str("; ---- base frame -------------------------------------------------------\n");
+            s.push_str(
+                "; ---- base frame -------------------------------------------------------\n",
+            );
             s.push_str(&self.base_body);
             s.push('\n');
             s.push_str(&format!(
