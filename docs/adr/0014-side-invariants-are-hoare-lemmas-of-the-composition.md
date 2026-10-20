@@ -1,6 +1,7 @@
 # Side invariants are hoare lemmas of the composition, joined with `conseq`
 
-**Status:** accepted; partly superseded by ADR 0016 (package invariants and start lemmas). Supersedes ADR 0010. Implemented by
+**Status:** accepted; partly superseded by ADR 0016 (package invariants and start lemmas) and by ADR 0019
+(point 1: the lemmas now take one binder for each game constant that a game invariant can read). Supersedes ADR 0010. Implemented by
 `docs/stories/easycrypt/69-side-invariant-lemmas.md` and
 `docs/stories/symbolic-execution/25-one-sided-execution.md`.
 

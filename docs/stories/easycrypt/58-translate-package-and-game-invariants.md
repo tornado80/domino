@@ -71,6 +71,8 @@ Facts found during the grilling:
 
 - In SMT, `pkg.<name>` binds only the **state fields** of the package (`gen_varbinding`), never
   its parameters. `game.<Inst>.<name>` also binds only state fields.
+  *Stale since merge `3662315a` (2026-10-07): the prover now binds parameters and game constants
+  too. See ADR 0019.*
 - In Domino, a `define-fun` in a package or game invariant file is emitted one time for **each
   instance and side** that loads the file, so cvc5 stops with a duplicate definition when the
   package occurs two times. Two invariant forms for one package fail the same way. So the only

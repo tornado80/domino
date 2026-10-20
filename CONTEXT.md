@@ -84,14 +84,15 @@ says which left sampling draws the same value as which right sampling. It may de
 and the oracle's arguments, so whether two particular samplings are paired is a question for the
 solver, not something read off the mapping's text.
 
-**Package invariant** — a named predicate over the state of one package, hand-written in SMT-LIB
-and declared by the package template. A package may declare several; each is a claim of its own,
+**Package invariant** — a named predicate over the state and the parameters of one package,
+hand-written in SMT-LIB and declared by the package template. The parameters are an input of the
+predicate, not part of the package state. A package may declare several; each is a claim of its own,
 known by its name and its package. It applies to every instance of the package, in every game
 instance that contains one. Domino assumes it before every oracle call and proves that every oracle
 call that does not abort keeps it.
 
-**Game invariant** — a named predicate over the state of one game instance, hand-written in SMT-LIB
-and declared by its composition. A composition may declare several; each is a claim of its own. It
+**Game invariant** — a named predicate over the state of one game instance, the parameters of its
+package instances and its game constants, hand-written in SMT-LIB and declared by its composition. A composition may declare several; each is a claim of its own. It
 applies to every game instance of that composition. Domino assumes
 and proves it the same way as a package invariant.
 _Distinguish_: **state relation** and **invariant**. Those relate the two sides of an equivalence. A
