@@ -149,7 +149,8 @@ impl ClaimQuery {
 
 /// The full obligation set of `oracle`: what `domino prove` discharges. `equal-aborts`,
 /// `same-output` and `invariant` come first, then the rest of the proof tree in declaration
-/// order, then the generated package/game invariant claims — so a report reads like `prove`'s.
+/// order, then the generated game-invariant claims — so a report reads like `prove`'s. Package
+/// invariants are checked once for each package (story 74), not here.
 pub(crate) fn obligations(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<ResolvedClaim> {
     const FIRST: [&str; 3] = ["equal-aborts", "same-output", "invariant"];
     let mut ranked: Vec<(usize, ResolvedClaim)> = eqctx
@@ -165,7 +166,7 @@ pub(crate) fn obligations(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<R
         .collect();
     ranked.extend(
         eqctx
-            .generate_game_or_package_invariant_claims()
+            .generate_game_invariant_claims()
             .into_iter()
             .map(|claim| (FIRST.len() + 1, claim)),
     );
@@ -258,7 +259,7 @@ impl ClaimSet {
             ClaimSet::Obligations { .. } => obligations(eqctx, oracle),
             ClaimSet::Core { .. } => {
                 let generated: Vec<String> = eqctx
-                    .generate_game_or_package_invariant_claims()
+                    .generate_game_invariant_claims()
                     .iter()
                     .map(|c| c.name().to_string())
                     .collect();

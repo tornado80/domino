@@ -237,6 +237,15 @@ impl PipelineOptions {
     };
 }
 
+/// Runs one game instance through the pipeline of [`EquivalenceTransform`]: the shape the SMT
+/// writers expect. The package-invariant check uses it for its virtual game.
+pub(crate) fn transform_game_inst(
+    game_inst: &GameInstance,
+) -> Result<(GameInstance, GameInstAux), EquivalenceTransformError> {
+    transform_game_inst_common(game_inst, PipelineOptions::EQUIVALENCE)
+        .map(|(game_inst, (_name, aux))| (game_inst, aux))
+}
+
 /// Shared pipeline for every theorem transform of this module. They must never
 /// drift, so the only differences between them live here, selected by `opts`.
 fn transform_game_inst_common(

@@ -2502,18 +2502,18 @@ mod tests {
             .any(|line| !line.trim_start().starts_with("(define-fun"))
     }
 
-    const CORE: [&str; 5] = [
+    /// No package invariant: `prove` checks each package once on its own (story 74).
+    const CORE: [&str; 4] = [
         "equal-aborts",
         "same-output",
         "invariant",
-        "package-invariant!main!gl-p!",
         "game-invariant!main!gl!",
     ];
 
-    /// Story 71: each named package invariant of an instance is a claim of its own, named by
-    /// the owner function.
+    /// Story 71, then story 74: each named package invariant of an instance is assumed on the
+    /// old state in the base frame, named by the owner function, and is no claim of the run.
     #[test]
-    fn two_named_package_invariants_are_two_claims_of_an_all_claim_run() {
+    fn two_named_package_invariants_are_assumed_but_no_claims_of_an_all_claim_run() {
         use crate::writers::smt::contexts::package_invariant_claim_name;
         let dir = tempfile::tempdir().unwrap();
         let status = std::process::Command::new("cp")
@@ -2546,11 +2546,11 @@ mod tests {
         .unwrap();
         let names: Vec<_> = run.summary.claims.iter().map(|c| c.claim.clone()).collect();
         for name in ["main", "small"] {
-            let claim = package_invariant_claim_name(name, "gl", "p");
-            assert_eq!(
-                names.iter().filter(|n| **n == claim).count(),
-                1,
-                "{claim} in {names:?}"
+            let claim = package_invariant_claim_name(name, Some("gl"), "p");
+            assert!(!names.contains(&claim), "{claim} in {names:?}");
+            assert!(
+                run.meta.base_frame_smt.contains(&format!("({claim} ")),
+                "{claim} is not assumed"
             );
         }
     }
@@ -2590,7 +2590,7 @@ mod tests {
         );
         let summary = lockstep_report::render_summary(&run);
         assert!(
-            summary.contains("all 5 claims of the core claim set"),
+            summary.contains("all 4 claims of the core claim set"),
             "{summary}"
         );
     }

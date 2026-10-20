@@ -87,6 +87,16 @@ pub struct EcDebugNotVerified;
 pub struct TheoremNotFound(pub String);
 
 #[derive(Error, Diagnostic, Debug)]
+#[error("--package cannot be combined with --proof or --proofstep")]
+#[diagnostic(help(
+    "a package invariant is proved on its own, for arbitrary package constants, so it is not \
+        part of any particular theorem or proof step. Drop --proof/--proofstep to check just \
+        the package, or drop --package to prove the theorem (its package invariants are \
+        checked along with it)."
+))]
+pub struct PackageWithProof;
+
+#[derive(Error, Diagnostic, Debug)]
 #[error("--oracle and --invariant-start cannot be used together")]
 #[diagnostic(help(
     "--invariant-start restricts verification to the invariant start, which \
@@ -166,6 +176,9 @@ enum Error {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Debug(#[from] sspverif::debug::driver::DebugError),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    PackageWithProof(#[from] PackageWithProof),
 }
 
 fn proofsteps(p: &Proofsteps) -> Result<(), Error> {
@@ -196,7 +209,24 @@ fn prove(p: &Prove) -> Result<(), Error> {
         return Err(ReqOracleWithInvariantStart.into());
     }
 
+    if p.package.is_some() && (p.proof.is_some() || p.proofstep.is_some()) {
+        return Err(PackageWithProof.into());
+    }
+
     let smtsolver = sspverif::util::smtsolver::process::ProcessSmtSolverBackend::new(p.smtsolver);
+
+    if let Some(package) = &p.package {
+        project.prove_package(
+            &smtsolver,
+            p.transcript,
+            p.parallel,
+            package,
+            &p.oracle,
+            p.invariant_start,
+        )?;
+        return Ok(());
+    }
+
     project.prove(
         &smtsolver,
         p.transcript,

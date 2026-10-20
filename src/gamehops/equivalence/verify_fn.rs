@@ -139,7 +139,7 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
         );
         smt.push(SmtExpr::Comment("\n".to_string()));
         smt.push(SmtExpr::Comment("theorem param funcs:\n".to_string()));
-        smt.extend(&mut self.eqctx.emit_theorem_paramfuncs());
+        smt.extend(self.eqctx.emit_theorem_paramfuncs());
         log::debug!(
             "emitting game definitions for {}-{}",
             eq.left_name,
@@ -147,7 +147,7 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
         );
         smt.push(SmtExpr::Comment("\n".to_string()));
         smt.push(SmtExpr::Comment("game definitions:\n".to_string()));
-        smt.extend(&mut self.eqctx.emit_game_definitions());
+        smt.extend(self.eqctx.emit_game_definitions());
 
         log::debug!(
             "emitting const declarations for {}-{}",
@@ -207,9 +207,9 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
         Ok(())
     }
 
-    fn generate_game_or_package_invariant_start_asserts(&self) -> Vec<(String, SmtExpr)> {
+    fn generate_game_invariant_start_asserts(&self) -> Vec<(String, SmtExpr)> {
         self.eqctx
-            .generate_game_or_package_invariant_claims()
+            .generate_game_invariant_claims()
             .iter()
             .map(|claim| {
                 let smt = self
@@ -237,7 +237,7 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
             "invariant".to_string(),
             self.eqctx.emit_invariant_start_assert(),
         )];
-        checks.append(&mut self.generate_game_or_package_invariant_start_asserts());
+        checks.append(&mut self.generate_game_invariant_start_asserts());
 
         let num_claims = checks.len();
         self.verify_as_ui_claim_group(ui.clone(), &claim_group, num_claims, || {
@@ -287,7 +287,7 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
     ) -> Vec<Result<()>> {
         let mut claims = self.eqctx.proof_tree(oracle.name());
 
-        claims.append(&mut self.eqctx.generate_game_or_package_invariant_claims());
+        claims.append(&mut self.eqctx.generate_game_invariant_claims());
 
         let claim_group = ClaimGroup::Oracle {
             oracle_name: oracle.name().to_string(),

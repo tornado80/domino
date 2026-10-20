@@ -52,7 +52,9 @@ pub enum SmtStatementKind {
     PackageInvariant {
         name: String,
         package: String,
-        game: String,
+        /// The game instance whose state holds the package. `None` when the package is checked
+        /// on its own (`domino prove --package`): the claim then names only the package.
+        game: Option<String>,
     },
     GameInvariant {
         name: String,
@@ -80,7 +82,11 @@ impl SmtStatementKind {
                 name,
                 package,
                 game,
-            } => crate::writers::smt::contexts::package_invariant_claim_name(name, game, package),
+            } => crate::writers::smt::contexts::package_invariant_claim_name(
+                name,
+                game.as_deref(),
+                package,
+            ),
             SmtStatementKind::Other => String::new(),
         }
     }
@@ -122,7 +128,9 @@ impl From<SmtExpr> for SmtStmt {
 }
 
 struct SmtRewrite<'a> {
-    context: &'a EquivalenceContext<'a>,
+    /// Absent when rewriting the invariant of a package on its own, i.e. outside of an
+    /// equivalence. Definitions that talk about two games are then rejected.
+    context: Option<&'a EquivalenceContext<'a>>,
     package: Option<&'a PackageInstance>,
     game: Option<&'a GameInstance>,
     content: Vec<SmtStmt>,
@@ -131,7 +139,7 @@ struct SmtRewrite<'a> {
 impl<'a> SmtRewrite<'a> {
     fn new(context: &'a EquivalenceContext) -> Self {
         Self {
-            context,
+            context: Some(context),
             package: None,
             game: None,
             content: Vec::new(),
@@ -140,7 +148,7 @@ impl<'a> SmtRewrite<'a> {
 
     fn new_with_game(context: &'a EquivalenceContext, game: &'a GameInstance) -> Self {
         Self {
-            context,
+            context: Some(context),
             package: None,
             game: Some(game),
             content: Vec::new(),
@@ -153,11 +161,29 @@ impl<'a> SmtRewrite<'a> {
         package: &'a PackageInstance,
     ) -> Self {
         Self {
-            context,
+            context: Some(context),
             package: Some(package),
             game: Some(game),
             content: Vec::new(),
         }
+    }
+
+    fn new_standalone_package(game: &'a GameInstance, package: &'a PackageInstance) -> Self {
+        Self {
+            context: None,
+            package: Some(package),
+            game: Some(game),
+            content: Vec::new(),
+        }
+    }
+
+    /// The equivalence we are rewriting for, or an error if we are rewriting a package invariant
+    /// on its own.
+    fn context(&self, defn: &str) -> Result<&'a EquivalenceContext<'a>> {
+        self.context
+            .ok_or_else(|| Error::RewriteNeedsEquivalenceContext {
+                defn: defn.to_string(),
+            })
     }
 }
 
@@ -354,11 +380,14 @@ fn gen_varbinding(
 
 impl SmtRewrite<'_> {
     fn equivalence_name(&self) -> String {
-        format!(
-            "{} = {}",
-            self.context.equivalence().left_name,
-            self.context.equivalence().right_name
-        )
+        match self.context {
+            Some(context) => format!(
+                "{} = {}",
+                context.equivalence().left_name,
+                context.equivalence().right_name
+            ),
+            None => "package invariant".to_string(),
+        }
     }
 }
 
@@ -376,9 +405,11 @@ impl SmtRewrite<'_> {
         let (Some(left_sort), Some(right_sort)) = (left.get(1), right.get(1)) else {
             return false;
         };
+        let Some(context) = self.context else {
+            return false;
+        };
         let state_sort = |game_inst_name: &str| {
-            let game_inst = self
-                .context
+            let game_inst = context
                 .theorem()
                 .find_game_instance(game_inst_name)
                 .unwrap();
@@ -388,7 +419,7 @@ impl SmtRewrite<'_> {
             };
             SmtExpr::from(pattern.sort_name()).to_string()
         };
-        let equivalence = self.context.equivalence();
+        let equivalence = context.equivalence();
         left.len() == 2
             && right.len() == 2
             && left_sort.to_string() == state_sort(equivalence.left_name())
@@ -519,8 +550,8 @@ impl SmtParser<Error> for SmtRewrite<'_> {
 
         let kind = SmtStatementKind::PackageInvariant {
             name: invname.to_string(),
-            package: self.package.unwrap().name().to_string(),
-            game: self.game.unwrap().name().to_string(),
+            package: package.name().to_string(),
+            game: self.context.map(|_| game.name().to_string()),
         };
 
         let expr = (
@@ -545,15 +576,14 @@ impl SmtParser<Error> for SmtRewrite<'_> {
         args: Vec<SmtExpr>,
         body: SmtExpr,
     ) -> Result<SmtStmt> {
-        let left_game_inst = self
-            .context
+        let context = self.context("define-state-relation")?;
+        let left_game_inst = context
             .theorem()
-            .find_game_instance(&self.context.equivalence().left_name)
+            .find_game_instance(&context.equivalence().left_name)
             .unwrap();
-        let right_game_inst = self
-            .context
+        let right_game_inst = context
             .theorem()
-            .find_game_instance(&self.context.equivalence().right_name)
+            .find_game_instance(&context.equivalence().right_name)
             .unwrap();
         let left_game_state_pattern = patterns::GameStatePattern {
             game_name: left_game_inst.game_name(),
@@ -652,15 +682,14 @@ impl SmtParser<Error> for SmtRewrite<'_> {
         args: Vec<SmtExpr>,
         body: SmtExpr,
     ) -> Result<SmtStmt> {
-        let left_game_inst = self
-            .context
+        let context = self.context("define-lemma")?;
+        let left_game_inst = context
             .theorem()
-            .find_game_instance(&self.context.equivalence().left_name)
+            .find_game_instance(&context.equivalence().left_name)
             .unwrap();
-        let right_game_inst = self
-            .context
+        let right_game_inst = context
             .theorem()
-            .find_game_instance(&self.context.equivalence().right_name)
+            .find_game_instance(&context.equivalence().right_name)
             .unwrap();
         let left_game_state_pattern = patterns::GameStatePattern {
             game_name: left_game_inst.game_name(),
@@ -868,6 +897,18 @@ pub fn rewrite_package(
     content: &str,
 ) -> Result<Vec<SmtStmt>> {
     let mut rewriter: SmtRewrite = SmtRewrite::new_with_package(context, game, package);
+    rewriter.parse_stmts(content)?;
+    Ok(rewriter.content)
+}
+
+/// Rewrites a package invariant file outside of an equivalence, i.e. for the synthetic game the
+/// package invariant is proved against.
+pub fn rewrite_standalone_package(
+    game: &GameInstance,
+    package: &PackageInstance,
+    content: &str,
+) -> Result<Vec<SmtStmt>> {
+    let mut rewriter: SmtRewrite = SmtRewrite::new_standalone_package(game, package);
     rewriter.parse_stmts(content)?;
     Ok(rewriter.content)
 }

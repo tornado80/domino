@@ -2422,7 +2422,7 @@ mod tests {
             eqctx.load_invariants(proj).unwrap();
 
             let mut claims = eqctx.proof_tree("PKGEN");
-            claims.extend(eqctx.generate_game_or_package_invariant_claims());
+            claims.extend(eqctx.generate_game_invariant_claims());
             let claim = claims
                 .iter()
                 .find(|c| c.name() == "same-output")

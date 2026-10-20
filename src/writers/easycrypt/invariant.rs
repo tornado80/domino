@@ -1279,7 +1279,7 @@ pub fn side_invariant_ops(
             ops.push(InvariantOp {
                 claim: Some(package_invariant_claim_name(
                     &invariant,
-                    &comp.name,
+                    Some(&comp.name),
                     inst.name(),
                 )),
                 ..InvariantOp::plain(qualified(pkg_inv_op_name(&invariant, &name, inst.name())))

@@ -8,10 +8,6 @@ pub(crate) use emit::{game_invariant_claim_name, package_invariant_claim_name};
 
 use crate::{
     gamehops::equivalence::{smtrewrite::SmtStmt, Equivalence},
-    identifier::{
-        theorem_ident::{TheoremConstIdentifier, TheoremIdentifier},
-        Identifier,
-    },
     package::OracleSig,
     theorem::{ResolvedClaim, Theorem},
     transforms::{
@@ -20,14 +16,11 @@ use crate::{
         theorem_transforms::{EquivalenceTransform, GameInstAux},
         TheoremTransform,
     },
-    types::{CountSpec, Type, TypeKind},
+    types::Type,
     writers::smt::{
-        contexts,
+        contexts::{self, game_defs},
         exprs::SmtExpr,
-        patterns::{
-            relation::Relation, relations::equal_aborts, theorem_consts::TheoremConstsPattern,
-            GameStatePattern,
-        },
+        patterns::{relation::Relation, relations::equal_aborts, GameStatePattern},
     },
 };
 
@@ -198,12 +191,6 @@ impl<'a> EquivalenceContext<'a> {
         self.relation_pattern("same-output", oracle_name)
             .build_same_output()
     }
-
-    pub(crate) fn datastructure_theorem_consts_pattern(&'a self) -> TheoremConstsPattern<'a> {
-        let theorem_name = &self.theorem().name;
-
-        TheoremConstsPattern { theorem_name }
-    }
 }
 
 impl<'a> EquivalenceContext<'a> {
@@ -219,26 +206,7 @@ impl<'a> EquivalenceContext<'a> {
     fn types(&self) -> Vec<Type> {
         let types_left = &self.aux(self.equivalence().left_name()).types;
         let types_right = &self.aux(self.equivalence().right_name()).types;
-        let types_theorem: HashSet<Type> = self
-            .theorem()
-            .consts
-            .iter()
-            .filter_map(|(name, ty)| match ty.kind() {
-                TypeKind::Integer => {
-                    let id = TheoremConstIdentifier {
-                        theorem_name: self.theorem().name.clone(),
-                        name: name.clone(),
-                        ty: Type::integer(),
-                        inst_info: None,
-                    };
-
-                    Some(Type::bits(CountSpec::Identifier(Box::new(
-                        Identifier::TheoremIdentifier(TheoremIdentifier::Const(id)),
-                    ))))
-                }
-                _ => None,
-            })
-            .collect();
+        let types_theorem = game_defs::theorem_const_bits_types(self.theorem());
 
         let mut types: Vec<_> = types_left
             .union(types_right)

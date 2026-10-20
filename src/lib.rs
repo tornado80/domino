@@ -21,6 +21,7 @@ pub mod format;
 pub mod gamehops;
 pub mod identifier;
 pub mod package;
+pub mod package_invariant;
 pub mod packageinstance;
 //pub mod split;
 pub mod statement;

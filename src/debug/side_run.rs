@@ -548,11 +548,11 @@ mod tests {
 
     #[test]
     fn claim_names_are_of_the_composition_from_the_one_owners() {
-        assert_eq!(package_invariant_claim_name("main", "S", "p"), PKG);
+        assert_eq!(package_invariant_claim_name("main", Some("S"), "p"), PKG);
         assert_eq!(game_invariant_claim_name("main", "S"), GAME);
         // lockstep execution's names do not change: they are of the game instance
         assert_eq!(
-            package_invariant_claim_name("main", "s", "p"),
+            package_invariant_claim_name("main", Some("s"), "p"),
             "package-invariant!main!s-p!"
         );
         assert_eq!(
