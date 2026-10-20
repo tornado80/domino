@@ -747,18 +747,31 @@ impl Session {
     ) -> Result<(std::io::Result<Line>, usize), SessionError> {
         let began = Instant::now();
         let deadline = began + self.interrupt_grace;
-        let mut signals = 0;
+        // The signals are on a fixed schedule from `began`, and their number comes from the
+        // timing alone: a late wake-up on a busy machine does not drop a signal or move the
+        // deadline.
+        let max_signals = self
+            .interrupt_grace
+            .as_nanos()
+            .div_ceil(self.interrupt_resend.as_nanos().max(1))
+            .max(1);
+        let mut signals: usize = 0;
         let line = loop {
             self.interrupt()?;
             signals += 1;
-            let now = Instant::now();
-            let until = (now + self.interrupt_resend).min(deadline);
+            let last = signals as u128 >= max_signals;
+            let until = if last {
+                deadline
+            } else {
+                (began + self.interrupt_resend * u32::try_from(signals).unwrap_or(u32::MAX))
+                    .min(deadline)
+            };
             match self
                 .lines
-                .recv_timeout(until.saturating_duration_since(now))
+                .recv_timeout(until.saturating_duration_since(Instant::now()))
             {
                 Ok(line) => break Some(line),
-                Err(RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
+                Err(RecvTimeoutError::Timeout) if !last => {}
                 // an EasyCrypt that died on the interrupt did not answer it either
                 Err(_) => break None,
             }
