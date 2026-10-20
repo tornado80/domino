@@ -102,8 +102,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use miette::SourceSpan;
 
 use crate::debug::ir::{
-    place_from_pattern, rewrite_expr, FrameInfo, FrameScope, FrameSpan, InlBlock, InlStmt,
-    InlineError, InlinedOracle, Label, LineInfo, LineRole, Listing, ExitGuard, SiteInfo, SiteKind,
+    place_from_pattern, rewrite_expr, ExitGuard, FrameInfo, FrameScope, FrameSpan, InlBlock,
+    InlStmt, InlineError, InlinedOracle, Label, LineInfo, LineRole, Listing, SiteInfo, SiteKind,
     MAX_INLINE_DEPTH,
 };
 use crate::expressions::{Expression, ExpressionKind};

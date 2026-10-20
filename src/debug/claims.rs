@@ -67,8 +67,10 @@ pub(crate) fn state_relation_parts(
         .into_iter()
         .filter(|name| name != "invariant")
         .map(|name| {
-            let negated = eqctx
-                .emit_claim_goal_negated(&no_dependency_claim(&name, ClaimKind::StateRelation), oracle);
+            let negated = eqctx.emit_claim_goal_negated(
+                &no_dependency_claim(&name, ClaimKind::StateRelation),
+                oracle,
+            );
             (name_of(&name), negated)
         })
         .collect()
@@ -116,7 +118,11 @@ impl ClaimQuery {
     pub fn view(&self) -> ClaimGoalView {
         ClaimGoalView {
             claim: self.name.clone(),
-            dependencies: self.dependencies.iter().map(|(_, a)| a.to_string()).collect(),
+            dependencies: self
+                .dependencies
+                .iter()
+                .map(|(_, a)| a.to_string())
+                .collect(),
             smt: self.negated.to_string(),
             parts: self
                 .parts
@@ -283,7 +289,10 @@ impl ClaimSet {
 
 /// The core claim set of `obligations`: `equal-aborts`, `same-output`, `invariant` and the
 /// claims named in `generated`, each keeping only the dependencies [`false_by_terminals`] knows.
-pub(crate) fn core_claims(obligations: Vec<ResolvedClaim>, generated: &[String]) -> Vec<ResolvedClaim> {
+pub(crate) fn core_claims(
+    obligations: Vec<ResolvedClaim>,
+    generated: &[String],
+) -> Vec<ResolvedClaim> {
     const CORE: [&str; 3] = ["equal-aborts", "same-output", "invariant"];
     obligations
         .into_iter()
@@ -296,7 +305,11 @@ pub(crate) fn core_claims(obligations: Vec<ResolvedClaim>, generated: &[String])
 }
 
 /// `claims` narrowed to the one called `only`, if given.
-fn narrow(claims: Vec<ResolvedClaim>, only: Option<&str>, core: bool) -> Result<Vec<ResolvedClaim>, DebugError> {
+fn narrow(
+    claims: Vec<ResolvedClaim>,
+    only: Option<&str>,
+    core: bool,
+) -> Result<Vec<ResolvedClaim>, DebugError> {
     let Some(name) = only else {
         return Ok(claims);
     };
@@ -372,7 +385,10 @@ pub(crate) fn check_claim<S: SmtSolver>(
         .iter()
         .find(|(name, _)| false_by_terminals(name, aborts) == Some(true))
     {
-        return Ok(ClaimVerdict::of(&claim.name, dependency_false(name.clone())));
+        return Ok(ClaimVerdict::of(
+            &claim.name,
+            dependency_false(name.clone()),
+        ));
     }
 
     let has_dependencies = !claim.dependencies.is_empty();
@@ -382,7 +398,8 @@ pub(crate) fn check_claim<S: SmtSolver>(
             solver.write_smt(assertion.clone())?;
         }
     }
-    let (verdict, model) = check_negated(solver, &claim.negated, out_dir, layout, model_id, queries)?;
+    let (verdict, model) =
+        check_negated(solver, &claim.negated, out_dir, layout, model_id, queries)?;
     let parts = if verdict.is_failure() {
         check_parts(solver, &claim.parts, out_dir, layout, model_id, queries)?
     } else {
@@ -403,9 +420,8 @@ pub(crate) fn check_claim<S: SmtSolver>(
         .iter()
         .filter(|(name, _)| false_by_terminals(name, aborts).is_none())
         .collect();
-    let dependencies_unsat = matches!(checked.verdict, Verdict::Verified)
-        && !by_solver.is_empty()
-        && {
+    let dependencies_unsat =
+        matches!(checked.verdict, Verdict::Verified) && !by_solver.is_empty() && {
             *queries += 1;
             matches!(solver.check_sat()?, SmtSolverResponse::Unsat)
         };
@@ -468,7 +484,8 @@ fn check_parts<S: SmtSolver>(
         .map(|(name, negated)| {
             // a model file name has no space
             let part_id = format!("{model_id}.{}", name.replace(' ', "-"));
-            let (verdict, model) = check_negated(solver, negated, out_dir, layout, &part_id, queries)?;
+            let (verdict, model) =
+                check_negated(solver, negated, out_dir, layout, &part_id, queries)?;
             Ok(PartVerdict {
                 name: name.clone(),
                 verdict,
@@ -522,7 +539,9 @@ pub(crate) fn check_claims<S: SmtSolver>(
             continue;
         }
         let model_id = format!("{pair_id}.{}", claim.name);
-        verdicts.push(check_claim(solver, claim, aborts, out_dir, layout, &model_id, queries)?);
+        verdicts.push(check_claim(
+            solver, claim, aborts, out_dir, layout, &model_id, queries,
+        )?);
     }
     Ok(verdicts)
 }
@@ -539,7 +558,10 @@ pub(crate) fn aggregate(checked: &[ClaimVerdict]) -> (Verdict, Option<String>) {
     if let Some(c) = pick(|v| matches!(v, Verdict::Inconclusive { .. })) {
         return (c.verdict.clone(), c.model.clone());
     }
-    if checked.iter().any(|c| matches!(c.verdict, Verdict::Verified)) {
+    if checked
+        .iter()
+        .any(|c| matches!(c.verdict, Verdict::Verified))
+    {
         return (Verdict::Verified, None);
     }
     match checked.first() {
@@ -585,12 +607,30 @@ mod tests {
     #[test]
     fn the_core_set_keeps_the_core_claims_with_their_built_in_dependencies_only() {
         let obligations = vec![
-            declared("equal-aborts", ClaimKind::BuiltIn(BuiltInFact::EqualAborts), &[]),
-            declared("same-output", ClaimKind::BuiltIn(BuiltInFact::SameOutput), &["no-abort", "my-lemma"]),
-            declared("invariant", ClaimKind::StateRelation, &["my-lemma", "no-abort"]),
+            declared(
+                "equal-aborts",
+                ClaimKind::BuiltIn(BuiltInFact::EqualAborts),
+                &[],
+            ),
+            declared(
+                "same-output",
+                ClaimKind::BuiltIn(BuiltInFact::SameOutput),
+                &["no-abort", "my-lemma"],
+            ),
+            declared(
+                "invariant",
+                ClaimKind::StateRelation,
+                &["my-lemma", "no-abort"],
+            ),
             declared("my-lemma", ClaimKind::ProjectLemma, &[]),
             declared("relation-r", ClaimKind::StateRelation, &["left-no-abort"]),
-            declared("pkg-inv", ClaimKind::PackageInvariant { side: crate::theorem::InvariantSide::Left }, &["no-abort"]),
+            declared(
+                "pkg-inv",
+                ClaimKind::PackageInvariant {
+                    side: crate::theorem::InvariantSide::Left,
+                },
+                &["no-abort"],
+            ),
         ];
         let core = core_claims(obligations, &["pkg-inv".to_string()]);
         let s = |v: &str| v.to_string();
@@ -607,14 +647,23 @@ mod tests {
 
     #[test]
     fn a_name_outside_the_core_set_is_not_found_in_it() {
-        let core = vec![declared("equal-aborts", ClaimKind::BuiltIn(BuiltInFact::EqualAborts), &[]), declared("invariant", ClaimKind::StateRelation, &[])];
+        let core = vec![
+            declared(
+                "equal-aborts",
+                ClaimKind::BuiltIn(BuiltInFact::EqualAborts),
+                &[],
+            ),
+            declared("invariant", ClaimKind::StateRelation, &[]),
+        ];
         let err = narrow(core.clone(), Some("my-lemma"), true).unwrap_err();
         assert_eq!(
             err.to_string(),
             "claim `my-lemma` is not in the core claim set (core claims: equal-aborts, invariant)"
         );
         let err = narrow(core.clone(), Some("my-lemma"), false).unwrap_err();
-        assert!(err.to_string().starts_with("no claim named `my-lemma` for this oracle"));
+        assert!(err
+            .to_string()
+            .starts_with("no claim named `my-lemma` for this oracle"));
         assert_eq!(narrow(core, Some("invariant"), true).unwrap().len(), 1);
     }
 
@@ -623,20 +672,50 @@ mod tests {
         assert_eq!(ClaimSet::of(false, None).dir(), "!all-claims!");
         assert_eq!(ClaimSet::of(true, None).dir(), "!core-claims!");
         assert_eq!(ClaimSet::of(false, Some("invariant")).dir(), "invariant");
-        assert_eq!(ClaimSet::of(true, Some("invariant")).dir(), "invariant!core!");
+        assert_eq!(
+            ClaimSet::of(true, Some("invariant")).dir(),
+            "invariant!core!"
+        );
     }
 
     #[test]
     fn the_four_dependencies_the_defaults_use_are_read_off_the_terminals() {
-        assert_eq!(false_by_terminals("no-abort", aborts(false, false)), Some(false));
-        assert_eq!(false_by_terminals("no-abort", aborts(true, false)), Some(true));
-        assert_eq!(false_by_terminals("no-abort", aborts(false, true)), Some(true));
-        assert_eq!(false_by_terminals("left-no-abort", aborts(true, false)), Some(true));
-        assert_eq!(false_by_terminals("left-no-abort", aborts(false, true)), Some(false));
-        assert_eq!(false_by_terminals("right-no-abort", aborts(true, false)), Some(false));
-        assert_eq!(false_by_terminals("right-no-abort", aborts(false, true)), Some(true));
-        assert_eq!(false_by_terminals("equal-aborts", aborts(true, true)), Some(false));
-        assert_eq!(false_by_terminals("equal-aborts", aborts(true, false)), Some(true));
+        assert_eq!(
+            false_by_terminals("no-abort", aborts(false, false)),
+            Some(false)
+        );
+        assert_eq!(
+            false_by_terminals("no-abort", aborts(true, false)),
+            Some(true)
+        );
+        assert_eq!(
+            false_by_terminals("no-abort", aborts(false, true)),
+            Some(true)
+        );
+        assert_eq!(
+            false_by_terminals("left-no-abort", aborts(true, false)),
+            Some(true)
+        );
+        assert_eq!(
+            false_by_terminals("left-no-abort", aborts(false, true)),
+            Some(false)
+        );
+        assert_eq!(
+            false_by_terminals("right-no-abort", aborts(true, false)),
+            Some(false)
+        );
+        assert_eq!(
+            false_by_terminals("right-no-abort", aborts(false, true)),
+            Some(true)
+        );
+        assert_eq!(
+            false_by_terminals("equal-aborts", aborts(true, true)),
+            Some(false)
+        );
+        assert_eq!(
+            false_by_terminals("equal-aborts", aborts(true, false)),
+            Some(true)
+        );
         assert_eq!(false_by_terminals("my-lemma", aborts(true, true)), None);
     }
 
@@ -664,7 +743,10 @@ mod tests {
 
     #[test]
     fn a_verified_claim_outranks_an_unreachable_one() {
-        let checked = [claim("a", dependency_false("no-abort")), claim("b", Verdict::Verified)];
+        let checked = [
+            claim("a", dependency_false("no-abort")),
+            claim("b", Verdict::Verified),
+        ];
         assert!(matches!(aggregate(&checked).0, Verdict::Verified));
     }
 
@@ -708,7 +790,7 @@ mod tests {
             std::fs::create_dir_all(Layout::Plain.path(dir.path(), "models")).unwrap();
             let mut solver = Cvc5LibBackend::new(true, None).new_smtsolver().unwrap();
             solver.write_smt(smt("(set-logic ALL)")).unwrap();
-        solver.write_smt(smt("(declare-const x Int)")).unwrap();
+            solver.write_smt(smt("(declare-const x Int)")).unwrap();
             let mut queries = 0;
             let checked = check_claim(
                 &mut solver,
@@ -737,11 +819,15 @@ mod tests {
                 .collect();
             assert_eq!(
                 parts,
-                [("state-relation a", "verified"), ("state-relation b", "goal-fails")]
+                [
+                    ("state-relation a", "verified"),
+                    ("state-relation b", "goal-fails")
+                ]
             );
             assert!(checked.parts[1].model.is_some());
             assert_eq!(queries, 3);
-            let model = Layout::Plain.path(dir.path(), "models/1.1.invariant.state-relation-b.smt2");
+            let model =
+                Layout::Plain.path(dir.path(), "models/1.1.invariant.state-relation-b.smt2");
             assert!(model.exists(), "{}", model.display());
         }
 

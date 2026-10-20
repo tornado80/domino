@@ -81,27 +81,61 @@ impl ExportPhase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExportEvent<'a> {
-    TheoremStarted { name: &'a str, index: usize, total: usize },
-    PhaseStarted { phase: ExportPhase, total_items: usize },
-    ItemStarted { phase: ExportPhase, name: &'a str, index: usize },
-    PhaseFinished { phase: ExportPhase },
-    TheoremFinished { name: &'a str },
-    Finished { files_written: usize },
+    TheoremStarted {
+        name: &'a str,
+        index: usize,
+        total: usize,
+    },
+    PhaseStarted {
+        phase: ExportPhase,
+        total_items: usize,
+    },
+    ItemStarted {
+        phase: ExportPhase,
+        name: &'a str,
+        index: usize,
+    },
+    PhaseFinished {
+        phase: ExportPhase,
+    },
+    TheoremFinished {
+        name: &'a str,
+    },
+    Finished {
+        files_written: usize,
+    },
     /// `prove`: the goal of joint node `goal` (`N7`) of `oracle` is done, closed or admitted.
-    GoalFinished { oracle: &'a str, goal: &'a str, admitted: bool },
+    GoalFinished {
+        oracle: &'a str,
+        goal: &'a str,
+        admitted: bool,
+    },
     /// `prove` (story 39): lockstep execution of `oracle` starts. It is the longest silent
     /// stretch of an oracle, so the observer makes room for the debugger's own bar.
-    LockstepStarted { oracle: &'a str },
+    LockstepStarted {
+        oracle: &'a str,
+    },
     /// `prove`: lockstep execution of `oracle` is over. `found` is `(joint paths, stuck points)`,
     /// `None` when it failed; `stopped` when a Ctrl-C ended it early.
-    LockstepFinished { oracle: &'a str, found: Option<(usize, usize)>, elapsed: Duration, stopped: bool },
+    LockstepFinished {
+        oracle: &'a str,
+        found: Option<(usize, usize)>,
+        elapsed: Duration,
+        stopped: bool,
+    },
     /// `prove` (story 40): the walk of `oracle` enters joint node `node` (`N7`, or `router` for
     /// the router prelude), of a tree of `total` joint nodes. `N7/23` names a node and says how
     /// big the tree is; it is not a percentage. Also sent again when a subtree is done and the
     /// walk is back in its parent.
-    NodeStarted { oracle: &'a str, node: &'a str, total: usize },
+    NodeStarted {
+        oracle: &'a str,
+        node: &'a str,
+        total: usize,
+    },
     /// `prove` (story 40): the prover is about to send `sentence` to EasyCrypt.
-    SentenceSent { sentence: &'a str },
+    SentenceSent {
+        sentence: &'a str,
+    },
 }
 
 pub trait ExportObserver {
@@ -122,7 +156,8 @@ pub fn lockstep_summary_line(
     elapsed: Duration,
     stopped: bool,
 ) -> String {
-    let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let plural =
+        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
     let what = match found {
         Some((pairs, stuck)) => format!(
             "{}, {}",
@@ -132,13 +167,20 @@ pub fn lockstep_summary_line(
         None => "failed".to_string(),
     };
     let stopped = if stopped { " (stopped)" } else { "" };
-    format!("  {oracle}  lockstep: {what} in {:.1}s{stopped}", elapsed.as_secs_f64())
+    format!(
+        "  {oracle}  lockstep: {what} in {:.1}s{stopped}",
+        elapsed.as_secs_f64()
+    )
 }
 
 /// `PKENC  N7/23  smt(dec_enc).`, the proving bar's message (story 40): the oracle, the node, and
 /// the first line of the tactic being tried. The bar cuts it to the terminal width.
 pub fn proving_message(oracle: &str, node: &str, total: usize, sentence: &str) -> String {
-    let tactic = sentence.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let tactic = sentence
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
     format!("{oracle}  {}  {tactic}", node_label(node, total))
 }
 
@@ -197,7 +239,11 @@ pub struct LoggingExportObserver<'o> {
 
 impl<'o> LoggingExportObserver<'o> {
     pub fn new(inner: &'o mut dyn ExportObserver) -> Self {
-        Self { inner, log: PhaseLog::default(), current: String::new() }
+        Self {
+            inner,
+            log: PhaseLog::default(),
+            current: String::new(),
+        }
     }
 
     pub fn into_log(self) -> PhaseLog {
@@ -242,9 +288,17 @@ pub(crate) struct PhaseScope<'o> {
 }
 
 impl<'o> PhaseScope<'o> {
-    pub(crate) fn start(observer: &'o mut dyn ExportObserver, phase: ExportPhase, total_items: usize) -> Self {
+    pub(crate) fn start(
+        observer: &'o mut dyn ExportObserver,
+        phase: ExportPhase,
+        total_items: usize,
+    ) -> Self {
         observer.on_event(&ExportEvent::PhaseStarted { phase, total_items });
-        Self { observer, phase, next: 1 }
+        Self {
+            observer,
+            phase,
+            next: 1,
+        }
     }
 
     pub(crate) fn item(&mut self, name: &str) {
@@ -257,7 +311,8 @@ impl<'o> PhaseScope<'o> {
     }
 
     pub(crate) fn finish(self) {
-        self.observer.on_event(&ExportEvent::PhaseFinished { phase: self.phase });
+        self.observer
+            .on_event(&ExportEvent::PhaseFinished { phase: self.phase });
     }
 }
 
@@ -274,7 +329,11 @@ pub struct PlainExportObserver {
 
 impl PlainExportObserver {
     pub fn new() -> Self {
-        Self { err: std::io::stderr(), theorem: None, totals: [0; 8] }
+        Self {
+            err: std::io::stderr(),
+            theorem: None,
+            totals: [0; 8],
+        }
     }
 
     fn prefix(&self, phase: ExportPhase) -> String {
@@ -301,7 +360,11 @@ impl ExportObserver for PlainExportObserver {
             }
             ExportEvent::PhaseStarted { phase, total_items } => {
                 self.totals[*phase as usize] = *total_items;
-                format!("{}{}: {total_items} item(s)", self.prefix(*phase), phase.name())
+                format!(
+                    "{}{}: {total_items} item(s)",
+                    self.prefix(*phase),
+                    phase.name()
+                )
             }
             ExportEvent::ItemStarted { phase, name, index } => format!(
                 "{}{} {index}/{}: {name}",
@@ -315,16 +378,32 @@ impl ExportObserver for PlainExportObserver {
                 self.theorem = None;
                 line
             }
-            ExportEvent::Finished { files_written } => format!("done: {files_written} file(s) written"),
-            ExportEvent::GoalFinished { oracle, goal, admitted } => {
-                format!("  {oracle} {goal}: {}", if *admitted { "admitted" } else { "closed" })
+            ExportEvent::Finished { files_written } => {
+                format!("done: {files_written} file(s) written")
+            }
+            ExportEvent::GoalFinished {
+                oracle,
+                goal,
+                admitted,
+            } => {
+                format!(
+                    "  {oracle} {goal}: {}",
+                    if *admitted { "admitted" } else { "closed" }
+                )
             }
             // no per-path lines: they would flood a log (story 39)
             ExportEvent::LockstepStarted { oracle } => format!("  {oracle}  lockstep: started"),
-            ExportEvent::LockstepFinished { oracle, found, elapsed, stopped } => {
-                lockstep_summary_line(oracle, *found, *elapsed, *stopped)
-            }
-            ExportEvent::NodeStarted { oracle, node, total } => node_line(oracle, node, *total),
+            ExportEvent::LockstepFinished {
+                oracle,
+                found,
+                elapsed,
+                stopped,
+            } => lockstep_summary_line(oracle, *found, *elapsed, *stopped),
+            ExportEvent::NodeStarted {
+                oracle,
+                node,
+                total,
+            } => node_line(oracle, node, *total),
             // sentences are in the transcript (story 40)
             ExportEvent::SentenceSent { .. } => return,
             _ => return,
@@ -349,7 +428,12 @@ pub struct BarExportObserver {
 
 impl BarExportObserver {
     pub fn new() -> Self {
-        Self { mp: MultiProgress::new(), bar: None, theorem: None, at: None }
+        Self {
+            mp: MultiProgress::new(),
+            bar: None,
+            theorem: None,
+            at: None,
+        }
     }
 }
 
@@ -377,7 +461,8 @@ impl ExportObserver for BarExportObserver {
                     "{prefix:<11} {bar:24.cyan/blue} {pos}/{len}  {msg}"
                 };
                 bar.set_style(
-                    ProgressStyle::with_template(template).unwrap_or_else(|_| ProgressStyle::default_bar()),
+                    ProgressStyle::with_template(template)
+                        .unwrap_or_else(|_| ProgressStyle::default_bar()),
                 );
                 bar.set_prefix(phase.name());
                 self.bar = Some(bar);
@@ -394,7 +479,11 @@ impl ExportObserver for BarExportObserver {
                 }
             }
             ExportEvent::TheoremFinished { .. } => self.theorem = None,
-            ExportEvent::GoalFinished { oracle, goal, admitted } => {
+            ExportEvent::GoalFinished {
+                oracle,
+                goal,
+                admitted,
+            } => {
                 if let Some(bar) = &self.bar {
                     bar.set_message(format!(
                         "{oracle} {goal} {}",
@@ -402,7 +491,11 @@ impl ExportObserver for BarExportObserver {
                     ));
                 }
             }
-            ExportEvent::NodeStarted { oracle, node, total } => {
+            ExportEvent::NodeStarted {
+                oracle,
+                node,
+                total,
+            } => {
                 self.at = Some((oracle.to_string(), node.to_string(), *total));
                 if let Some(bar) = &self.bar {
                     bar.set_message(proving_message(oracle, node, *total, ""));
@@ -422,8 +515,15 @@ impl ExportObserver for BarExportObserver {
                     self.mp.remove(bar);
                 }
             }
-            ExportEvent::LockstepFinished { oracle, found, elapsed, stopped } => {
-                let _ = self.mp.println(lockstep_summary_line(oracle, *found, *elapsed, *stopped));
+            ExportEvent::LockstepFinished {
+                oracle,
+                found,
+                elapsed,
+                stopped,
+            } => {
+                let _ = self
+                    .mp
+                    .println(lockstep_summary_line(oracle, *found, *elapsed, *stopped));
                 if let Some(bar) = self.bar.take() {
                     self.bar = Some(self.mp.add(bar));
                 }
@@ -452,16 +552,30 @@ pub(crate) mod tests {
     impl ExportObserver for Recorder {
         fn on_event(&mut self, ev: &ExportEvent<'_>) {
             self.0.push(match ev {
-                ExportEvent::TheoremStarted { name, index, total } => format!("theorem {name} {index}/{total}"),
-                ExportEvent::PhaseStarted { phase, total_items } => format!("phase {} {total_items}", phase.name()),
-                ExportEvent::ItemStarted { phase, name, index } => format!("item {} {index} {name}", phase.name()),
+                ExportEvent::TheoremStarted { name, index, total } => {
+                    format!("theorem {name} {index}/{total}")
+                }
+                ExportEvent::PhaseStarted { phase, total_items } => {
+                    format!("phase {} {total_items}", phase.name())
+                }
+                ExportEvent::ItemStarted { phase, name, index } => {
+                    format!("item {} {index} {name}", phase.name())
+                }
                 ExportEvent::PhaseFinished { phase } => format!("end {}", phase.name()),
                 ExportEvent::TheoremFinished { name } => format!("theorem-end {name}"),
                 ExportEvent::Finished { files_written } => format!("finished {files_written}"),
-                ExportEvent::GoalFinished { oracle, goal, admitted } => {
+                ExportEvent::GoalFinished {
+                    oracle,
+                    goal,
+                    admitted,
+                } => {
                     format!("goal {oracle} {goal} {admitted}")
                 }
-                ExportEvent::NodeStarted { oracle, node, total } => format!("node {oracle} {node}/{total}"),
+                ExportEvent::NodeStarted {
+                    oracle,
+                    node,
+                    total,
+                } => format!("node {oracle} {node}/{total}"),
                 ExportEvent::SentenceSent { sentence } => format!("sentence {sentence}"),
                 ExportEvent::LockstepStarted { oracle } => format!("lockstep {oracle}"),
                 ExportEvent::LockstepFinished { oracle, found, .. } => {
@@ -475,11 +589,23 @@ pub(crate) mod tests {
     fn logging_observer_remembers_phases_per_theorem_and_the_write_phase() {
         let mut inner = Recorder::default();
         let mut log = LoggingExportObserver::new(&mut inner);
-        log.on_event(&ExportEvent::TheoremStarted { name: "T", index: 1, total: 1 });
-        log.on_event(&ExportEvent::PhaseStarted { phase: ExportPhase::Types, total_items: 2 });
-        log.on_event(&ExportEvent::PhaseFinished { phase: ExportPhase::Types });
+        log.on_event(&ExportEvent::TheoremStarted {
+            name: "T",
+            index: 1,
+            total: 1,
+        });
+        log.on_event(&ExportEvent::PhaseStarted {
+            phase: ExportPhase::Types,
+            total_items: 2,
+        });
+        log.on_event(&ExportEvent::PhaseFinished {
+            phase: ExportPhase::Types,
+        });
         log.on_event(&ExportEvent::TheoremFinished { name: "T" });
-        log.on_event(&ExportEvent::PhaseStarted { phase: ExportPhase::Write, total_items: 5 });
+        log.on_event(&ExportEvent::PhaseStarted {
+            phase: ExportPhase::Write,
+            total_items: 5,
+        });
         let log = log.into_log();
         assert_eq!(log.phases_of("T"), [("types", 2), ("write", 5)]);
         assert_eq!(inner.0.len(), 5, "every event is forwarded");
@@ -494,7 +620,12 @@ pub(crate) mod tests {
         scope.finish();
         assert_eq!(
             rec.0,
-            ["phase games 2", "item games 1 Comp_A", "item games 2 Comp_B", "end games"]
+            [
+                "phase games 2",
+                "item games 1 Comp_A",
+                "item games 2 Comp_B",
+                "end games"
+            ]
         );
     }
 
@@ -505,10 +636,18 @@ pub(crate) mod tests {
             "PKENC  N7/23  smt(dec_enc)."
         );
         assert_eq!(
-            proving_message("PKENC", "N7", 23, "  seq 2 2 : (a = b /\\\n   c).\n  more\n"),
+            proving_message(
+                "PKENC",
+                "N7",
+                23,
+                "  seq 2 2 : (a = b /\\\n   c).\n  more\n"
+            ),
             "PKENC  N7/23  seq 2 2 : (a = b /\\"
         );
-        assert_eq!(proving_message("PKENC", "router", 23, "proc; inline."), "PKENC  router  proc; inline.");
+        assert_eq!(
+            proving_message("PKENC", "router", 23, "proc; inline."),
+            "PKENC  router  proc; inline."
+        );
         assert_eq!(proving_message("PKENC", "N1", 3, ""), "PKENC  N1/3  ");
     }
 
@@ -517,17 +656,34 @@ pub(crate) mod tests {
         assert_eq!(node_line("PKENC", "N7", 23), "  PKENC N7/23");
         assert_eq!(node_line("PKENC", "router", 23), "  PKENC router");
         let mut plain = PlainExportObserver::new();
-        plain.on_event(&ExportEvent::NodeStarted { oracle: "PKENC", node: "N7", total: 23 });
+        plain.on_event(&ExportEvent::NodeStarted {
+            oracle: "PKENC",
+            node: "N7",
+            total: 23,
+        });
         plain.on_event(&ExportEvent::SentenceSent { sentence: "auto." });
     }
 
     #[test]
     fn the_bar_observer_follows_node_and_sentence_events() {
         let mut bars = BarExportObserver::new();
-        bars.on_event(&ExportEvent::PhaseStarted { phase: ExportPhase::Tactics, total_items: 1 });
-        bars.on_event(&ExportEvent::ItemStarted { phase: ExportPhase::Tactics, name: "Eq O", index: 1 });
-        bars.on_event(&ExportEvent::NodeStarted { oracle: "O", node: "N7", total: 23 });
-        bars.on_event(&ExportEvent::SentenceSent { sentence: "smt(a).\nsecond" });
+        bars.on_event(&ExportEvent::PhaseStarted {
+            phase: ExportPhase::Tactics,
+            total_items: 1,
+        });
+        bars.on_event(&ExportEvent::ItemStarted {
+            phase: ExportPhase::Tactics,
+            name: "Eq O",
+            index: 1,
+        });
+        bars.on_event(&ExportEvent::NodeStarted {
+            oracle: "O",
+            node: "N7",
+            total: 23,
+        });
+        bars.on_event(&ExportEvent::SentenceSent {
+            sentence: "smt(a).\nsecond",
+        });
         assert_eq!(bars.bar.as_ref().unwrap().message(), "O  N7/23  smt(a).");
     }
 
@@ -570,8 +726,15 @@ pub(crate) mod tests {
     #[test]
     fn the_bar_observer_survives_a_lockstep_interlude() {
         let mut bars = BarExportObserver::new();
-        bars.on_event(&ExportEvent::PhaseStarted { phase: ExportPhase::Tactics, total_items: 2 });
-        bars.on_event(&ExportEvent::ItemStarted { phase: ExportPhase::Tactics, name: "Eq O", index: 1 });
+        bars.on_event(&ExportEvent::PhaseStarted {
+            phase: ExportPhase::Tactics,
+            total_items: 2,
+        });
+        bars.on_event(&ExportEvent::ItemStarted {
+            phase: ExportPhase::Tactics,
+            name: "Eq O",
+            index: 1,
+        });
         for _ in 0..2 {
             bars.on_event(&ExportEvent::LockstepStarted { oracle: "O" });
             drop(bars.lockstep_observer());

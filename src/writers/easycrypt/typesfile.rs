@@ -208,7 +208,11 @@ mod tests {
         let collected = collect_bits_types(&types);
         assert_eq!(
             collected.keys().cloned().collect::<Vec<_>>(),
-            vec!["bits".to_string(), "bits_256".to_string(), "bits_n".to_string()]
+            vec![
+                "bits".to_string(),
+                "bits_256".to_string(),
+                "bits_n".to_string()
+            ]
         );
     }
 
@@ -293,11 +297,15 @@ mod tests {
 
     // --- golden files: real projects, run through the real transform ----------
 
-    fn load_theorem_types(dir: &str, theorem_name: &str) -> (crate::theorem::Theorem<'static>, HashSet<Type>) {
+    fn load_theorem_types(
+        dir: &str,
+        theorem_name: &str,
+    ) -> (crate::theorem::Theorem<'static>, HashSet<Type>) {
         // Leaked so the `Theorem<'a>` this test returns can outlive the
         // `DirectoryFiles`/`DirectoryProject` it borrows from — fine for a
         // one-shot golden-file test.
-        let files: &'static DirectoryFiles = Box::leak(Box::new(DirectoryFiles::load(Path::new(dir)).unwrap()));
+        let files: &'static DirectoryFiles =
+            Box::leak(Box::new(DirectoryFiles::load(Path::new(dir)).unwrap()));
         let project: &'static DirectoryProject = Box::leak(Box::new(
             DirectoryProject::load(PathBuf::from(dir), files).unwrap(),
         ));
@@ -316,10 +324,7 @@ mod tests {
         let file = build_types_file(&theorem, &types).unwrap();
         let rendered = render_file(&file);
 
-        let full_path = format!(
-            "{}/{golden_path}",
-            concat!(env!("CARGO_MANIFEST_DIR"))
-        );
+        let full_path = format!("{}/{golden_path}", concat!(env!("CARGO_MANIFEST_DIR")));
         let expected = std::fs::read_to_string(&full_path)
             .unwrap_or_else(|e| panic!("failed to read golden file {full_path}: {e}"));
         assert_eq!(rendered, expected, "rendered Types.ec != {full_path}");

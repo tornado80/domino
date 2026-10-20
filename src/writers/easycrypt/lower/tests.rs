@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::debug::exec::{execute, Side, Terminal};
-use crate::debug::ir::{count_terminals, inline_oracle, FrameSpan, LineRole, Place, ExitGuard};
+use crate::debug::ir::{count_terminals, inline_oracle, ExitGuard, FrameSpan, LineRole, Place};
 use crate::debug::render::render_side_by_side_easycrypt;
 use crate::project::{DirectoryFiles, DirectoryProject, Project};
 use crate::theorem::Theorem;
@@ -406,7 +406,11 @@ fn exit_guards_are_labelled_decision_points() {
                 assert!(els.0.is_empty(), "{gi}: line {label}");
             } else if text.starts_with("if (!(ec_r") && !text.starts_with("if (!(ec_result") {
                 call_results += 1;
-                assert_eq!(*exit_guard, Some(ExitGuard::CallResult), "{gi}: line {label}");
+                assert_eq!(
+                    *exit_guard,
+                    Some(ExitGuard::CallResult),
+                    "{gi}: line {label}"
+                );
             } else {
                 assert_eq!(*exit_guard, None, "{gi}: line {label}: {text}");
             }

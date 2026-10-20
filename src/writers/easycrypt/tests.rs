@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::ast::*;
-use super::render::{render_expr, render_expr_block, render_file, render_record_block, render_type};
+use super::render::{
+    render_expr, render_expr_block, render_file, render_record_block, render_type,
+};
 
 fn var(name: &str) -> EcExpr {
     EcExpr::Var(name.to_string())
@@ -105,31 +107,51 @@ fn precedence_implies_is_right_associative() {
 
 #[test]
 fn a_right_nested_conjunction_renders_flat() {
-    let e = binop(EcBinop::And, var("a"), binop(EcBinop::And, var("b"), var("c")));
+    let e = binop(
+        EcBinop::And,
+        var("a"),
+        binop(EcBinop::And, var("b"), var("c")),
+    );
     assert_eq!(render_expr(&e), "a /\\ b /\\ c");
 }
 
 #[test]
 fn a_left_nested_conjunction_keeps_its_parentheses() {
-    let e = binop(EcBinop::And, binop(EcBinop::And, var("a"), var("b")), var("c"));
+    let e = binop(
+        EcBinop::And,
+        binop(EcBinop::And, var("a"), var("b")),
+        var("c"),
+    );
     assert_eq!(render_expr(&e), "(a /\\ b) /\\ c");
 }
 
 #[test]
 fn a_right_nested_disjunction_renders_flat() {
-    let e = binop(EcBinop::Or, var("a"), binop(EcBinop::Or, var("b"), var("c")));
+    let e = binop(
+        EcBinop::Or,
+        var("a"),
+        binop(EcBinop::Or, var("b"), var("c")),
+    );
     assert_eq!(render_expr(&e), "a \\/ b \\/ c");
 }
 
 #[test]
 fn a_left_nested_disjunction_keeps_its_parentheses() {
-    let e = binop(EcBinop::Or, binop(EcBinop::Or, var("a"), var("b")), var("c"));
+    let e = binop(
+        EcBinop::Or,
+        binop(EcBinop::Or, var("a"), var("b")),
+        var("c"),
+    );
     assert_eq!(render_expr(&e), "(a \\/ b) \\/ c");
 }
 
 #[test]
 fn a_left_nested_implication_keeps_its_parentheses() {
-    let e = binop(EcBinop::Implies, binop(EcBinop::Implies, var("a"), var("b")), var("c"));
+    let e = binop(
+        EcBinop::Implies,
+        binop(EcBinop::Implies, var("a"), var("b")),
+        var("c"),
+    );
     assert_eq!(render_expr(&e), "(a => b) => c");
 }
 
@@ -175,7 +197,11 @@ fn an_op_body_chain_puts_every_operator_first_on_its_own_line() {
         app("params_inv", vec![var("l"), var("r")]),
         binop(
             EcBinop::And,
-            binop(EcBinop::Eq, field("l", "l_abort_flag"), field("r", "r_abort_flag")),
+            binop(
+                EcBinop::Eq,
+                field("l", "l_abort_flag"),
+                field("r", "r_abort_flag"),
+            ),
             binop(
                 EcBinop::Implies,
                 EcExpr::Unop {
@@ -202,7 +228,11 @@ fn an_op_body_chain_puts_every_operator_first_on_its_own_line() {
 fn a_chain_nested_in_a_chain_is_its_own_aligned_block() {
     // `a /\ (b \/ c \/ d) /\ e`, then `(a /\ b) /\ c`: a left-nested chain is
     // a parenthesised operand of the outer one, never flattened into it.
-    let disjunction = binop(EcBinop::Or, var("b"), binop(EcBinop::Or, var("c"), var("d")));
+    let disjunction = binop(
+        EcBinop::Or,
+        var("b"),
+        binop(EcBinop::Or, var("c"), var("d")),
+    );
     let body = binop(
         EcBinop::And,
         var("a"),
@@ -219,14 +249,14 @@ fn a_chain_nested_in_a_chain_is_its_own_aligned_block() {
         )
     );
 
-    let left_nested = binop(EcBinop::And, binop(EcBinop::And, var("a"), var("b")), var("c"));
+    let left_nested = binop(
+        EcBinop::And,
+        binop(EcBinop::And, var("a"), var("b")),
+        var("c"),
+    );
     assert_eq!(
         render_expr_block(&left_nested, 0),
-        concat!(
-            "   (   a\n",
-            "    /\\ b)\n",
-            "/\\ c",
-        )
+        concat!("   (   a\n", "    /\\ b)\n", "/\\ c",)
     );
 }
 
@@ -281,7 +311,10 @@ fn a_let_body_goes_on_the_next_line_two_spaces_in() {
 
 fn record(fields: Vec<(&str, EcExpr)>) -> EcExpr {
     EcExpr::RecordLit {
-        fields: fields.into_iter().map(|(f, v)| (f.to_string(), v)).collect(),
+        fields: fields
+            .into_iter()
+            .map(|(f, v)| (f.to_string(), v))
+            .collect(),
     }
 }
 
@@ -300,12 +333,21 @@ fn a_record_literal_puts_one_field_per_line_and_a_nested_one_under_its_field() {
         (
             "l_pkg_KX",
             record(vec![
-                ("KX_d_LTK", mem_read(&["Comp_H1", "Pkg_Inst_KX", "d_LTK"], 1)),
-                ("KX_d_State", mem_read(&["Comp_H1", "Pkg_Inst_KX", "d_State"], 1)),
+                (
+                    "KX_d_LTK",
+                    mem_read(&["Comp_H1", "Pkg_Inst_KX", "d_LTK"], 1),
+                ),
+                (
+                    "KX_d_State",
+                    mem_read(&["Comp_H1", "Pkg_Inst_KX", "d_State"], 1),
+                ),
             ]),
         ),
         ("l_pkg_KX_b", mem_read(&["Comp_H1", "Pkg_Inst_KX", "b"], 1)),
-        ("l_abort_flag", mem_read(&["Comp_H1", "Game_H1", "abort_flag"], 1)),
+        (
+            "l_abort_flag",
+            mem_read(&["Comp_H1", "Game_H1", "abort_flag"], 1),
+        ),
     ]);
     assert_eq!(
         render_record_block(&lit, 10),
@@ -482,7 +524,10 @@ fn kitchen_sink() -> EcFile {
             },
             EcItem::OpDef {
                 name: "mk_rec".to_string(),
-                args: vec![("a".to_string(), EcType::Int), ("b".to_string(), EcType::Bool)],
+                args: vec![
+                    ("a".to_string(), EcType::Int),
+                    ("b".to_string(), EcType::Bool),
+                ],
                 ret: Some(EcType::Named("rec_t".to_string())),
                 body: EcExpr::RecordLit {
                     fields: vec![
@@ -493,7 +538,10 @@ fn kitchen_sink() -> EcFile {
             },
             EcItem::OpDef {
                 name: "kitchen_tuple_and_proj".to_string(),
-                args: vec![("s".to_string(), EcType::Tuple(vec![EcType::Int, EcType::Int]))],
+                args: vec![(
+                    "s".to_string(),
+                    EcType::Tuple(vec![EcType::Int, EcType::Int]),
+                )],
                 ret: Some(EcType::Int),
                 body: binop(
                     EcBinop::Add,
@@ -642,19 +690,28 @@ fn kitchen_sink() -> EcFile {
             // `EcBinop::Gt`/`Ge`.
             EcItem::OpDef {
                 name: "(>)".to_string(),
-                args: vec![("x".to_string(), EcType::Int), ("y".to_string(), EcType::Int)],
+                args: vec![
+                    ("x".to_string(), EcType::Int),
+                    ("y".to_string(), EcType::Int),
+                ],
                 ret: Some(EcType::Bool),
                 body: binop(EcBinop::Lt, var("y"), var("x")),
             },
             EcItem::OpDef {
                 name: "(>=)".to_string(),
-                args: vec![("x".to_string(), EcType::Int), ("y".to_string(), EcType::Int)],
+                args: vec![
+                    ("x".to_string(), EcType::Int),
+                    ("y".to_string(), EcType::Int),
+                ],
                 ret: Some(EcType::Bool),
                 body: binop(EcBinop::Le, var("y"), var("x")),
             },
             EcItem::OpDef {
                 name: "kitchen_cmp".to_string(),
-                args: vec![("a".to_string(), EcType::Int), ("b".to_string(), EcType::Int)],
+                args: vec![
+                    ("a".to_string(), EcType::Int),
+                    ("b".to_string(), EcType::Int),
+                ],
                 ret: Some(EcType::Bool),
                 body: binop(
                     EcBinop::Implies,
@@ -680,7 +737,10 @@ fn kitchen_sink() -> EcFile {
             },
             EcItem::OpDef {
                 name: "kitchen_arith".to_string(),
-                args: vec![("a".to_string(), EcType::Int), ("b".to_string(), EcType::Int)],
+                args: vec![
+                    ("a".to_string(), EcType::Int),
+                    ("b".to_string(), EcType::Int),
+                ],
                 ret: Some(EcType::Int),
                 body: binop(
                     EcBinop::Sub,
@@ -690,7 +750,11 @@ fn kitchen_sink() -> EcFile {
                         binop(
                             EcBinop::Mul,
                             var("a"),
-                            binop(EcBinop::Div, var("b"), binop(EcBinop::Add, var("b"), int(1))),
+                            binop(
+                                EcBinop::Div,
+                                var("b"),
+                                binop(EcBinop::Add, var("b"), int(1)),
+                            ),
                         ),
                         int(2),
                     ),
@@ -921,11 +985,7 @@ fn kitchen_sink() -> EcFile {
                         name: "sample_bit".to_string(),
                         args: vec![],
                         ret: EcType::Named("bits_n".to_string()),
-                        locals: vec![(
-                            "x".to_string(),
-                            EcType::Named("bits_n".to_string()),
-                            None,
-                        )],
+                        locals: vec![("x".to_string(), EcType::Named("bits_n".to_string()), None)],
                         body: EcBlock(vec![EcStmt::Sample {
                             lhs: EcLvalue::Var("x".to_string()),
                             distr: var("dbits"),

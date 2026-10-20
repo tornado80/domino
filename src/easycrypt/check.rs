@@ -360,12 +360,9 @@ fn check_equivalence(
     // The goals are handled from the first one on; each is identified from its JSON.
     while let Some(goal) = session.front() {
         let target = setup.oracle_of_goal(goal);
-        if let Some(oracle) = target.filter(|name| {
-            options
-                .oracle
-                .as_ref()
-                .is_none_or(|wanted| wanted == name)
-        }) {
+        if let Some(oracle) =
+            target.filter(|name| options.oracle.as_ref().is_none_or(|wanted| wanted == name))
+        {
             let began = Instant::now();
             let result = align_one(
                 &mut session,
@@ -540,8 +537,9 @@ mod tests {
 
     /// EasyCrypt's answer to `proc; inline.` on hello-world's `UsefulOracle`
     /// (`medium_composition ~ small_composition`), recorded with story 25's binary.
-    const FIXTURE: &str =
-        include_str!("../../testdata/easycrypt/story25/hello_world_useful_oracle_after_inline.json");
+    const FIXTURE: &str = include_str!(
+        "../../testdata/easycrypt/story25/hello_world_useful_oracle_after_inline.json"
+    );
 
     #[test]
     fn the_recorded_goal_aligns_with_the_lowering_without_easycrypt() {

@@ -329,7 +329,9 @@ mod tests {
     #[test]
     fn a_value_binder_is_kept_and_the_driver_can_introduce_it() {
         // EasyCrypt writes a value binder (`GTty`) with the kind "var"
-        let form = quant(r#"{"name":"ctr","ident":{"name":"ctr","tag":1},"kind":"var","type":{"pp":"int"}}"#);
+        let form = quant(
+            r#"{"name":"ctr","ident":{"name":"ctr","tag":1},"kind":"var","type":{"pp":"int"}}"#,
+        );
         let (names, _) = as_forall(&form).unwrap();
         assert_eq!(names, ["ctr"]);
         assert_eq!(format!("move => {}.", names.join(" ")), "move => ctr.");
@@ -351,7 +353,10 @@ mod tests {
     }
 
     fn app(op: &str, args: &[String]) -> String {
-        format!(r#"{{"kind":"app","op":"{op}","args":[{}]}}"#, args.join(","))
+        format!(
+            r#"{{"kind":"app","op":"{op}","args":[{}]}}"#,
+            args.join(",")
+        )
     }
 
     fn set(map: &str, key: &str) -> String {
@@ -399,10 +404,16 @@ mod tests {
     #[test]
     fn a_key_that_is_not_an_atom_and_a_binder_outside_an_updated_map_give_no_pair() {
         let m = local("m");
-        let k_plus_1 = app("Top.CoreInt.add", &[pvar_k2(), r#"{"kind":"int","value":"1"}"#.into()]);
+        let k_plus_1 = app(
+            "Top.CoreInt.add",
+            &[pvar_k2(), r#"{"kind":"int","value":"1"}"#.into()],
+        );
         let not_atom = read(&set(&m, &k_plus_1), &local("c"));
         assert!(key_pairs(&form(&not_atom), &binders(&["c"])).is_empty());
-        let plain = app("Top.Logic.and", &[read(&m, &local("c")), set(&m, &pvar_k2())]);
+        let plain = app(
+            "Top.Logic.and",
+            &[read(&m, &local("c")), set(&m, &pvar_k2())],
+        );
         assert!(key_pairs(&form(&plain), &binders(&["c"])).is_empty());
         // an index that the opening loop did not introduce
         let other = read(&set(&m, &pvar_k2()), &local("d"));

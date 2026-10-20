@@ -16,7 +16,11 @@ fn run(mode: &str, out: &Path) -> (String, String) {
         .args(["--progress", mode])
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     (
         String::from_utf8(output.stdout).unwrap(),
         String::from_utf8(output.stderr).unwrap(),
@@ -32,7 +36,10 @@ fn read_tree(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
             if path.is_dir() {
                 stack.push(path);
             } else {
-                tree.insert(path.strip_prefix(dir).unwrap().to_path_buf(), std::fs::read(&path).unwrap());
+                tree.insert(
+                    path.strip_prefix(dir).unwrap().to_path_buf(),
+                    std::fs::read(&path).unwrap(),
+                );
             }
         }
     }
@@ -64,7 +71,11 @@ fn stdout_and_files_are_identical_in_every_progress_mode() {
     assert_eq!(stderr_of("none"), "");
     // Not a terminal here, so `auto` is `plain`, and `bar` draws nothing.
     assert_eq!(stderr_of("auto"), stderr_of("plain"));
-    assert!(stderr_of("plain").contains("games 1/"), "{}", stderr_of("plain"));
+    assert!(
+        stderr_of("plain").contains("games 1/"),
+        "{}",
+        stderr_of("plain")
+    );
     assert!(stderr_of("plain").trim_end().ends_with("file(s) written"));
 
     let _ = std::fs::remove_dir_all(&base);

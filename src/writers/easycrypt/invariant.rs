@@ -35,17 +35,15 @@ use crate::theorem::{GameInstance, Theorem};
 use crate::types::Type;
 use crate::util::smtparser::SmtParser;
 
-use super::ast::{
-    EcBinop, EcExpr, EcFile, EcItem, EcType, EcUnop, Require,
-};
+use super::ast::{EcBinop, EcExpr, EcFile, EcItem, EcType, EcUnop, Require};
 use super::names::{NameError, NameKind, Names};
 use super::package;
 use super::types::{func_op_name, translate_type};
 use super::EcExportError;
 
 mod side;
-pub(crate) use side::{composition_items, has_side_invariants, SideCtx};
 pub use side::SideInvariantError;
+pub(crate) use side::{composition_items, has_side_invariants, SideCtx};
 
 /// Errors specific to invariant translation. Folds into [`EcExportError`]
 /// via `#[from]` (`mod.rs`), matching [`NameError`]'s own
@@ -217,17 +215,13 @@ pub fn build_invariant_file(
 ) -> Result<InvariantFile, EcExportError> {
     let left_game_inst = theorem
         .find_game_instance(equivalence.left_name())
-        .ok_or_else(|| {
-            InvariantError::MissingGameInstance {
-                name: equivalence.left_name().to_string(),
-            }
+        .ok_or_else(|| InvariantError::MissingGameInstance {
+            name: equivalence.left_name().to_string(),
         })?;
     let right_game_inst = theorem
         .find_game_instance(equivalence.right_name())
-        .ok_or_else(|| {
-            InvariantError::MissingGameInstance {
-                name: equivalence.right_name().to_string(),
-            }
+        .ok_or_else(|| InvariantError::MissingGameInstance {
+            name: equivalence.right_name().to_string(),
         })?;
 
     // §3.1: both sides always get their own field-name namespace prefix
@@ -289,10 +283,12 @@ pub fn build_invariant_file(
     }
 
     let invariant_app = EcExpr::App {
-        head: state.invariant_op().ok_or_else(|| InvariantError::MissingInvariant {
-            equivalence: format!("{} ~ {}", equivalence.left_name(), equivalence.right_name()),
-            files: equivalence.invariants().to_vec(),
-        })?,
+        head: state
+            .invariant_op()
+            .ok_or_else(|| InvariantError::MissingInvariant {
+                equivalence: format!("{} ~ {}", equivalence.left_name(), equivalence.right_name()),
+                files: equivalence.invariants().to_vec(),
+            })?,
         args: vec![EcExpr::Var("l".to_string()), EcExpr::Var("r".to_string())],
     };
 
@@ -489,7 +485,11 @@ fn invariant_part(invariant: &str) -> String {
 /// The template operator of the package invariant `invariant` of `package`:
 /// `PkgInv_<N>_of_<P>`, over `<P>_pkgstate` (ADR 0018).
 pub(crate) fn pkg_inv_template_name(invariant: &str, package: &str) -> String {
-    format!("PkgInv_{}_of_{}", invariant_part(invariant), name_part(package))
+    format!(
+        "PkgInv_{}_of_{}",
+        invariant_part(invariant),
+        name_part(package)
+    )
 }
 
 /// The operator of the package invariant `invariant` of one instance in composition `comp`
@@ -507,7 +507,11 @@ pub(crate) fn pkg_inv_op_name(invariant: &str, comp: &str, instance: &str) -> St
 /// The operator of the game invariant `invariant` of a composition: `GameInv_<N>_of_<C>`, over
 /// its side record (ADR 0018).
 pub(crate) fn game_inv_op_name(invariant: &str, comp: &str) -> String {
-    format!("GameInv_{}_of_{}", invariant_part(invariant), name_part(comp))
+    format!(
+        "GameInv_{}_of_{}",
+        invariant_part(invariant),
+        name_part(comp)
+    )
 }
 
 /// The side invariant of a composition: `side_inv_<C>`, over its side record (story 69).
@@ -540,7 +544,11 @@ pub(super) fn abort_field_name(field_ns_prefix: &str) -> String {
 
 /// The game-record field holding one parameter that becomes a module
 /// variable ([`package::param_needs_var`]): `{l_|r_}pkg_<Inst>_<mangled param>`.
-pub(super) fn param_field_name(field_ns_prefix: &str, instance: &str, mangled_param: &str) -> String {
+pub(super) fn param_field_name(
+    field_ns_prefix: &str,
+    instance: &str,
+    mangled_param: &str,
+) -> String {
     format!("{field_ns_prefix}pkg_{instance}_{mangled_param}")
 }
 
@@ -948,7 +956,10 @@ fn field_expr(op_param: &str, field: &str) -> EcExpr {
 fn translate_bits_literal_atom(a: &str) -> Option<(EcExpr, EcType)> {
     let inner = a.strip_prefix('<')?.strip_suffix('>')?;
     if inner == "empty-bitstring" {
-        return Some((EcExpr::Var("zero".to_string()), EcType::Named("bits".to_string())));
+        return Some((
+            EcExpr::Var("zero".to_string()),
+            EcType::Named("bits".to_string()),
+        ));
     }
     let (content, raw_suffix) = inner.split_once('_')?;
     let suffix = raw_suffix.replace('-', "_");
@@ -1228,7 +1239,11 @@ pub fn leaf_part_ops(
     let mut ops: Vec<InvariantOp> = relations
         .iter()
         .map(|r| InvariantOp::state_relation(r))
-        .chain(helpers.iter().map(|h| InvariantOp::plain(helper_op_name(h))))
+        .chain(
+            helpers
+                .iter()
+                .map(|h| InvariantOp::plain(helper_op_name(h))),
+        )
         .collect();
     for comp in comps {
         ops.extend(
@@ -1262,7 +1277,11 @@ pub fn side_invariant_ops(
     for inst in side::invariant_instances(comp) {
         for invariant in side::package_invariant_names(project, inst)? {
             ops.push(InvariantOp {
-                claim: Some(package_invariant_claim_name(&invariant, &comp.name, inst.name())),
+                claim: Some(package_invariant_claim_name(
+                    &invariant,
+                    &comp.name,
+                    inst.name(),
+                )),
                 ..InvariantOp::plain(qualified(pkg_inv_op_name(&invariant, &name, inst.name())))
             });
             let template = pkg_inv_template_name(&invariant, &inst.pkg.name);
@@ -1583,7 +1602,10 @@ impl<'a> TCtx<'a> {
             _ => {}
         }
 
-        if let Some(fname) = head.strip_prefix("<<func-").and_then(|s| s.strip_suffix(">>")) {
+        if let Some(fname) = head
+            .strip_prefix("<<func-")
+            .and_then(|s| s.strip_suffix(">>"))
+        {
             return self.translate_func(fname, rest, locals, whole);
         }
         if let Some(n) = head
@@ -1995,7 +2017,9 @@ impl<'a> TCtx<'a> {
         };
         let (e_expr, e_ty) = self.translate(e, locals)?;
         let EcType::Option(inner) = e_ty else {
-            return Err(self.unsupported(format!("`is-mk-none` on a non-`Maybe` value in `{whole}`")));
+            return Err(
+                self.unsupported(format!("`is-mk-none` on a non-`Maybe` value in `{whole}`"))
+            );
         };
         Ok((eq_expr(e_expr, EcExpr::None_(*inner)), EcType::Bool))
     }
@@ -2011,7 +2035,9 @@ impl<'a> TCtx<'a> {
         };
         let (e_expr, e_ty) = self.translate(e, locals)?;
         let EcType::Option(inner) = e_ty else {
-            return Err(self.unsupported(format!("`maybe-get` on a non-`Maybe` value in `{whole}`")));
+            return Err(
+                self.unsupported(format!("`maybe-get` on a non-`Maybe` value in `{whole}`"))
+            );
         };
         Ok((EcExpr::Oget(Box::new(e_expr)), *inner))
     }
@@ -2032,7 +2058,11 @@ impl<'a> TCtx<'a> {
         ))
     }
 
-    fn translate_as(&self, rest: &[Sexp], whole: &Sexp) -> Result<(EcExpr, EcType), InvariantError> {
+    fn translate_as(
+        &self,
+        rest: &[Sexp],
+        whole: &Sexp,
+    ) -> Result<(EcExpr, EcType), InvariantError> {
         let [Sexp::Atom(tag), Sexp::List(sort_items)] = rest else {
             return Err(self.unsupported(format!("unsupported `as` form in `{whole}`")));
         };
@@ -2060,9 +2090,7 @@ impl<'a> TCtx<'a> {
         whole: &Sexp,
     ) -> Result<(EcExpr, EcType), InvariantError> {
         if rest.len() != n {
-            return Err(self.unsupported(format!(
-                "`mk-tuple{n}` needs {n} arguments in `{whole}`"
-            )));
+            return Err(self.unsupported(format!("`mk-tuple{n}` needs {n} arguments in `{whole}`")));
         }
         let mut exprs = Vec::with_capacity(n);
         let mut tys = Vec::with_capacity(n);
@@ -2121,8 +2149,9 @@ impl<'a> TCtx<'a> {
         let crate::types::TypeKind::Fn(_, ret) = ty.kind() else {
             return Err(self.unsupported(format!("`<<func-{fname}>>` is not a function const")));
         };
-        let ret_ty = translate_type(ret, SourceSpan::from((0, 0)))
-            .map_err(|_| self.unsupported(format!("unsupported return type for `<<func-{fname}>>`")))?;
+        let ret_ty = translate_type(ret, SourceSpan::from((0, 0))).map_err(|_| {
+            self.unsupported(format!("unsupported return type for `<<func-{fname}>>`"))
+        })?;
         Ok((
             EcExpr::App {
                 head: func_op_name(fname),
@@ -2195,7 +2224,9 @@ impl InvariantParserState<'_> {
     /// is not a state relation and does not count.
     fn invariant_op(&self) -> Option<String> {
         let (mangled, _) = self.ops.lookup("invariant")?;
-        self.state_relations.contains(mangled).then(|| mangled.clone())
+        self.state_relations
+            .contains(mangled)
+            .then(|| mangled.clone())
     }
 }
 
@@ -2366,11 +2397,16 @@ impl SmtParser<InvariantError> for InvariantParserState<'_> {
         self.items.push(EcItem::Comment(format!(
             "skipped `define-lemma {lemma_name} {oracle_name}` (not translated)"
         )));
-        self.skipped.push(format!("define-lemma {lemma_name} {oracle_name}"));
+        self.skipped
+            .push(format!("define-lemma {lemma_name} {oracle_name}"));
         Ok(Sexp::Atom(String::new()))
     }
 
-    fn handle_define_game_invariant(&mut self, _invname: &str, _body: Sexp) -> Result<Sexp, InvariantError> {
+    fn handle_define_game_invariant(
+        &mut self,
+        _invname: &str,
+        _body: Sexp,
+    ) -> Result<Sexp, InvariantError> {
         Err(SideInvariantError::InEquivalenceFile {
             file: self.file.clone(),
             form: side::Kind::Game.form(),
@@ -2454,7 +2490,10 @@ mod tests {
         let mut lookup = HashMap::new();
         lookup.insert(
             "right.KEM.pk".to_string(),
-            (field_expr("r", "r_pkg_KEM_pk"), EcType::Option(Box::new(EcType::Int))),
+            (
+                field_expr("r", "r_pkg_KEM_pk"),
+                EcType::Option(Box::new(EcType::Int)),
+            ),
         );
         assert_eq!(
             translate_body_with(
@@ -2513,9 +2552,18 @@ mod tests {
     fn n_ary_connectives_nest_to_the_right_and_render_flat() {
         // Story 43 §3.1: EasyCrypt's `/\`, `\/` and `=>` are right-associative,
         // and SMT-LIB's n-ary `=>` is `:right-assoc` too.
-        assert_eq!(translate_body("(and true false true)"), "true /\\ false /\\ true");
-        assert_eq!(translate_body("(or true false true)"), "true \\/ false \\/ true");
-        assert_eq!(translate_body("(=> true false true)"), "true => false => true");
+        assert_eq!(
+            translate_body("(and true false true)"),
+            "true /\\ false /\\ true"
+        );
+        assert_eq!(
+            translate_body("(or true false true)"),
+            "true \\/ false \\/ true"
+        );
+        assert_eq!(
+            translate_body("(=> true false true)"),
+            "true => false => true"
+        );
         assert_eq!(translate_body("(= 1 2 3 4)"), "1 = 2 /\\ 2 = 3 /\\ 3 = 4");
     }
 
@@ -2528,9 +2576,18 @@ mod tests {
             translate_body("(and (and true false) (= 1 2 3) true)"),
             "true /\\ false /\\ 1 = 2 /\\ 2 = 3 /\\ true"
         );
-        assert_eq!(translate_body("(or (or true false) true)"), "true \\/ false \\/ true");
-        assert_eq!(translate_body("(=> (=> true false) true)"), "(true => false) => true");
-        assert_eq!(translate_body("(and (or true false) true)"), "(true \\/ false) /\\ true");
+        assert_eq!(
+            translate_body("(or (or true false) true)"),
+            "true \\/ false \\/ true"
+        );
+        assert_eq!(
+            translate_body("(=> (=> true false) true)"),
+            "(true => false) => true"
+        );
+        assert_eq!(
+            translate_body("(and (or true false) true)"),
+            "(true \\/ false) /\\ true"
+        );
     }
 
     #[test]
@@ -2600,10 +2657,7 @@ mod tests {
     #[test]
     fn mk_some_and_as_mk_none_translate() {
         assert_eq!(translate_body("(mk-some 1)"), "Some 1");
-        assert_eq!(
-            translate_body("(as mk-none (Maybe Bits_n))"),
-            "None"
-        );
+        assert_eq!(translate_body("(as mk-none (Maybe Bits_n))"), "None");
     }
 
     #[test]
@@ -2616,7 +2670,10 @@ mod tests {
 
     #[test]
     fn func_application_translates() {
-        let consts = vec![("prf".to_string(), Type::fun(vec![Type::integer()], Type::integer()))];
+        let consts = vec![(
+            "prf".to_string(),
+            Type::fun(vec![Type::integer()], Type::integer()),
+        )];
         assert_eq!(
             translate_body_with("(<<func-prf>> 1)", &HashMap::new(), &consts),
             "func_prf 1"
@@ -2708,14 +2765,23 @@ mod tests {
             }
         }
         assert_eq!(pkg_inv_template_name("main", "Prf"), "PkgInv_main_of_Prf");
-        assert_eq!(game_inv_op_name("main", "Hybrid2"), "GameInv_main_of_Hybrid2");
+        assert_eq!(
+            game_inv_op_name("main", "Hybrid2"),
+            "GameInv_main_of_Hybrid2"
+        );
         assert_eq!(
             pkg_inv_template_name("key_table", "Key_Store"),
             "PkgInv_key__table_of_Key__Store"
         );
         // a template never equals a wrapper
-        assert_ne!(pkg_inv_template_name("c", "A_in_B"), pkg_inv_op_name("c", "B", "A"));
-        assert_ne!(pkg_inv_template_name("c", "A_B"), pkg_inv_template_name("B_c", "A"));
+        assert_ne!(
+            pkg_inv_template_name("c", "A_in_B"),
+            pkg_inv_op_name("c", "B", "A")
+        );
+        assert_ne!(
+            pkg_inv_template_name("c", "A_B"),
+            pkg_inv_template_name("B_c", "A")
+        );
     }
 
     #[test]
@@ -2760,8 +2826,9 @@ mod tests {
         use crate::transforms::TheoremTransform;
 
         let dir = "example-projects/4WHS";
-        let files: &'static DirectoryFiles =
-            Box::leak(Box::new(DirectoryFiles::load(std::path::Path::new(dir)).unwrap()));
+        let files: &'static DirectoryFiles = Box::leak(Box::new(
+            DirectoryFiles::load(std::path::Path::new(dir)).unwrap(),
+        ));
         let project: &'static DirectoryProject = Box::leak(Box::new(
             DirectoryProject::load(std::path::PathBuf::from(dir), files).unwrap(),
         ));
@@ -2834,10 +2901,14 @@ mod tests {
         let (theorem, project) = load_hybrid0_hybrid1();
         let equivalence = find_equivalence(&theorem, "Hybrid0", "Hybrid1");
         let a = crate::writers::easycrypt::render::render_file(
-            &build_invariant_file(&theorem, equivalence, project).unwrap().file,
+            &build_invariant_file(&theorem, equivalence, project)
+                .unwrap()
+                .file,
         );
         let b = crate::writers::easycrypt::render::render_file(
-            &build_invariant_file(&theorem, equivalence, project).unwrap().file,
+            &build_invariant_file(&theorem, equivalence, project)
+                .unwrap()
+                .file,
         );
         assert_eq!(a, b);
     }
@@ -2876,8 +2947,14 @@ mod tests {
 
     #[test]
     fn sort_translation_covers_the_table() {
-        assert_eq!(translate_sort(&parse_sort_text("Int"), "f").unwrap(), EcType::Int);
-        assert_eq!(translate_sort(&parse_sort_text("Bool"), "f").unwrap(), EcType::Bool);
+        assert_eq!(
+            translate_sort(&parse_sort_text("Int"), "f").unwrap(),
+            EcType::Int
+        );
+        assert_eq!(
+            translate_sort(&parse_sort_text("Bool"), "f").unwrap(),
+            EcType::Bool
+        );
         assert_eq!(
             translate_sort(&parse_sort_text("Bits_n"), "f").unwrap(),
             EcType::Named("bits_n".to_string())
@@ -2960,9 +3037,7 @@ mod tests {
     fn randomness_mapping_defun_is_skipped_with_a_comment_and_reported() {
         let mut state = fresh_state();
         state
-            .parse_stmts(
-                "(define-fun randomness-mapping-NewKey ((id-0 SampleId)) Bool true)",
-            )
+            .parse_stmts("(define-fun randomness-mapping-NewKey ((id-0 SampleId)) Bool true)")
             .unwrap();
         assert_eq!(
             state.skipped,
@@ -3029,10 +3104,7 @@ mod tests {
         let EcItem::OpDef { body, .. } = &state.items[0] else {
             panic!("expected an op def");
         };
-        assert_eq!(
-            render_expr(body),
-            "l.`l_pkg_KX_State = r.`r_pkg_KX_State"
-        );
+        assert_eq!(render_expr(body), "l.`l_pkg_KX_State = r.`r_pkg_KX_State");
     }
 
     // --- acceptance criteria exercised against real target projects ------
@@ -3131,7 +3203,10 @@ mod tests {
     // C2`, both of composition `Clash`, where instance `T_b1` (with state)
     // and parameter `b1` of instance `T` both name the field `l_pkg_T_b1`.
 
-    pub(super) fn load_project(dir: &str, theorem_name: &str) -> (
+    pub(super) fn load_project(
+        dir: &str,
+        theorem_name: &str,
+    ) -> (
         crate::theorem::Theorem<'static>,
         &'static crate::project::DirectoryProject<'static>,
     ) {
@@ -3139,8 +3214,9 @@ mod tests {
         use crate::transforms::theorem_transforms::EasyCryptTransform;
         use crate::transforms::TheoremTransform;
 
-        let files: &'static DirectoryFiles =
-            Box::leak(Box::new(DirectoryFiles::load(std::path::Path::new(dir)).unwrap()));
+        let files: &'static DirectoryFiles = Box::leak(Box::new(
+            DirectoryFiles::load(std::path::Path::new(dir)).unwrap(),
+        ));
         let project: &'static DirectoryProject = Box::leak(Box::new(
             DirectoryProject::load(std::path::PathBuf::from(dir), files).unwrap(),
         ));
@@ -3288,7 +3364,10 @@ mod tests {
             ("Keep", "CtrToo")
         );
         let message = err.to_string();
-        assert!(message.contains("Ctr") && message.contains("CtrToo"), "{message}");
+        assert!(
+            message.contains("Ctr") && message.contains("CtrToo"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -3405,7 +3484,10 @@ mod tests {
     fn params_inv_says_nothing_about_the_only_parameter_bound_to_its_constant() {
         // `w` is bound only to `R`'s `T.b1`.
         let rendered = params_project_file("Params", "L", "R").unwrap();
-        assert!(!params_inv_text(&rendered).contains("r_pkg_T_b1"), "{rendered}");
+        assert!(
+            !params_inv_text(&rendered).contains("r_pkg_T_b1"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -3553,7 +3635,9 @@ mod tests {
                         for (a, b) in &equalities {
                             if reached.contains(&a.as_str()) && !reached.contains(&b.as_str()) {
                                 reached.push(b);
-                            } else if reached.contains(&b.as_str()) && !reached.contains(&a.as_str()) {
+                            } else if reached.contains(&b.as_str())
+                                && !reached.contains(&a.as_str())
+                            {
                                 reached.push(a);
                             }
                         }
@@ -3595,12 +3679,17 @@ mod tests {
         let result = build_invariant_file(&theorem, equivalence, project).unwrap();
         let left = theorem.find_game_instance("L").unwrap();
         let right = theorem.find_game_instance("R").unwrap();
-        let names: Vec<String> =
-            invariant_ops(project, left, right, &result.state_relations, &result.helpers)
-                .unwrap()
-                .into_iter()
-                .map(|op| op.name)
-                .collect();
+        let names: Vec<String> = invariant_ops(
+            project,
+            left,
+            right,
+            &result.state_relations,
+            &result.helpers,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|op| op.name)
+        .collect();
         assert_eq!(
             names[..7],
             [

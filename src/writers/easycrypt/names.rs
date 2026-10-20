@@ -210,9 +210,7 @@ pub enum NameKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NameError {
-    #[error(
-        "{kind:?} names `{a}` and `{b}` both mangle to `{mangled}`"
-    )]
+    #[error("{kind:?} names `{a}` and `{b}` both mangle to `{mangled}`")]
     Collision {
         kind: NameKind,
         a: String,
@@ -372,10 +370,7 @@ mod tests {
     #[test]
     fn mangle_keywords() {
         let mut names = Names::new();
-        assert_eq!(
-            names.mangle(NameKind::Op, "return").unwrap(),
-            "d_return"
-        );
+        assert_eq!(names.mangle(NameKind::Op, "return").unwrap(), "d_return");
         assert_eq!(names.mangle(NameKind::Var, "res").unwrap(), "d_res");
     }
 
@@ -405,7 +400,9 @@ mod tests {
     fn mangle_dash_to_underscore() {
         let mut names = Names::new();
         assert_eq!(
-            names.mangle(NameKind::Op, "keys-computed-correctly").unwrap(),
+            names
+                .mangle(NameKind::Op, "keys-computed-correctly")
+                .unwrap(),
             "keys_computed_correctly"
         );
     }
@@ -455,7 +452,9 @@ mod tests {
     fn mangle_lemma_does_not_prefix_uppercase_start() {
         let mut names = Names::new();
         assert_eq!(
-            names.mangle(NameKind::Lemma, "Hybrid0_Hybrid1_equiv").unwrap(),
+            names
+                .mangle(NameKind::Lemma, "Hybrid0_Hybrid1_equiv")
+                .unwrap(),
             "Hybrid0_Hybrid1_equiv"
         );
     }

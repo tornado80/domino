@@ -70,11 +70,10 @@ use thiserror::Error;
 
 use crate::debug::lockstep::LockstepOutcome;
 use crate::debug::lockstep_fingerprint::{describe_part, Fingerprint};
-use crate::gamehops::equivalence::smtrewrite::without_custom_smt_warning;
 use crate::debug::lockstep_run::{run_lockstep_command, LockstepDebugOptions, LockstepSummary};
-use crate::debug::side_run::{run_side_command, side_debug_dir, side_fingerprint};
 use crate::debug::progress::eprintln_above_bars;
-use crate::writers::easycrypt::progress::{ExportObserver, NopExportObserver};
+use crate::debug::side_run::{run_side_command, side_debug_dir, side_fingerprint};
+use crate::gamehops::equivalence::smtrewrite::without_custom_smt_warning;
 use crate::project::Project;
 use crate::theorem::Theorem;
 use crate::transforms::theorem_transforms::EasyCryptTransform;
@@ -83,6 +82,7 @@ use crate::util::smtsolver::SmtSolverBackend;
 use crate::writers::easycrypt::export::{EquivalenceReport, ExportedTheorem, SideInvReport};
 use crate::writers::easycrypt::invariant::{invariant_ops, leaf_part_ops, side_invariant_ops};
 use crate::writers::easycrypt::lower::inline_oracle_ec;
+use crate::writers::easycrypt::progress::{ExportObserver, NopExportObserver};
 use crate::writers::easycrypt::EcExportError;
 
 use super::check::{
@@ -195,7 +195,9 @@ impl ResumeMode {
 
 impl TacticsOptions {
     fn stop_requested(&self) -> bool {
-        self.stop.as_ref().is_some_and(|s| s.load(Ordering::Relaxed))
+        self.stop
+            .as_ref()
+            .is_some_and(|s| s.load(Ordering::Relaxed))
     }
 }
 
@@ -552,7 +554,10 @@ impl OracleTactics {
             } else {
                 Vec::new()
             },
-            tree_id: self.tree_id.clone().filter(|_| status == OracleStatus::Interrupted),
+            tree_id: self
+                .tree_id
+                .clone()
+                .filter(|_| status == OracleStatus::Interrupted),
         }
     }
 
@@ -710,7 +715,11 @@ where
         #[cfg(test)]
         fake: tests::TEST_EASYCRYPT.with(|t| t.borrow().clone()),
     };
-    let eqs = || plan.equivalences.iter().map(|eq| (eq, JobKind::Equivalence));
+    let eqs = || {
+        plan.equivalences
+            .iter()
+            .map(|eq| (eq, JobKind::Equivalence))
+    };
     // the side-invariant jobs, one after another; on a thread of their own while the
     // equivalences' proof jobs run (story 69 §3.3)
     let sides = || {
@@ -788,7 +797,11 @@ fn plan_run(
         side: Vec::new(),
         unproved: Vec::new(),
     };
-    for eq in exported.equivalences.iter().filter(|e| e.proofstep == proofstep) {
+    for eq in exported
+        .equivalences
+        .iter()
+        .filter(|e| e.proofstep == proofstep)
+    {
         let missing: Vec<&String> = eq
             .side_compositions
             .iter()
@@ -991,7 +1004,9 @@ fn plan_job(
     split_equivalence_record(out_dir, file)?;
     let mut records = Vec::new();
     for oracle in oracles {
-        records.extend(SessionRecord::read(&oracle_record_path(out_dir, file, oracle))?);
+        records.extend(SessionRecord::read(&oracle_record_path(
+            out_dir, file, oracle,
+        ))?);
     }
     let Some(mut record) = SessionRecord::join(&records, oracles) else {
         return Ok(JobPlan::Prove { prior: None });
@@ -1008,16 +1023,20 @@ fn plan_job(
             prior: Some(record),
         });
     }
-    let asked_done = options
-        .oracle
-        .as_ref()
-        .map(|o| record.oracle(o).is_some_and(|e| e.status == OracleStatus::Done));
+    let asked_done = options.oracle.as_ref().map(|o| {
+        record
+            .oracle(o)
+            .is_some_and(|e| e.status == OracleStatus::Done)
+    });
     if record.complete && asked_done.unwrap_or(true) {
         eprintln!("{}", record.skip_line(file));
         return Ok(JobPlan::Skip);
     }
     if let Some(oracle) = &options.oracle {
-        if record.oracle(oracle).is_some_and(OracleRecord::is_resumable) {
+        if record
+            .oracle(oracle)
+            .is_some_and(OracleRecord::is_resumable)
+        {
             eprintln!(
                 "skipping {oracle} of {}: already proved; --force re-proves it",
                 file.trim_end_matches(".ec")
@@ -1186,7 +1205,11 @@ impl ProofFile<'_> {
         // the record last (story 35 §3.4): a crash between the two leaves a record that claims
         // less than the file holds, which costs a re-proof and never claims a missing proof
         let record = self.record(&now);
-        if record.oracles.iter().any(|o| o.status != OracleStatus::Pending) {
+        if record
+            .oracles
+            .iter()
+            .any(|o| o.status != OracleStatus::Pending)
+        {
             write_atomically(&self.record_path, tmp_dir, &record.to_json())?;
         }
         Ok(now)
@@ -1197,14 +1220,16 @@ impl ProofFile<'_> {
         let oracles = self
             .procs
             .iter()
-            .map(|(name, _)| match now.oracles.iter().find(|o| &o.oracle == name) {
-                Some(o) => o.to_record(),
-                None => self
-                    .prior
-                    .and_then(|p| p.oracle(name))
-                    .cloned()
-                    .unwrap_or_else(|| OracleRecord::new(name, OracleStatus::Pending)),
-            })
+            .map(
+                |(name, _)| match now.oracles.iter().find(|o| &o.oracle == name) {
+                    Some(o) => o.to_record(),
+                    None => self
+                        .prior
+                        .and_then(|p| p.oracle(name))
+                        .cloned()
+                        .unwrap_or_else(|| OracleRecord::new(name, OracleStatus::Pending)),
+                },
+            )
             .collect();
         SessionRecord::new(self.theorem, &now.left, &now.right, oracles)
     }
@@ -1312,7 +1337,9 @@ fn resuming<P: Project>(
         return None;
     }
     let restart = |why: &str| {
-        eprintln_above_bars(&format!("warning: {why}; {oracle} is proved again from the start"));
+        eprintln_above_bars(&format!(
+            "warning: {why}; {oracle} is proved again from the start"
+        ));
     };
     if prior.version < 3 {
         restart(&format!(
@@ -1329,7 +1356,11 @@ fn resuming<P: Project>(
     let saved = match SavedTree::read(&path) {
         Ok(Some(saved)) if saved.oracle == oracle => saved,
         Ok(Some(saved)) => {
-            restart(&format!("{} holds the tree of {}", path.display(), saved.oracle));
+            restart(&format!(
+                "{} holds the tree of {}",
+                path.display(),
+                saved.oracle
+            ));
             return None;
         }
         Ok(None) => {
@@ -1445,7 +1476,9 @@ where
     let lockstep_time = lockstep_started.elapsed();
     live.lockstep_finished(
         oracle,
-        run.as_ref().ok().map(|r| (r.summary.joint_paths, r.summary.stuck_points)),
+        run.as_ref()
+            .ok()
+            .map(|r| (r.summary.joint_paths, r.summary.stuck_points)),
         lockstep_time,
         options.stop_requested(),
     );
@@ -1558,7 +1591,9 @@ where
             }
             (tree, Some(from))
         }
-        None => match lockstep(session, project, theorem, eq, kind, oracle, backend, options, live, proof)? {
+        None => match lockstep(
+            session, project, theorem, eq, kind, oracle, backend, options, live, proof,
+        )? {
             Lockstep::Walk(tree) => (tree, None),
             Lockstep::Ended(end) => return Ok(end),
         },
@@ -1566,14 +1601,16 @@ where
     let lockstep_time = walked.lockstep_time;
 
     let tree = OracleTree::new(&walked.outcome);
-    let resume = resume_from.as_ref().map(|from| {
-        Resume::new(&tree, from.mode, from.closed.clone(), &from.in_flight)
-    });
+    let resume = resume_from
+        .as_ref()
+        .map(|from| Resume::new(&tree, from.mode, from.closed.clone(), &from.in_flight));
     let (left, right) = (setup.left_inst, setup.right_inst);
     let (unfold, part_ops, judgement) = match kind {
         JobKind::Equivalence => (
-            invariant_ops(project, left, right, &walked.relations, &walked.helpers).map_err(EcExportError::from)?,
-            leaf_part_ops(project, left, right, &walked.relations, &walked.helpers).map_err(EcExportError::from)?,
+            invariant_ops(project, left, right, &walked.relations, &walked.helpers)
+                .map_err(EcExportError::from)?,
+            leaf_part_ops(project, left, right, &walked.relations, &walked.helpers)
+                .map_err(EcExportError::from)?,
             Judgement::Equiv,
         ),
         // `Comp_<C>.side_inv_<C>` first: the premise unfolded is the one that mentions it
@@ -1744,7 +1781,11 @@ impl EquivalenceTactics {
         let mut out = String::new();
         match &self.composition {
             Some(c) => {
-                let _ = writeln!(out, "tactics for {} (side invariants of {c})", self.proof_file);
+                let _ = writeln!(
+                    out,
+                    "tactics for {} (side invariants of {c})",
+                    self.proof_file
+                );
             }
             None => {
                 let _ = writeln!(

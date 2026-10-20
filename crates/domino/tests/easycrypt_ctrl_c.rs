@@ -86,7 +86,15 @@ fn translate(project: &str, out: &Path) {
 fn tactics(out: &Path, easycrypt: &Path) -> Child {
     translate("hello-world", out);
     Command::new(env!("CARGO_BIN_EXE_domino"))
-        .args(["easycrypt", "prove", "--theorem", "Proof", "--progress", "none", "--project"])
+        .args([
+            "easycrypt",
+            "prove",
+            "--theorem",
+            "Proof",
+            "--progress",
+            "none",
+            "--project",
+        ])
         .arg(workspace().join("example-projects/hello-world"))
         .arg("--out")
         .arg(out)
@@ -163,8 +171,10 @@ fn ctrl_c_interrupts_the_running_sentence_seals_the_oracle_and_exits_130() {
     );
 
     // the oracle in flight is sealed: what was accepted, then its open goal admitted
-    let text = std::fs::read_to_string(theorem.join("Eq_medium_composition_small_composition_UsefulOracle.ec"))
-        .unwrap();
+    let text = std::fs::read_to_string(
+        theorem.join("Eq_medium_composition_small_composition_UsefulOracle.ec"),
+    )
+    .unwrap();
     assert!(
         text.contains(
             "(* d_UsefulOracle *)\n+ proc; inline.\n  admit. (* domino: router open-goal; interrupted *)\n"
@@ -172,9 +182,10 @@ fn ctrl_c_interrupts_the_running_sentence_seals_the_oracle_and_exits_130() {
         "{text}"
     );
     // the report names it, its counts are the file's, and the summary still prints
-    let report =
-        std::fs::read_to_string(theorem.join("progress/Eq_medium_composition_small_composition/report.txt"))
-            .unwrap();
+    let report = std::fs::read_to_string(
+        theorem.join("progress/Eq_medium_composition_small_composition/report.txt"),
+    )
+    .unwrap();
     let line = "interrupted: sealed UsefulOracle with 1 admits at node router";
     assert!(report.contains(line), "{report}");
     assert!(report.contains("1 admits (interrupted 1)"), "{report}");
@@ -200,7 +211,9 @@ fn ctrl_c_interrupts_the_running_sentence_seals_the_oracle_and_exits_130() {
     );
     assert!(!page.contains("timed out"));
     // story 36, 68: the transcript is in the oracle's folder, and the lock is gone
-    assert!(job_dir(&theorem).join("UsefulOracle/ec-transcript.jsonl").is_file());
+    assert!(job_dir(&theorem)
+        .join("UsefulOracle/ec-transcript.jsonl")
+        .is_file());
     assert!(!job_dir(&theorem).join("UsefulOracle.lock").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -219,7 +232,9 @@ fn a_second_ctrl_c_exits_130_without_waiting_for_easycrypt() {
     assert_eq!(status.code(), Some(130));
     assert!(took < Duration::from_secs(2), "{took:?}");
     // the second Ctrl-C exits from the signal handler, which removes the lock too
-    assert!(!job_dir(&dir.join("out/Proof")).join("UsefulOracle.lock").exists());
+    assert!(!job_dir(&dir.join("out/Proof"))
+        .join("UsefulOracle.lock")
+        .exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -235,12 +250,19 @@ fn holder() -> Child {
 
 /// miette wraps long messages: one line, single spaces, no margin bars.
 fn flat(text: &str) -> String {
-    text.replace('\u{2502}', " ").split_whitespace().collect::<Vec<_>>().join(" ")
+    text.replace('\u{2502}', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn write_lock(dir: &Path, pid: u32) {
     std::fs::create_dir_all(dir).unwrap();
-    std::fs::write(dir.join("UsefulOracle.lock"), format!("{{\"pid\":{pid},\"started\":1700000000}}\n")).unwrap();
+    std::fs::write(
+        dir.join("UsefulOracle.lock"),
+        format!("{{\"pid\":{pid},\"started\":1700000000}}\n"),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -254,7 +276,15 @@ fn a_second_job_on_the_same_oracle_skips_it_until_the_first_is_killed() {
     write_lock(&job, first.id());
     let prove = |easycrypt: &Path| {
         Command::new(env!("CARGO_BIN_EXE_domino"))
-            .args(["easycrypt", "prove", "--theorem", "Proof", "--progress", "none", "--project"])
+            .args([
+                "easycrypt",
+                "prove",
+                "--theorem",
+                "Proof",
+                "--progress",
+                "none",
+                "--project",
+            ])
             .arg(workspace().join("example-projects/hello-world"))
             .arg("--out")
             .arg(&out)
@@ -283,7 +313,14 @@ fn a_second_job_on_the_same_oracle_skips_it_until_the_first_is_killed() {
 
     // translation is refused too, even with --force, while the lock is live
     let translation = Command::new(env!("CARGO_BIN_EXE_domino"))
-        .args(["easycrypt", "export", "--force", "--progress", "none", "--project"])
+        .args([
+            "easycrypt",
+            "export",
+            "--force",
+            "--progress",
+            "none",
+            "--project",
+        ])
         .arg(workspace().join("example-projects/hello-world"))
         .arg("--out")
         .arg(&out)
@@ -291,7 +328,12 @@ fn a_second_job_on_the_same_oracle_skips_it_until_the_first_is_killed() {
         .unwrap();
     let text = flat(&String::from_utf8_lossy(&translation.stderr));
     assert!(!translation.status.success(), "{text}");
-    assert!(text.contains("Eq_medium_composition_small_composition/UsefulOracle is being proved by pid"), "{text}");
+    assert!(
+        text.contains(
+            "Eq_medium_composition_small_composition/UsefulOracle is being proved by pid"
+        ),
+        "{text}"
+    );
 
     // kill -9 the holder: its lock is stale, and a new job takes it over
     first.kill().unwrap();
@@ -307,13 +349,24 @@ fn a_second_job_on_the_same_oracle_skips_it_until_the_first_is_killed() {
 
     // and with the stale lock gone, translation is allowed again
     let translation = Command::new(env!("CARGO_BIN_EXE_domino"))
-        .args(["easycrypt", "export", "--force", "--progress", "none", "--project"])
+        .args([
+            "easycrypt",
+            "export",
+            "--force",
+            "--progress",
+            "none",
+            "--project",
+        ])
         .arg(workspace().join("example-projects/hello-world"))
         .arg("--out")
         .arg(&out)
         .output()
         .unwrap();
-    assert!(translation.status.success(), "{}", String::from_utf8_lossy(&translation.stderr));
+    assert!(
+        translation.status.success(),
+        "{}",
+        String::from_utf8_lossy(&translation.stderr)
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -325,7 +378,17 @@ fn a_failed_job_releases_its_lock() {
     translate("hello-world", &out);
     // an oracle that does not exist is an error after the lock is taken
     let output = Command::new(env!("CARGO_BIN_EXE_domino"))
-        .args(["easycrypt", "prove", "--theorem", "Proof", "--oracle", "NoSuchOracle", "--progress", "none", "--project"])
+        .args([
+            "easycrypt",
+            "prove",
+            "--theorem",
+            "Proof",
+            "--oracle",
+            "NoSuchOracle",
+            "--progress",
+            "none",
+            "--project",
+        ])
         .arg(workspace().join("example-projects/hello-world"))
         .arg("--out")
         .arg(&out)
@@ -333,6 +396,8 @@ fn a_failed_job_releases_its_lock() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(!job_dir(&out.join("Proof")).join("UsefulOracle.lock").exists());
+    assert!(!job_dir(&out.join("Proof"))
+        .join("UsefulOracle.lock")
+        .exists());
     let _ = std::fs::remove_dir_all(&dir);
 }

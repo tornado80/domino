@@ -149,9 +149,7 @@ pub fn translate_expr(
         ExpressionKind::Bot => Ok(EcExpr::Unit),
         ExpressionKind::BitsLiteral(literal, ty) => translate_bits_literal(literal, ty),
         ExpressionKind::Identifier(id) => resolve_identifier(id, span),
-        ExpressionKind::None(inner_ty) => {
-            Ok(EcExpr::None_(translate_type(inner_ty, span)?))
-        }
+        ExpressionKind::None(inner_ty) => Ok(EcExpr::None_(translate_type(inner_ty, span)?)),
         ExpressionKind::Some(inner) => Ok(EcExpr::Some_(Box::new(translate_expr(
             inner,
             span,
@@ -178,9 +176,11 @@ pub fn translate_expr(
         ExpressionKind::Tuple(items) if items.len() == 1 => {
             translate_expr(&items[0], span, resolve_identifier)
         }
-        ExpressionKind::Tuple(items) => {
-            Ok(EcExpr::Tuple(translate_all(items, span, resolve_identifier)?))
-        }
+        ExpressionKind::Tuple(items) => Ok(EcExpr::Tuple(translate_all(
+            items,
+            span,
+            resolve_identifier,
+        )?)),
         ExpressionKind::FnCall(id, args) => {
             let name = id
                 .as_theorem_identifier()
@@ -314,7 +314,10 @@ fn translate_all(
 /// for the left-associative `^^`. Domino's grammar never produces an empty
 /// `Xor`.
 fn fold_left(op: EcBinop, mut exprs: Vec<EcExpr>) -> EcExpr {
-    assert!(!exprs.is_empty(), "Domino never produces an empty n-ary boolean expression");
+    assert!(
+        !exprs.is_empty(),
+        "Domino never produces an empty n-ary boolean expression"
+    );
     let first = exprs.remove(0);
     exprs.into_iter().fold(first, |acc, e| EcExpr::Binop {
         op,
@@ -380,17 +383,26 @@ mod tests {
 
     #[test]
     fn type_integer() {
-        assert_eq!(translate_type(&Type::integer(), span()).unwrap(), EcType::Int);
+        assert_eq!(
+            translate_type(&Type::integer(), span()).unwrap(),
+            EcType::Int
+        );
     }
 
     #[test]
     fn type_boolean() {
-        assert_eq!(translate_type(&Type::boolean(), span()).unwrap(), EcType::Bool);
+        assert_eq!(
+            translate_type(&Type::boolean(), span()).unwrap(),
+            EcType::Bool
+        );
     }
 
     #[test]
     fn type_empty() {
-        assert_eq!(translate_type(&Type::empty(), span()).unwrap(), EcType::Unit);
+        assert_eq!(
+            translate_type(&Type::empty(), span()).unwrap(),
+            EcType::Unit
+        );
     }
 
     #[test]
@@ -634,10 +646,7 @@ mod tests {
                 _ => unreachable!(),
             }
         };
-        assert_eq!(
-            translate_expr(&e, span(), &mut resolver).unwrap(),
-            var("x")
-        );
+        assert_eq!(translate_expr(&e, span(), &mut resolver).unwrap(), var("x"));
     }
 
     #[test]
@@ -681,7 +690,10 @@ mod tests {
 
     #[test]
     fn expr_table_access() {
-        let id = Identifier::Generated("t".to_string(), Type::table(Type::integer(), Type::boolean()));
+        let id = Identifier::Generated(
+            "t".to_string(),
+            Type::table(Type::integer(), Type::boolean()),
+        );
         let e = Expression::from_kind(ExpressionKind::TableAccess(id, Box::new(int_lit(1))));
         let mut resolver = |id: &Identifier, _s: SourceSpan| match id {
             Identifier::Generated(name, _) => Ok(EcExpr::Var(name.clone())),
@@ -708,7 +720,10 @@ mod tests {
     #[test]
     fn expr_tuple_of_one_is_elided_to_its_element() {
         let e = Expression::from_kind(ExpressionKind::Tuple(vec![int_lit(1)]));
-        assert_eq!(translate_expr(&e, span(), &mut no_resolver).unwrap(), EcExpr::Int(1));
+        assert_eq!(
+            translate_expr(&e, span(), &mut no_resolver).unwrap(),
+            EcExpr::Int(1)
+        );
     }
 
     #[test]
@@ -746,7 +761,10 @@ mod tests {
 
     #[test]
     fn expr_arith_binops() {
-        let cases: Vec<(fn(Box<Expression>, Box<Expression>) -> ExpressionKind, EcBinop)> = vec![
+        let cases: Vec<(
+            fn(Box<Expression>, Box<Expression>) -> ExpressionKind,
+            EcBinop,
+        )> = vec![
             (ExpressionKind::Add, EcBinop::Add),
             (ExpressionKind::Sub, EcBinop::Sub),
             (ExpressionKind::Mul, EcBinop::Mul),

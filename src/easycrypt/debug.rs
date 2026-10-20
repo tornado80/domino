@@ -151,7 +151,12 @@ where
                 oracle,
                 &LockstepDebugOptions::easycrypt(options.timeout_ms),
                 backend,
-                Some(debug_dir(theorem_out, &eq.left_name, &eq.right_name, oracle)),
+                Some(debug_dir(
+                    theorem_out,
+                    &eq.left_name,
+                    &eq.right_name,
+                    oracle,
+                )),
                 observer.as_mut(),
                 stop,
             )?;
@@ -211,7 +216,10 @@ where
         }
     }
     let mut entries = Vec::new();
-    for o in oracles.iter().filter(|o| oracle.is_none_or(|w| w == o.as_str())) {
+    for o in oracles
+        .iter()
+        .filter(|o| oracle.is_none_or(|w| w == o.as_str()))
+    {
         let mut observer = make_observer();
         let run = run_side_command(
             project,

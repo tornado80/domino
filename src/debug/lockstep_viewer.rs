@@ -26,7 +26,9 @@ use serde_derive::Serialize;
 use crate::debug::driver::ClaimInfo;
 use crate::debug::lockstep::{ChildOutcome, LockstepOutcome, PairRecord};
 use crate::debug::lockstep_run::{ClaimCounts, VerdictCounts};
-use crate::debug::report::{EFFECT_JS, GRID_CSS, LISTING_JS, VERDICTS_CSS, VERDICTS_JS, VIEWER_CSS};
+use crate::debug::report::{
+    EFFECT_JS, GRID_CSS, LISTING_JS, VERDICTS_CSS, VERDICTS_JS, VIEWER_CSS,
+};
 
 /// What the Domino verdicts say about everything below one stuck point: how
 /// many joint paths lie below it, how each claim fared on them, and which state
@@ -106,10 +108,13 @@ pub fn stuck_rollups(outcome: &LockstepOutcome, claims: &[ClaimInfo]) -> Vec<Stu
                     }
                 }
                 for r in pair.parts().iter().filter(|r| r.verdict.is_failure()) {
-                    by_relation.entry(&r.name).or_default().push(RelationFailure {
-                        pair: pair.id.clone(),
-                        verdict: r.verdict.slug(),
-                    });
+                    by_relation
+                        .entry(&r.name)
+                        .or_default()
+                        .push(RelationFailure {
+                            pair: pair.id.clone(),
+                            verdict: r.verdict.slug(),
+                        });
                 }
             }
             rollup.relations = by_relation
@@ -160,8 +165,8 @@ mod tests {
     use super::*;
     use crate::debug::driver::{ClaimVerdict, PartVerdict, StopReason, TerminalView, Verdict};
     use crate::debug::lockstep::{
-        HeadKind, HeadView, JointChild, JointNode, JointTree, NodeKind, PairSide, 
-        SideStep, SideView, StuckPoint, StuckReason,
+        HeadKind, HeadView, JointChild, JointNode, JointTree, NodeKind, PairSide, SideStep,
+        SideView, StuckPoint, StuckReason,
     };
 
     fn side() -> SideView {
@@ -259,7 +264,12 @@ mod tests {
     }
 
     fn counts<'a>(rollup: &'a StuckRollup, claim: &str) -> &'a VerdictCounts {
-        &rollup.claims.iter().find(|c| c.claim == claim).unwrap().counts
+        &rollup
+            .claims
+            .iter()
+            .find(|c| c.claim == claim)
+            .unwrap()
+            .counts
     }
 
     fn stuck(id: &str, node: usize) -> StuckPoint {
@@ -389,7 +399,10 @@ mod tests {
         let live = render_html("{}", &[], true);
         let done = render_html("{}", &[], false);
         assert!(live.contains(REFRESH_TAG));
-        assert!(!done.contains("<meta http-equiv"), "the final page must not refresh");
+        assert!(
+            !done.contains("<meta http-equiv"),
+            "the final page must not refresh"
+        );
         assert_eq!(without_refresh(&live), done);
     }
 
@@ -407,7 +420,10 @@ mod tests {
         assert!(page.contains(LISTING_JS));
         assert!(!page.contains("__GRID_CSS__") && !page.contains("__LISTING_JS__"));
         for id in ["cell-tree", "cell-detail", "cell-left", "cell-right"] {
-            assert!(page.contains(&format!("id=\"{id}\"")), "the grid has the cell {id}");
+            assert!(
+                page.contains(&format!("id=\"{id}\"")),
+                "the grid has the cell {id}"
+            );
         }
     }
 

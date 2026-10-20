@@ -205,7 +205,11 @@ fn the_old_mode_flags_are_gone_from_the_plain_command() {
     for flag in ["--tactics", "--check-alignment", "--debug"] {
         let out = easycrypt(&hello, &base, &[flag]);
         assert!(!out.status.success(), "{flag}");
-        assert!(stderr(&out).contains("unexpected argument"), "{flag}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("unexpected argument"),
+            "{flag}: {}",
+            stderr(&out)
+        );
     }
     assert!(!base.exists(), "nothing was written");
 }
@@ -244,7 +248,8 @@ fn a_saved_joint_tree_blocks_translation_and_force_deletes_it() {
     let out = easycrypt(&hello, &base, &[]);
     assert!(out.status.success(), "{}", stderr(&out));
 
-    let tree = base.join("Proof/session/Eq_medium_composition_small_composition/UsefulOracle.tree.json");
+    let tree =
+        base.join("Proof/session/Eq_medium_composition_small_composition/UsefulOracle.tree.json");
     std::fs::create_dir_all(tree.parent().unwrap()).unwrap();
     std::fs::write(&tree, "{}").unwrap();
     let out = easycrypt(&hello, &base, &[]);
@@ -297,7 +302,11 @@ fn translation_flags_are_export_only_and_project_and_out_are_global() {
     ] {
         let out = domino_args(args);
         assert!(!out.status.success(), "{args:?}");
-        assert!(stderr(&out).contains("unexpected argument"), "{args:?}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("unexpected argument"),
+            "{args:?}: {}",
+            stderr(&out)
+        );
     }
     // `--project` and `--out` work on either side of the subcommand
     let out = domino_args(&[

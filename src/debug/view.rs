@@ -46,6 +46,9 @@ use crate::{
     theorem::GameInstance,
 };
 
+use super::inline_rules::{
+    always_exits, as_bool, condition_value, fold, fresh_name, is_literal, tail_positions, EndLabels,
+};
 use super::ir::{
     render_expr_with, render_pattern, render_signature, render_type, resolve_const, InlineError,
     MAX_INLINE_DEPTH,
@@ -77,7 +80,7 @@ pub fn render_oracle_view(
         comp,
         consts,
         lossy,
-        labels: HashSet::new(),
+        labels: EndLabels::default(),
         text: String::new(),
     };
     let frame = Frame::new(
@@ -296,15 +299,6 @@ fn return_names(
         .collect()
 }
 
-/// `name_2`, `name_3`, … (`pk_2` for `pk_`), the first one not in `taken`.
-fn fresh_name(name: &str, taken: &HashSet<String>) -> String {
-    let sep = if name.ends_with('_') { "" } else { "_" };
-    (2..)
-        .map(|k| format!("{name}{sep}{k}"))
-        .find(|n| !taken.contains(n))
-        .expect("an unbounded range has a fresh name")
-}
-
 /// The name of a frame-local identifier; `None` for state, constants and `_`.
 fn local_name(id: &Identifier) -> Option<&str> {
     let name = match id {
@@ -416,25 +410,6 @@ fn assigned_locals(block: &[Statement]) -> HashSet<String> {
     out
 }
 
-fn as_bool(e: &Expression) -> Option<bool> {
-    match e.kind() {
-        ExpressionKind::BooleanLiteral(b) => Some(b == "true"),
-        _ => None,
-    }
-}
-
-fn is_literal(e: &Expression) -> bool {
-    matches!(
-        e.kind(),
-        ExpressionKind::BooleanLiteral(_)
-            | ExpressionKind::IntegerLiteral(_)
-            | ExpressionKind::StringLiteral(_)
-            | ExpressionKind::BitsLiteral(..)
-            | ExpressionKind::None(_)
-            | ExpressionKind::Bot
-    )
-}
-
 /// An argument that can stand in for a parameter without changing meaning or
 /// hurting readability.
 fn is_atom(e: &Expression) -> bool {
@@ -449,55 +424,6 @@ fn contains_unwrap(e: &Expression) -> bool {
         )
     })
     .0
-}
-
-/// Evaluates the Boolean structure of `e` as far as literals allow.
-fn fold(e: &Expression) -> Expression {
-    use ExpressionKind as K;
-    e.map(|sub| {
-        let folded = match sub.kind() {
-            K::Not(x) => as_bool(x).map(|b| Expression::boolean(!b)),
-            K::And(xs) | K::Or(xs) => {
-                // `absorbing` decides the result; `neutral` operands drop out.
-                let absorbing = !matches!(sub.kind(), K::And(_));
-                if xs.iter().any(|x| as_bool(x) == Some(absorbing)) {
-                    Some(Expression::boolean(absorbing))
-                } else {
-                    let rest: Vec<_> = xs
-                        .iter()
-                        .filter(|x| as_bool(x).is_none())
-                        .cloned()
-                        .collect();
-                    match rest.len() {
-                        0 => Some(Expression::boolean(!absorbing)),
-                        1 => rest.into_iter().next(),
-                        n if n == xs.len() => None,
-                        _ if absorbing => Some(Expression::from_kind(K::Or(rest))),
-                        _ => Some(Expression::from_kind(K::And(rest))),
-                    }
-                }
-            }
-            K::Equals(xs) if xs.len() == 2 && xs.iter().all(is_literal) => {
-                Some(Expression::boolean(xs[0] == xs[1]))
-            }
-            K::LessThen(l, r)
-            | K::GreaterThen(l, r)
-            | K::LessThenEq(l, r)
-            | K::GreaterThenEq(l, r) => match (l.kind(), r.kind()) {
-                (K::IntegerLiteral(l), K::IntegerLiteral(r)) => {
-                    Some(Expression::boolean(match sub.kind() {
-                        K::LessThen(..) => l < r,
-                        K::GreaterThen(..) => l > r,
-                        K::LessThenEq(..) => l <= r,
-                        _ => l >= r,
-                    }))
-                }
-                _ => None,
-            },
-            _ => None,
-        };
-        folded.unwrap_or(sub)
-    })
 }
 
 /// `s` wrapped in parentheses unless one pair already encloses all of it.
@@ -524,7 +450,7 @@ struct View<'a> {
     consts: &'a [(String, Expression)],
     lossy: bool,
     /// Every `goto` label handed out so far.
-    labels: HashSet<String>,
+    labels: EndLabels,
     text: String,
 }
 
@@ -534,22 +460,6 @@ impl View<'_> {
             self.text.push_str("    ");
         }
         let _ = writeln!(self.text, "{line}");
-    }
-
-    /// A fresh label for the end of `frame`: `end_Instance_Oracle`, or
-    /// `end_Instance_Oracle_2`, … when the oracle is inlined more than once.
-    fn end_label(&mut self, frame: &Frame) -> String {
-        let base: String = format!("end_{}", frame.name)
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '_' })
-            .collect();
-        let label = if self.labels.contains(&base) {
-            fresh_name(&base, &self.labels)
-        } else {
-            base
-        };
-        self.labels.insert(label.clone());
-        label
     }
 
     /// `e` in `frame`'s names, with constants resolved, the proof path's
@@ -608,30 +518,16 @@ impl View<'_> {
         indent: usize,
         tail: bool,
     ) -> Result<(), InlineError> {
-        for (i, stmt) in block.iter().enumerate() {
-            let exits = self.exits(std::slice::from_ref(stmt), frame);
-            self.stmt(stmt, frame, indent, tail && (exits || i + 1 == block.len()))?;
+        let value = |c: &Expression| condition_value(&self.expr(c, frame));
+        let tails = tail_positions(block, tail, &value);
+        let exits: Vec<bool> = block.iter().map(|s| always_exits(s, &value)).collect();
+        for ((stmt, tail), exits) in block.iter().zip(tails).zip(exits) {
+            self.stmt(stmt, frame, indent, tail)?;
             if exits {
                 break;
             }
         }
         Ok(())
-    }
-
-    /// Every path through `block` returns or aborts, counting only the
-    /// branches that run once the proof path's constants are substituted.
-    fn exits(&self, block: &[Statement], frame: &Frame) -> bool {
-        block.iter().any(|stmt| match stmt {
-            Statement::Return(..) | Statement::Abort(_) => true,
-            Statement::IfThenElse(ite) => match as_bool(&self.expr(&ite.cond, frame)) {
-                Some(true) => self.exits(&ite.then_block.0, frame),
-                Some(false) => self.exits(&ite.else_block.0, frame),
-                None => {
-                    self.exits(&ite.then_block.0, frame) && self.exits(&ite.else_block.0, frame)
-                }
-            },
-            _ => false,
-        })
     }
 
     fn stmt(
@@ -664,7 +560,7 @@ impl View<'_> {
                 }
                 // An early return of an inlined callee jumps past the rest of it.
                 if matches!(frame.ret, Ret::Bind(_)) && !tail {
-                    let label = frame.end.get_or_init(|| self.end_label(frame));
+                    let label = frame.end.get_or_init(|| self.labels.fresh(&frame.name));
                     let line = format!("goto {label};  // returns from {}", frame.name);
                     self.emit(indent, &line);
                 }

@@ -76,7 +76,12 @@ pub fn is_oracle_file(exported: &ExportedTheorem, rel: &Path) -> bool {
         .equivalences
         .iter()
         .flat_map(|eq| eq.oracle_files.iter())
-        .chain(exported.side_invariants.iter().flat_map(|s| s.oracle_files.iter()))
+        .chain(
+            exported
+                .side_invariants
+                .iter()
+                .flat_map(|s| s.oracle_files.iter()),
+        )
         .any(|(_, file)| Path::new(file) == rel)
 }
 
@@ -339,7 +344,11 @@ impl SessionRecord {
             })
             .collect::<Vec<_>>();
         Some(SessionRecord {
-            version: records.iter().map(|r| r.version).min().unwrap_or(first.version),
+            version: records
+                .iter()
+                .map(|r| r.version)
+                .min()
+                .unwrap_or(first.version),
             complete: entries.iter().all(|o| o.status == OracleStatus::Done),
             oracles: entries,
             ..first.clone()
@@ -478,12 +487,11 @@ pub fn split_equivalence_record(
     for entry in &whole.oracles {
         let path = oracle_record_path(theorem_out, proof_file, &entry.name);
         let record = whole.only(&entry.name).expect("an entry of the record");
-        let wrote = create_if_absent(&path, &record.to_json()).map_err(|e| {
-            SessionRecordError::Write {
+        let wrote =
+            create_if_absent(&path, &record.to_json()).map_err(|e| SessionRecordError::Write {
                 path: path.clone(),
                 message: e.to_string(),
-            }
-        })?;
+            })?;
         created += usize::from(wrote);
     }
     Ok(created)
@@ -876,22 +884,26 @@ mod tests {
     fn exported_with(files: &[&str]) -> ExportedTheorem {
         let mut exported = ExportedTheorem::default();
         for f in files {
-            exported.files.insert(PathBuf::from(f), format!("text of {f}"));
+            exported
+                .files
+                .insert(PathBuf::from(f), format!("text of {f}"));
         }
-        exported.equivalences.push(crate::writers::easycrypt::export::EquivalenceReport {
-            proofstep: 0,
-            left_name: "L".into(),
-            right_name: "R".into(),
-            invariants_file: "Eq_L_R_Invariants.ec".into(),
-            proof_file: "Eq_L_R.ec".into(),
-            oracle_files: vec![("O".into(), "Eq_L_R_O.ec".into())],
-            oracle_count: 1,
-            admit_count: 1,
-            oracle_set_mismatch: None,
-            state_relations: vec![],
-            helpers: vec![],
-            side_compositions: vec![],
-        });
+        exported
+            .equivalences
+            .push(crate::writers::easycrypt::export::EquivalenceReport {
+                proofstep: 0,
+                left_name: "L".into(),
+                right_name: "R".into(),
+                invariants_file: "Eq_L_R_Invariants.ec".into(),
+                proof_file: "Eq_L_R.ec".into(),
+                oracle_files: vec![("O".into(), "Eq_L_R_O.ec".into())],
+                oracle_count: 1,
+                admit_count: 1,
+                oracle_set_mismatch: None,
+                state_relations: vec![],
+                helpers: vec![],
+                side_compositions: vec![],
+            });
         exported
     }
 
@@ -900,15 +912,22 @@ mod tests {
         let exported = exported_with(&[]);
         assert!(is_oracle_file(&exported, Path::new("Eq_L_R_O.ec")));
         assert!(!is_oracle_file(&exported, Path::new("Eq_L_R.ec")));
-        assert!(!is_oracle_file(&exported, Path::new("Eq_L_R_Invariants.ec")));
+        assert!(!is_oracle_file(
+            &exported,
+            Path::new("Eq_L_R_Invariants.ec")
+        ));
         assert!(!is_oracle_file(&exported, Path::new("Types.ec")));
     }
 
     #[test]
     fn ensure_translation_files_creates_the_missing_glue_and_invariants_but_not_an_oracle_file() {
         let dir = scratch("invariants");
-        let exported =
-            exported_with(&["Eq_L_R.ec", "Eq_L_R_O.ec", "Eq_L_R_Invariants.ec", "Types.ec"]);
+        let exported = exported_with(&[
+            "Eq_L_R.ec",
+            "Eq_L_R_O.ec",
+            "Eq_L_R_Invariants.ec",
+            "Types.ec",
+        ]);
         let created = ensure_translation_files(&exported, &dir).unwrap();
         assert_eq!(
             created,
@@ -1048,11 +1067,17 @@ mod tests {
         let record = SessionRecord::new("T", "L", "R", vec![b]);
         assert_eq!(record.version, 3);
         let json = record.to_json();
-        assert_eq!(serde_json::from_str::<SessionRecord>(&json).unwrap(), record);
+        assert_eq!(
+            serde_json::from_str::<SessionRecord>(&json).unwrap(),
+            record
+        );
         // an interrupted oracle has no script, only its closed nodes
         assert!(!json.contains("\"script\": \""), "{json}");
         assert_eq!(record.oracles[0].in_flight(), Some("N7"));
-        assert_eq!(OracleRecord::new("C", OracleStatus::Pending).in_flight(), None);
+        assert_eq!(
+            OracleRecord::new("C", OracleStatus::Pending).in_flight(),
+            None
+        );
     }
 
     #[test]
@@ -1165,10 +1190,19 @@ mod tests {
     fn a_tree_saved_before_the_exit_guard_rename_reads_and_writes_the_new_names() {
         let tree = saved_tree();
         let left = &tree.outcome.tree.nodes[0].left;
-        assert_eq!(left.exit_guard, Some(crate::debug::lockstep::ExitGuardKind::DoneFlag));
+        assert_eq!(
+            left.exit_guard,
+            Some(crate::debug::lockstep::ExitGuardKind::DoneFlag)
+        );
         let written = tree.to_json();
-        assert!(written.contains("\"exit_guard\":\"done-flag\""), "{written}");
-        assert!(!written.contains("plumbing") && !written.contains("done-guard"), "{written}");
+        assert!(
+            written.contains("\"exit_guard\":\"done-flag\""),
+            "{written}"
+        );
+        assert!(
+            !written.contains("plumbing") && !written.contains("done-guard"),
+            "{written}"
+        );
     }
 
     #[test]
@@ -1222,7 +1256,12 @@ mod tests {
         let path = equivalence_record_path(&dir, "Eq_L_R.ec");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, whole.to_json()).unwrap();
-        let own_b = SessionRecord::new("T", "L", "R", vec![OracleRecord::new("B", OracleStatus::Done)]);
+        let own_b = SessionRecord::new(
+            "T",
+            "L",
+            "R",
+            vec![OracleRecord::new("B", OracleStatus::Done)],
+        );
         std::fs::write(oracle_record_path(&dir, "Eq_L_R.ec", "B"), own_b.to_json()).unwrap();
 
         assert_eq!(split_equivalence_record(&dir, "Eq_L_R.ec").unwrap(), 1);
@@ -1240,14 +1279,27 @@ mod tests {
         assert_eq!(split_equivalence_record(&dir, "Eq_L_R.ec").unwrap(), 0);
         let names = ["A", "B", "C"].map(String::from);
         let joined = SessionRecord::join(&[read("B"), read("A")], &names[..2]).unwrap();
-        assert_eq!(joined.oracles.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["A", "B"]);
+        assert_eq!(
+            joined
+                .oracles
+                .iter()
+                .map(|o| o.name.as_str())
+                .collect::<Vec<_>>(),
+            ["A", "B"]
+        );
         assert!(joined.complete);
         // an oracle without a record is pending, so the equivalence is not complete
         let joined = SessionRecord::join(&[read("A"), read("B")], &names).unwrap();
-        assert_eq!(joined.oracles[2], OracleRecord::new("C", OracleStatus::Pending));
+        assert_eq!(
+            joined.oracles[2],
+            OracleRecord::new("C", OracleStatus::Pending)
+        );
         assert!(!joined.complete);
         assert!(SessionRecord::join(&[], &names).is_none());
-        assert_eq!(split_equivalence_record(&scratch("split-none"), "Eq_L_R.ec").unwrap(), 0);
+        assert_eq!(
+            split_equivalence_record(&scratch("split-none"), "Eq_L_R.ec").unwrap(),
+            0
+        );
     }
 
     #[test]
@@ -1258,7 +1310,8 @@ mod tests {
     }
 
     #[test]
-    fn removing_records_deletes_every_session_json_and_tree_json_under_the_directory_and_nothing_else() {
+    fn removing_records_deletes_every_session_json_and_tree_json_under_the_directory_and_nothing_else(
+    ) {
         let dir = scratch("remove");
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::create_dir_all(dir.join("session/Eq_A_B")).unwrap();
@@ -1362,7 +1415,9 @@ mod tests {
         let jobs = live_jobs(&out).unwrap();
         let names: Vec<&str> = jobs.iter().map(|j| j.job.as_str()).collect();
         assert_eq!(names, ["Eq_A_B/O", "Eq_E_F"]);
-        let err = check_no_live_jobs(std::slice::from_ref(&out)).unwrap_err().to_string();
+        let err = check_no_live_jobs(std::slice::from_ref(&out))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("Eq_A_B/O is being proved by pid"), "{err}");
         assert!(!err.contains("Eq_C_D"), "{err}");
         std::fs::remove_dir_all(out.join("progress/Eq_A_B")).unwrap();

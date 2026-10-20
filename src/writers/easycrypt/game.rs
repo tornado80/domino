@@ -82,7 +82,10 @@ pub fn compute_game_files_observed(
         let mangled = interfaces.comp_mangled[&comp.name].clone();
         scope.item(&format!("Comp_{mangled}"));
         let file = render_game_file(&theorem.name, comp, &interfaces, &variant_name_map)?;
-        out.push(GameFile { name: mangled, file });
+        out.push(GameFile {
+            name: mangled,
+            file,
+        });
     }
     scope.finish();
     Ok(out)
@@ -296,7 +299,9 @@ pub(super) fn instance_module_names(comp: &Composition) -> Result<Vec<String>, E
 
 /// The router module of `comp`, `Game_<Comp>`, and the name of its abort
 /// flag variable.
-pub(crate) fn router_module_and_flag(comp: &Composition) -> Result<(String, String), EcExportError> {
+pub(crate) fn router_module_and_flag(
+    comp: &Composition,
+) -> Result<(String, String), EcExportError> {
     // `interfaces::build_interfaces_file` mangles every composition name in
     // one shared registry; mangling is a pure function of the name, so a
     // fresh registry gives the same spelling (a collision between two
@@ -321,7 +326,6 @@ fn render_game_file(
     let iface = &interfaces.iface_name[&comp.name];
     let adv = &interfaces.adv_name[&comp.name];
 
-
     let keys = package::compute_all_keys(comp);
     let variant_names: Vec<String> = keys
         .iter()
@@ -342,7 +346,10 @@ fn render_game_file(
     // instances that happened to mangle to the same name are caught as a
     // hard collision instead of silently colliding.
     let inst_mangled = instance_mangled_names(comp)?;
-    let clone_name: Vec<String> = inst_mangled.iter().map(|m| format!("Cloned_Pkg_{m}")).collect();
+    let clone_name: Vec<String> = inst_mangled
+        .iter()
+        .map(|m| format!("Cloned_Pkg_{m}"))
+        .collect();
     let inst_module_name = instance_module_names(comp)?;
 
     // The theory a package variant renders into is `Pkg_<Variant>.ec` (story
@@ -438,8 +445,9 @@ fn render_game_file(
                 continue;
             }
             let assigned = param_assignment(inst, name);
-            let mut resolver =
-                |id: &Identifier, s: SourceSpan| resolve_composition_const(id, s, &mut router_names);
+            let mut resolver = |id: &Identifier, s: SourceSpan| {
+                resolve_composition_const(id, s, &mut router_names)
+            };
             call_args.push(translate_expr(assigned, *pspan, &mut resolver)?);
         }
         init_body.push(EcStmt::Call {
@@ -544,7 +552,10 @@ fn render_game_file(
                 lhs: None,
                 module: router_module_name.clone(),
                 proc: "init".to_string(),
-                args: init_args.iter().map(|(n, _)| EcExpr::Var(n.clone())).collect(),
+                args: init_args
+                    .iter()
+                    .map(|(n, _)| EcExpr::Var(n.clone()))
+                    .collect(),
             },
             EcStmt::Call {
                 lhs: Some(EcLvalue::Var("b'".to_string())),
@@ -609,8 +620,9 @@ mod tests {
     fn load(dir: &str, theorem_name: &str) -> Vec<GameFile> {
         let files: &'static DirectoryFiles =
             Box::leak(Box::new(DirectoryFiles::load(Path::new(dir)).unwrap()));
-        let project: &'static DirectoryProject =
-            Box::leak(Box::new(DirectoryProject::load(PathBuf::from(dir), files).unwrap()));
+        let project: &'static DirectoryProject = Box::leak(Box::new(
+            DirectoryProject::load(PathBuf::from(dir), files).unwrap(),
+        ));
         let theorem = project.get_theorem(theorem_name).unwrap();
         let (theorem, _auxs) = EasyCryptTransform.transform_theorem(theorem).unwrap();
         compute_game_files(&theorem).unwrap()
@@ -707,7 +719,10 @@ mod tests {
                 _ => unreachable!(),
             })
             .collect();
-        assert_eq!(as_names, vec!["Cloned_Pkg_Rand", "Cloned_Pkg_Fwd", "Cloned_Pkg_Fwd2"]);
+        assert_eq!(
+            as_names,
+            vec!["Cloned_Pkg_Rand", "Cloned_Pkg_Fwd", "Cloned_Pkg_Fwd2"]
+        );
     }
 
     #[test]
@@ -797,7 +812,10 @@ mod tests {
         // for `DEM` (`DEM: { DEM_ENC: Scheme_DEM, DEM_DEC: Scheme_DEM, GET:
         // Key }` spans two callees — the story's own motivating multi-callee
         // case, §3.7).
-        let files = load("example-projects/kem-dem/kem-dem-cca-ssp", "kem_dem_cca_ssp");
+        let files = load(
+            "example-projects/kem-dem/kem-dem-cca-ssp",
+            "kem_dem_cca_ssp",
+        );
         let f = files.iter().find(|f| f.name == "Game_CCA_DEM").unwrap();
         assert_eq!(count_pkg_imports_modules(f), 1);
         let adapter = f
@@ -806,7 +824,9 @@ mod tests {
             .iter()
             .find(|item| matches!(item, EcItem::Module(m) if m.name == "Pkg_Imports_DEM"))
             .unwrap();
-        let EcItem::Module(m) = adapter else { unreachable!() };
+        let EcItem::Module(m) = adapter else {
+            unreachable!()
+        };
         assert_eq!(m.implements.as_deref(), Some("Pkg_DEM.DEM_Imports"));
     }
 
@@ -818,11 +838,11 @@ mod tests {
         // pass is impossible even though both imports come from the same
         // instance (`rand`) — an adapter is required, and its procs forward
         // to `Pkg_Inst_Rand.d_UsefulOracle`.
-        let files = load(
-            "test-projects/test-oracle-rename",
-            "Proof",
-        );
-        let f = files.iter().find(|f| f.name == "MediumComposition").unwrap();
+        let files = load("test-projects/test-oracle-rename", "Proof");
+        let f = files
+            .iter()
+            .find(|f| f.name == "MediumComposition")
+            .unwrap();
         assert_eq!(count_pkg_imports_modules(f), 1);
         let adapter = f
             .file
@@ -830,10 +850,15 @@ mod tests {
             .iter()
             .find(|item| matches!(item, EcItem::Module(m) if m.name == "Pkg_Imports_Fwd"))
             .unwrap();
-        let EcItem::Module(m) = adapter else { unreachable!() };
+        let EcItem::Module(m) = adapter else {
+            unreachable!()
+        };
         assert_eq!(m.implements.as_deref(), Some("Pkg_Fwd.Fwd_Imports"));
         let proc_names: Vec<&str> = m.procs.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(proc_names, vec!["d_AnotherUsefulOracle", "d_ChangeNameUsefulOracle"]);
+        assert_eq!(
+            proc_names,
+            vec!["d_AnotherUsefulOracle", "d_ChangeNameUsefulOracle"]
+        );
         for p in &m.procs {
             let EcStmt::Call { module, proc, .. } = &p.body.0[0] else {
                 panic!("expected the adapter proc's first statement to be a call");

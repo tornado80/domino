@@ -7,7 +7,7 @@
 //! as `easycrypt cli -json` shows it; [`ir_skeleton`] walks an [`InlinedOracle`], the lowering
 //! the lockstep execution runs on. [`super::align`] ties the two together.
 
-use crate::debug::ir::{InlBlock, InlStmt, InlinedOracle, Label, ExitGuard};
+use crate::debug::ir::{ExitGuard, InlBlock, InlStmt, InlinedOracle, Label};
 
 use super::json::Instr;
 
@@ -31,7 +31,10 @@ pub struct EcPos {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeKind {
     /// A conditional, with the skeletons of both blocks (`els` is empty when there is no else).
-    Branch { then: Skeleton, els: Skeleton },
+    Branch {
+        then: Skeleton,
+        els: Skeleton,
+    },
     Sampling,
     /// An IR terminal. EasyCrypt's own end is implicit: the end of the program.
     End,
@@ -113,7 +116,9 @@ fn ec_skeleton_at(stmts: &[Instr], path: &[(usize, Arm)]) -> Skeleton {
                             then: arm(Arm::Then, &stmt.then_block),
                             els: arm(Arm::Else, &stmt.else_block),
                         },
-                        stmt.cond.as_ref().map_or_else(String::new, |c| c.pp.clone()),
+                        stmt.cond
+                            .as_ref()
+                            .map_or_else(String::new, |c| c.pp.clone()),
                     )
                 }
             }
@@ -208,8 +213,9 @@ mod tests {
 
     /// A goal after `proc; inline.` on hello-world's `UsefulOracle` (story 25's binary, r2026.09):
     /// left is the router with the callee inlined, right the same without the extra call.
-    const FIXTURE: &str =
-        include_str!("../../testdata/easycrypt/story25/hello_world_useful_oracle_after_inline.json");
+    const FIXTURE: &str = include_str!(
+        "../../testdata/easycrypt/story25/hello_world_useful_oracle_after_inline.json"
+    );
 
     #[test]
     fn skeleton_of_the_json_program_keeps_decisions_and_drops_assignments() {
@@ -217,7 +223,11 @@ mod tests {
         let goal = response.proof.as_ref().unwrap().front.as_ref().unwrap();
         assert_eq!(goal.concl.kind, "equivS");
         let left = ec_skeleton(&goal.concl.left.as_ref().unwrap().stmt);
-        assert_eq!(left.len(), 1, "only the router's guard at top level: {left:#?}");
+        assert_eq!(
+            left.len(),
+            1,
+            "only the router's guard at top level: {left:#?}"
+        );
         assert!(left[0].text.contains("abort_flag"));
         let NodeKind::Branch { then, els } = &left[0].kind else {
             panic!("the router guard is a branch")

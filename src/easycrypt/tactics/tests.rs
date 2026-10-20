@@ -337,8 +337,12 @@ fn the_report_shows_each_oracles_time_by_role_under_its_goals_closed_line() {
         failed,
         timing: None,
     };
-    o.stats.time.add_sentence(&row(&Role::QuickClose, 1_200, true));
-    o.stats.time.add_sentence(&row(&Role::Structure, 1_500, false));
+    o.stats
+        .time
+        .add_sentence(&row(&Role::QuickClose, 1_200, true));
+    o.stats
+        .time
+        .add_sentence(&row(&Role::Structure, 1_500, false));
     o.stats.time.add_event(Event::Between, 300);
     let report = equivalence_with(vec![o]).render();
     let expected = "
@@ -372,10 +376,7 @@ fn the_admits_of_a_seal_have_their_own_reason_in_the_report() {
         goal: String::new(),
         smt: None,
     };
-    assert_eq!(
-        sealed.label(),
-        "(* domino: N3 open-goal; interrupted *)"
-    );
+    assert_eq!(sealed.label(), "(* domino: N3 open-goal; interrupted *)");
     let o = oracle_with(vec![
         admit(AdmitReason::Stuck, "S1"),
         sealed.clone(),
@@ -405,7 +406,9 @@ fn a_resumed_oracle_reports_where_it_resumed_and_what_it_kept() {
     });
     let report = equivalence_with(vec![o.clone()]).render();
     assert!(
-        report.contains("  PKENC: resumed at N7 (12 closed nodes kept, trust)\n  PKENC: lockstep 2 joint paths"),
+        report.contains(
+            "  PKENC: resumed at N7 (12 closed nodes kept, trust)\n  PKENC: lockstep 2 joint paths"
+        ),
         "{report}"
     );
     assert!(!report.contains("stale"), "{report}");
@@ -548,7 +551,13 @@ fn prior(plan: JobPlan) -> Option<SessionRecord> {
 #[test]
 fn without_a_record_a_job_proves_everything() {
     let out = tempfile::tempdir().unwrap();
-    let plan = plan_job(&eq_report(), out.path(), &TacticsOptions::default(), &names()).unwrap();
+    let plan = plan_job(
+        &eq_report(),
+        out.path(),
+        &TacticsOptions::default(),
+        &names(),
+    )
+    .unwrap();
     assert!(prior(plan).is_none());
 }
 
@@ -567,10 +576,19 @@ fn a_job_resumes_from_an_old_whole_equivalence_record_split_on_first_use() {
     let path = crate::easycrypt::job::equivalence_record_path(out.path(), "Eq_L_R.ec");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, whole.to_json()).unwrap();
-    let plan = plan_job(&eq_report(), out.path(), &TacticsOptions::default(), &names()).unwrap();
+    let plan = plan_job(
+        &eq_report(),
+        out.path(),
+        &TacticsOptions::default(),
+        &names(),
+    )
+    .unwrap();
     let record = prior(plan).expect("resumed");
     assert!(record.oracle("A").unwrap().is_resumable());
-    assert_eq!(record.oracle("B").unwrap().status, OracleStatus::Interrupted);
+    assert_eq!(
+        record.oracle("B").unwrap().status,
+        OracleStatus::Interrupted
+    );
     // each oracle now has its own record; the old one stays
     for o in ["A", "B", "C"] {
         assert!(record_of(out.path(), o).exists(), "{o}");
@@ -583,7 +601,11 @@ fn a_partial_record_is_resumed_with_its_entries() {
     let (plan, _out) = plan_of(partial(), &TacticsOptions::default());
     let record = prior(plan).expect("resumed");
     assert_eq!(record.oracles.len(), 3);
-    assert!(OracleTactics::from_record(record.oracle("A").unwrap()).unwrap().resumed);
+    assert!(
+        OracleTactics::from_record(record.oracle("A").unwrap())
+            .unwrap()
+            .resumed
+    );
     assert!(OracleTactics::from_record(record.oracle("B").unwrap()).is_none());
 }
 
@@ -650,12 +672,24 @@ fn a_version_1_record_cannot_be_resumed_from() {
             "oracles": [{"name": "A", "status": "done"}, {"name": "B", "status": "pending"}]}"#,
     )
     .unwrap();
-    let plan = plan_job(&eq_report(), out.path(), &TacticsOptions::default(), &names()).unwrap();
+    let plan = plan_job(
+        &eq_report(),
+        out.path(),
+        &TacticsOptions::default(),
+        &names(),
+    )
+    .unwrap();
     let record = prior(plan).expect("read");
     assert_eq!(record.version, 1);
     assert!(OracleTactics::from_record(record.oracle("A").unwrap()).is_none());
     // a done oracle without a script is not skipped by `--oracle` either: it is proved again
-    let plan = plan_job(&eq_report(), out.path(), &oracle_option("A", false), &names()).unwrap();
+    let plan = plan_job(
+        &eq_report(),
+        out.path(),
+        &oracle_option("A", false),
+        &names(),
+    )
+    .unwrap();
     assert!(prior(plan).is_some());
 }
 
@@ -710,7 +744,12 @@ thread_local! {
 fn answer_with(messages: &[&str]) -> crate::easycrypt::json::Response {
     let messages: Vec<String> = messages
         .iter()
-        .map(|m| format!(r#"{{"level":"warning","text":{}}}"#, serde_json::Value::from(*m)))
+        .map(|m| {
+            format!(
+                r#"{{"level":"warning","text":{}}}"#,
+                serde_json::Value::from(*m)
+            )
+        })
         .collect();
     crate::easycrypt::json::parse_response(&format!(
         r#"{{"version":"domino-json/3","state":3,"status":"error","messages":[{}]}}"#,
@@ -726,10 +765,20 @@ fn a_swallowed_interrupt_is_warned_about_once_per_run() {
     ]);
     let watch = SwallowWatch::default();
     // not a swallow: the goal re-read handles it
-    assert_eq!(watch.see(&answer_with(&["cannot serialize the goals: Stdlib.Sys.Break"])), None);
-    assert_eq!(watch.see(&answer_with(&["error when starting `Z3': not found"])), None);
+    assert_eq!(
+        watch.see(&answer_with(&[
+            "cannot serialize the goals: Stdlib.Sys.Break"
+        ])),
+        None
+    );
+    assert_eq!(
+        watch.see(&answer_with(&["error when starting `Z3': not found"])),
+        None
+    );
     assert_eq!(watch.warning(), None);
-    let warning = watch.see(&swallowed).expect("the first swallow is warned about");
+    let warning = watch
+        .see(&swallowed)
+        .expect("the first swallow is warned about");
     assert!(
         warning.starts_with(
             "EasyCrypt swallowed an interrupt (`error when starting `Z3': Failure in transformation \
@@ -739,7 +788,11 @@ fn a_swallowed_interrupt_is_warned_about_once_per_run() {
         "{warning}"
     );
     assert_eq!(watch.see(&swallowed), None, "once per run");
-    assert_eq!(watch.clone().see(&swallowed), None, "the run shares one watch");
+    assert_eq!(
+        watch.clone().see(&swallowed),
+        None,
+        "the run shares one watch"
+    );
     assert_eq!(watch.warning(), Some(warning.clone()));
     // the answer is left as it is
     assert_eq!(swallowed.status, crate::easycrypt::json::Status::Error);
@@ -752,12 +805,19 @@ fn a_swallowed_interrupt_is_warned_about_once_per_run() {
         elapsed: Duration::ZERO,
         swallowed_interrupt: watch.warning(),
     };
-    assert!(run.render().contains(&format!("warning: {warning}\n")), "{}", run.render());
+    assert!(
+        run.render().contains(&format!("warning: {warning}\n")),
+        "{}",
+        run.render()
+    );
 }
 
 #[test]
 fn an_unanswered_interrupt_is_its_own_line_in_the_report() {
-    let mut eq = equivalence_with(vec![oracle_with(vec![admit(AdmitReason::Interrupted, "N38")])]);
+    let mut eq = equivalence_with(vec![oracle_with(vec![admit(
+        AdmitReason::Interrupted,
+        "N38",
+    )])]);
     let u = Unanswered {
         oracle: "O".into(),
         node: "N38".into(),
@@ -776,7 +836,14 @@ fn an_unanswered_interrupt_is_its_own_line_in_the_report() {
     );
     assert!(!report.contains("interrupted:"), "not a Ctrl-C: {report}");
     // the third one ends the job, which says why, and is not a Ctrl-C
-    eq.unanswered = vec![u.clone(), u.clone(), Unanswered { ended_job: true, ..u }];
+    eq.unanswered = vec![
+        u.clone(),
+        u.clone(),
+        Unanswered {
+            ended_job: true,
+            ..u
+        },
+    ];
     eq.interrupted = Some(Interrupted::Sealed {
         oracle: "O".into(),
         admits: 1,
@@ -784,7 +851,10 @@ fn an_unanswered_interrupt_is_its_own_line_in_the_report() {
     });
     eq.ended_early = Some("EasyCrypt left 3 interrupts unanswered".into());
     let report = eq.render();
-    assert!(report.contains("oracle sealed, EasyCrypt not respawned, the job ends\n"), "{report}");
+    assert!(
+        report.contains("oracle sealed, EasyCrypt not respawned, the job ends\n"),
+        "{report}"
+    );
     assert!(
         report.contains(
             "ended early: sealed O with 1 admits at node N38: EasyCrypt left 3 interrupts unanswered\n"
@@ -993,8 +1063,7 @@ mod live {
 
     /// The live page of the first equivalence: beside its transcript (story 36).
     fn page_path(result: &TheoremTactics) -> PathBuf {
-        result.equivalences[0]
-            .oracles[0]
+        result.equivalences[0].oracles[0]
             .transcript
             .as_ref()
             .expect("a proved oracle")
@@ -1030,8 +1099,11 @@ mod live {
         /// The transcript of the equivalence's one proved oracle; with more, their transcripts
         /// one after another in a file beside them.
         fn transcript(&self) -> PathBuf {
-            let paths: Vec<&PathBuf> =
-                self.oracles.iter().filter_map(|o| o.transcript.as_ref()).collect();
+            let paths: Vec<&PathBuf> = self
+                .oracles
+                .iter()
+                .filter_map(|o| o.transcript.as_ref())
+                .collect();
             if let [one] = paths[..] {
                 return one.clone();
             }
@@ -1073,7 +1145,10 @@ mod live {
         assert!(walk[1].starts_with("sentence proc; inline."), "{walk:?}");
         assert!(walk.iter().any(|e| e.starts_with("node N")), "{walk:?}");
         let total = walk[0].rsplit('/').next().unwrap();
-        assert!(walk.iter().filter(|e| e.starts_with("node")).all(|e| e.ends_with(&format!("/{total}"))));
+        assert!(walk
+            .iter()
+            .filter(|e| e.starts_with("node"))
+            .all(|e| e.ends_with(&format!("/{total}"))));
         let sentences = walk.iter().filter(|e| e.starts_with("sentence")).count();
         let transcript = std::fs::read_to_string(result.equivalences[0].transcript()).unwrap();
         assert!(sentences >= result.equivalences[0].oracles[0].stats.closed);
@@ -1132,7 +1207,10 @@ mod live {
         let time = oracle.easycrypt_time.as_millis() as u64;
         // each record's `ms` is cut from a total over all oracles: one oracle's sum can be 1 ms
         // over its own time
-        assert!(ms <= time + 1 && ms * 100 >= time * 99, "records {ms} ms, report {time} ms");
+        assert!(
+            ms <= time + 1 && ms * 100 >= time * 99,
+            "records {ms} ms, report {time} ms"
+        );
         // the time by role sums the same records (story 57)
         assert_eq!(oracle.stats.time.total().as_millis() as u64, ms);
         assert!(report.contains("    time by role "), "{report}");
@@ -1204,7 +1282,12 @@ mod live {
         let mut session = Session::start(out).unwrap();
         let source = &exported.files[Path::new(file)];
         for sentence in sentences_until_call(file, source).unwrap() {
-            ok_or_reject(session.send(&sentence, Want::Full).unwrap(), file, &sentence).unwrap();
+            ok_or_reject(
+                session.send(&sentence, Want::Full).unwrap(),
+                file,
+                &sentence,
+            )
+            .unwrap();
         }
         // the base case, then the oracle's goal is in front
         let base = &split_sentences(source)[sentences_until_call(file, source).unwrap().len()];
@@ -1441,7 +1524,10 @@ mod live {
             .filter(|p| p.exists())
             .collect();
         reports.sort();
-        let text: String = reports.iter().map(|p| std::fs::read_to_string(p).unwrap()).collect();
+        let text: String = reports
+            .iter()
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
         (!text.is_empty()).then_some(text)
     }
 
@@ -1604,7 +1690,11 @@ mod live {
         }
         assert!(walked >= 10, "{transcript}");
         // one write per accepted sentence, one at the end of each oracle, one at the end
-        assert_eq!(eq.writes, walked + eq.oracles.len() + 1, "{rejected} rejected");
+        assert_eq!(
+            eq.writes,
+            walked + eq.oracles.len() + 1,
+            "{rejected} rejected"
+        );
         assert!(eq.writes > by_node.equivalences[0].writes);
         // the final file is whole, and compiles
         let final_file = proof_file(&result, out.path());
@@ -1663,7 +1753,9 @@ mod live {
         let interrupted = labelled.iter().filter(|r| *r == "interrupted").count();
         assert!(*admits > 0 && interrupted == *admits, "{text}");
         assert!(
-            text.contains(&format!("admit. (* domino: {node} open-goal; reason: interrupted")),
+            text.contains(&format!(
+                "admit. (* domino: {node} open-goal; reason: interrupted"
+            )),
             "{text}"
         );
         // the report names what was sealed, and its admit counts are the file's
@@ -1725,7 +1817,10 @@ mod live {
         let sent = sentences(&result.equivalences[0].transcript());
         let call = sent.iter().position(|s| s.starts_with("call (")).unwrap();
         assert_eq!(
-            sent[call..].iter().filter(|s| *s == "proc; inline.").count(),
+            sent[call..]
+                .iter()
+                .filter(|s| *s == "proc; inline.")
+                .count(),
             1,
             "{sent:?}"
         );
@@ -1825,7 +1920,8 @@ mod live {
         let mut names = Vec::new();
         for file in oracle_files(out, &format!("{stem}.ec")) {
             let oracle = file.file_stem().unwrap().to_string_lossy()[stem.len() + 1..].to_string();
-            records.extend(SessionRecord::read(&path.join(format!("{oracle}.record.json"))).unwrap());
+            records
+                .extend(SessionRecord::read(&path.join(format!("{oracle}.record.json"))).unwrap());
             names.push(oracle);
         }
         SessionRecord::join(&records, &names).expect("a record")
@@ -1866,16 +1962,26 @@ mod live {
         let [a, b] = eq.oracles.as_slice() else {
             panic!("two oracles: {}", eq.render());
         };
-        let (resumed, proved) = if a.oracle == first.oracle { (a, b) } else { (b, a) };
+        let (resumed, proved) = if a.oracle == first.oracle {
+            (a, b)
+        } else {
+            (b, a)
+        };
         assert!(resumed.resumed && !proved.resumed, "{}", eq.render());
         assert_eq!(resumed.script, first.script);
-        assert_eq!(resumed.admits_by_reason().len(), first.admits_by_reason().len());
+        assert_eq!(
+            resumed.admits_by_reason().len(),
+            first.admits_by_reason().len()
+        );
         // not walked: one `proc; inline.` after the call (the other oracle's), the resumed
         // oracle's goal only got `admit.`
         let sent = sentences(&eq.transcript());
         let call = sent.iter().position(|s| s.starts_with("call (")).unwrap();
         assert_eq!(
-            sent[call..].iter().filter(|s| *s == "proc; inline.").count(),
+            sent[call..]
+                .iter()
+                .filter(|s| *s == "proc; inline.")
+                .count(),
             1,
             "{sent:?}"
         );
@@ -1891,7 +1997,10 @@ mod live {
             report.contains(&format!("  {}: resumed from session record", first.oracle)),
             "{report}"
         );
-        assert!(!report.contains(&format!("  {}: resumed", proved.oracle)), "{report}");
+        assert!(
+            !report.contains(&format!("  {}: resumed", proved.oracle)),
+            "{report}"
+        );
         let page = std::fs::read_to_string(page_path(&result)).unwrap();
         assert!(page.contains("resumed from session record"));
         // the record is complete and still holds both scripts
@@ -1945,7 +2054,12 @@ mod live {
             return;
         };
         std::fs::remove_file(record_path(&first_run, out.path())).unwrap();
-        assert_eq!(proof_file(&first_run, out.path()).matches(UNTOUCHED).count(), 1);
+        assert_eq!(
+            proof_file(&first_run, out.path())
+                .matches(UNTOUCHED)
+                .count(),
+            1
+        );
         let result = run_again(out.path(), &walk(WriteGranularity::Oracle));
         let eq = &result.equivalences[0];
         assert!(eq.oracles.iter().all(|o| !o.resumed));
@@ -1971,7 +2085,9 @@ mod live {
         let statuses: Vec<String> = record
             .oracles
             .iter()
-            .map(|o| format!(r#"{{"name": "{}", "status": "{:?}"}}"#, o.name, o.status).to_lowercase())
+            .map(|o| {
+                format!(r#"{{"name": "{}", "status": "{:?}"}}"#, o.name, o.status).to_lowercase()
+            })
             .collect();
         std::fs::write(
             &path,
@@ -2107,7 +2223,15 @@ wait $ec
     impl DirectoryFilesAndProject {
         fn prove(&self, out: &Path, options: &TacticsOptions) -> TheoremTactics {
             let theorem = self.project.get_theorem("Proof").unwrap();
-            run_tactics(theorem, &self.project, &self.exported, out, &backend(), options).unwrap()
+            run_tactics(
+                theorem,
+                &self.project,
+                &self.exported,
+                out,
+                &backend(),
+                options,
+            )
+            .unwrap()
         }
     }
 
@@ -2157,7 +2281,10 @@ wait $ec
             );
         }
         // the glue is translation's, and no job touched it
-        assert_eq!(std::fs::read_to_string(out.path().join(&eq.proof_file)).unwrap(), glue);
+        assert_eq!(
+            std::fs::read_to_string(out.path().join(&eq.proof_file)).unwrap(),
+            glue
+        );
         // what is new: each oracle's record, tree and progress folder, and nothing else of the
         // equivalence (no report, no page, no lock left)
         let new: Vec<String> = files_under(out.path())
@@ -2173,14 +2300,22 @@ wait $ec
             assert!(own, "{f} is no oracle's own file: {new:?}");
         }
         for o in [a, b] {
-            assert!(new.contains(&format!("session/{stem}/{o}.record.json")), "{new:?}");
+            assert!(
+                new.contains(&format!("session/{stem}/{o}.record.json")),
+                "{new:?}"
+            );
         }
         // the oracle files are proved, and the whole compiles
         for f in [a_file, b_file] {
             let text = std::fs::read_to_string(out.path().join(f)).unwrap();
             assert!(!text.contains(UNTOUCHED), "{text}");
         }
-        compile(&crate::easycrypt::session::locate_binary(), out.path(), &eq.proof_file).unwrap();
+        compile(
+            &crate::easycrypt::session::locate_binary(),
+            out.path(),
+            &eq.proof_file,
+        )
+        .unwrap();
     }
 
     /// An EasyCrypt that logs `start` and `end` lines to `log` around the real one.
@@ -2253,14 +2388,27 @@ wait $ec
         assert_eq!(names, ["First", "Second", "Third", "Fourth"]);
         let report = std::fs::read_to_string(out.path().join(&eq.report_file)).unwrap();
         let at = |o: &str| report.find(&format!("  {o}: lockstep")).expect(o);
-        assert!(at("First") < at("Second") && at("Second") < at("Third") && at("Third") < at("Fourth"));
+        assert!(
+            at("First") < at("Second") && at("Second") < at("Third") && at("Third") < at("Fourth")
+        );
         // the page of the equivalence: one row for each oracle, none running any more
         let page = equivalence_page(&result, out.path());
         for o in names {
-            assert!(page.contains(&format!("<a href=\"{o}/index.html\">{o}</a>")), "{page}");
+            assert!(
+                page.contains(&format!("<a href=\"{o}/index.html\">{o}</a>")),
+                "{page}"
+            );
         }
-        assert!(!page.contains("running") && !page.contains("http-equiv"), "{page}");
-        compile(&crate::easycrypt::session::locate_binary(), out.path(), &eq.proof_file).unwrap();
+        assert!(
+            !page.contains("running") && !page.contains("http-equiv"),
+            "{page}"
+        );
+        compile(
+            &crate::easycrypt::session::locate_binary(),
+            out.path(),
+            &eq.proof_file,
+        )
+        .unwrap();
     }
 
     fn interrupted_admits(o: &OracleTactics) -> usize {
@@ -2301,7 +2449,10 @@ wait $ec
 
     /// The page of the equivalence (story 68): one row for each oracle.
     fn equivalence_page(result: &TheoremTactics, out: &Path) -> String {
-        let stem = result.equivalences[0].proof_file.trim_end_matches(".ec").to_string();
+        let stem = result.equivalences[0]
+            .proof_file
+            .trim_end_matches(".ec")
+            .to_string();
         std::fs::read_to_string(out.join(format!("progress/{stem}/index.html"))).unwrap()
     }
 
@@ -2318,7 +2469,10 @@ wait $ec
         assert_eq!(names, ["First", "Second", "Third", "Fourth"]);
         assert_eq!(eq.oracles[0].stats.admits.len(), 0, "{}", eq.render());
         assert!(interrupted_admits(&eq.oracles[1]) > 0, "{}", eq.render());
-        assert_eq!(eq.oracles[1].stats.admits.len(), interrupted_admits(&eq.oracles[1]));
+        assert_eq!(
+            eq.oracles[1].stats.admits.len(),
+            interrupted_admits(&eq.oracles[1])
+        );
         for o in &eq.oracles[2..] {
             assert_eq!(o.stats.admits.len(), 0, "proved after it: {}", eq.render());
             assert!(o.stats.closed > 0);
@@ -2344,19 +2498,29 @@ wait $ec
             .unwrap()
             .with_file_name("index.html");
         let page = std::fs::read_to_string(second_page).unwrap();
-        assert!(page.contains("EasyCrypt left an interrupt unanswered at "), "{page}");
+        assert!(
+            page.contains("EasyCrypt left an interrupt unanswered at "),
+            "{page}"
+        );
         // the record: the sealed oracle is not done, so the next job resumes it
         let record = read_record(&record_path(&result, out.path()));
         assert!(!record.complete);
         use OracleStatus::{Done, Interrupted as Sealed};
         assert_eq!(
             statuses(&record),
-            status_list(&[("First", Done), ("Second", Sealed), ("Third", Done), ("Fourth", Done)])
+            status_list(&[
+                ("First", Done),
+                ("Second", Sealed),
+                ("Third", Done),
+                ("Fourth", Done)
+            ])
         );
         // each oracle has its own EasyCrypt: its transcript opens its own lemma
         for o in &eq.oracles {
             let sent = tagged_sentences(o.transcript.as_ref().unwrap());
-            assert!(sent.iter().all(|(tag, _)| tag.ends_with(&format!("_{}.ec", o.oracle))));
+            assert!(sent
+                .iter()
+                .all(|(tag, _)| tag.ends_with(&format!("_{}.ec", o.oracle))));
         }
         // the partial proof compiles (the test compiles, never the run: ADR 0005)
         let text = proof_file(&result, out.path());
@@ -2423,7 +2587,12 @@ wait $ec
             return;
         };
         let eq = &result.equivalences[0];
-        assert_eq!(eq.interrupted, Some(Interrupted::NoOracleInFlight), "{}", eq.render());
+        assert_eq!(
+            eq.interrupted,
+            Some(Interrupted::NoOracleInFlight),
+            "{}",
+            eq.render()
+        );
         assert_eq!(eq.ended_early, None);
         assert_eq!(result.interrupted(), Some(&Interrupted::NoOracleInFlight));
         let [first] = eq.oracles.as_slice() else {
@@ -2432,7 +2601,10 @@ wait $ec
         assert!(interrupted_admits(first) > 0);
         // nothing of a fresh EasyCrypt was sent
         let sent = tagged_sentences(&eq.transcript());
-        assert!(sent.iter().all(|(tag, _)| !tag.contains("respawn")), "{sent:?}");
+        assert!(
+            sent.iter().all(|(tag, _)| !tag.contains("respawn")),
+            "{sent:?}"
+        );
         let record = read_record(&record_path(&result, out.path()));
         use OracleStatus::{Interrupted as Sealed, Pending};
         assert_eq!(
@@ -2445,7 +2617,10 @@ wait $ec
             ])
         );
         let page = equivalence_page(&result, out.path());
-        assert!(page.contains("interrupted: no oracle was in flight"), "{page}");
+        assert!(
+            page.contains("interrupted: no oracle was in flight"),
+            "{page}"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -2547,13 +2722,30 @@ wait $ec
         );
         let events = walk_events();
         let first_after = |node: &str| {
-            let at = events.iter().position(|e| e.starts_with(&format!("node {node}/")))?;
-            events[at..].iter().find(|e| e.starts_with("sentence ")).cloned()
+            let at = events
+                .iter()
+                .position(|e| e.starts_with(&format!("node {node}/")))?;
+            events[at..]
+                .iter()
+                .find(|e| e.starts_with("sentence "))
+                .cloned()
         };
         // N0, above the in-flight node, starts with its structural step; N3 from the quick close
-        assert_eq!(first_after("N0").as_deref(), Some("sentence sp 2 2."), "{events:#?}");
-        assert_eq!(first_after("N1").as_deref(), Some("sentence kept"), "{events:#?}");
-        assert_eq!(first_after("N3").as_deref(), Some("sentence auto => /#."), "{events:#?}");
+        assert_eq!(
+            first_after("N0").as_deref(),
+            Some("sentence sp 2 2."),
+            "{events:#?}"
+        );
+        assert_eq!(
+            first_after("N1").as_deref(),
+            Some("sentence kept"),
+            "{events:#?}"
+        );
+        assert_eq!(
+            first_after("N3").as_deref(),
+            Some("sentence auto => /#."),
+            "{events:#?}"
+        );
         let eq = &trust.equivalences[0];
         assert!(eq.interrupted.is_none(), "{}", eq.render());
         let resumed = eq.oracles.iter().find(|o| &o.oracle == oracle).unwrap();
@@ -2569,7 +2761,10 @@ wait $ec
             eq.render()
         );
         // no lockstep execution for it; one `admit.` per closed node
-        assert!(!events.contains(&format!("lockstep {oracle}")), "{events:?}");
+        assert!(
+            !events.contains(&format!("lockstep {oracle}")),
+            "{events:?}"
+        );
         assert_eq!(
             events.iter().filter(|e| *e == "sentence kept").count(),
             entry.closed.len()
@@ -2582,15 +2777,27 @@ wait $ec
             .filter(|r| r["ctx"]["role"] == "resume")
             // the pragma that makes the next answer carry every goal (story 61) is no kept node
             // and event records (an interrupt under load) have no sentence
-            .filter(|r| !r["sentence"].as_str().unwrap_or("pragma ").starts_with("pragma "))
+            .filter(|r| {
+                !r["sentence"]
+                    .as_str()
+                    .unwrap_or("pragma ")
+                    .starts_with("pragma ")
+            })
             .map(|r| {
                 let c = &r["ctx"];
                 let sentence = r["sentence"].as_str().unwrap();
-                format!("{} N{} {sentence}", c["oracle"].as_str().unwrap(), c["node"])
+                format!(
+                    "{} N{} {sentence}",
+                    c["oracle"].as_str().unwrap(),
+                    c["node"]
+                )
             })
             .collect();
         assert_eq!(kept_in.len(), entry.closed.len(), "{kept_in:?}");
-        assert!(kept_in[0].starts_with("Branch N1 ") && kept_in[0].ends_with(" admit."), "{kept_in:?}");
+        assert!(
+            kept_in[0].starts_with("Branch N1 ") && kept_in[0].ends_with(" admit."),
+            "{kept_in:?}"
+        );
         let text = proof_file(&trust, out.path());
         for block in &blocks {
             assert!(text.contains(block.as_str()), "{block}\nnot in\n{text}");
@@ -2633,7 +2840,14 @@ wait $ec
             "{events:#?}"
         );
         assert_eq!(
-            replayed.equivalences[0].oracles.iter().find(|o| &o.oracle == oracle).unwrap().resumed_at.as_ref().map(|r| r.kept),
+            replayed.equivalences[0]
+                .oracles
+                .iter()
+                .find(|o| &o.oracle == oracle)
+                .unwrap()
+                .resumed_at
+                .as_ref()
+                .map(|r| r.kept),
             Some(entry.closed.len())
         );
         assert_eq!(proof_file(&replayed, replay_out.path()), text);
@@ -2656,8 +2870,7 @@ wait $ec
         // N1's script as two sentences, the first of which closes its goal: a stop between them
         // finds one goal fewer in the session than the script, which has neither, accounts for
         edit_json(&record, |r| {
-            r["oracles"][0]["closed"][0]["script"] =
-                serde_json::json!([{"depth": 0, "sentence": "admit."}, {"depth": 0, "sentence": "idtac."}]);
+            r["oracles"][0]["closed"][0]["script"] = serde_json::json!([{"depth": 0, "sentence": "admit."}, {"depth": 0, "sentence": "idtac."}]);
         });
         let n1 = read_record(&record).oracles[0].closed[0].clone();
         assert_eq!(n1.id, "N1");
@@ -2688,12 +2901,19 @@ wait $ec
         assert_eq!(entry.closed, vec![n1]);
         assert_eq!(entry.in_flight(), Some("N1"));
         let text = proof_file(&stopped, out.path());
-        if let Err(e) = compile(&crate::easycrypt::session::locate_binary(), out.path(), &file) {
+        if let Err(e) = compile(
+            &crate::easycrypt::session::locate_binary(),
+            out.path(),
+            &file,
+        ) {
             panic!("the checkpoint does not compile: {e}\n{text}");
         }
         // and the next job keeps it
         let resumed = run_again_on(TWO_BRANCHES, out.path(), &resume_with(ResumeMode::Trust));
-        assert_eq!(the_oracle(&resumed).resumed_at.as_ref().map(|r| r.kept), Some(1));
+        assert_eq!(
+            the_oracle(&resumed).resumed_at.as_ref().map(|r| r.kept),
+            Some(1)
+        );
         assert!(read_record(&record).complete);
     }
 
@@ -2775,7 +2995,10 @@ wait $ec
         walk_events();
         let result = run_again_on(TWO_BRANCHES, out.path(), &resume_with(ResumeMode::Restart));
         let events = walk_events();
-        assert!(events.contains(&"lockstep Branch".to_string()), "{events:?}");
+        assert!(
+            events.contains(&"lockstep Branch".to_string()),
+            "{events:?}"
+        );
         assert!(!events.contains(&"sentence kept".to_string()), "{events:?}");
         assert_eq!(the_oracle(&result).resumed_at, None);
         assert_eq!(SavedTree::read(&tree).unwrap().unwrap().fingerprint, saved);
@@ -2816,7 +3039,10 @@ wait $ec
         let saved = SavedTree::read(&saved_tree_path(third.path(), file, "Branch"))
             .unwrap()
             .expect("a tree");
-        assert_eq!(read_record(&record).oracles[0].tree_id.as_ref(), Some(&saved.id));
+        assert_eq!(
+            read_record(&record).oracles[0].tree_id.as_ref(),
+            Some(&saved.id)
+        );
         edit_json(&record, |r| r["oracles"][0]["tree_id"] = "another".into());
         let result = run_again_on(TWO_BRANCHES, third.path(), &resume_with(ResumeMode::Trust));
         assert!(walk_events().contains(&"lockstep Branch".to_string()));
@@ -2855,7 +3081,10 @@ wait $ec
         let tree = saved_tree_path(out.path(), &first_run.equivalences[0].proof_file, "Branch");
         edit_json(&tree, |t| {
             t["fingerprint"] = "0".into();
-            t["fingerprint_parts"].as_object_mut().unwrap().remove("claims");
+            t["fingerprint_parts"]
+                .as_object_mut()
+                .unwrap()
+                .remove("claims");
         });
         walk_events();
         let result = run_again_on(TWO_BRANCHES, out.path(), &resume_with(ResumeMode::Trust));
@@ -2909,10 +3138,16 @@ wait $ec
         );
         let eq = &result.equivalences[0];
         assert!(eq.interrupted.is_none(), "{}", eq.render());
-        assert_eq!(the_oracle(&result).resumed_at.as_ref().map(|r| r.kept), Some(0));
+        assert_eq!(
+            the_oracle(&result).resumed_at.as_ref().map(|r| r.kept),
+            Some(0)
+        );
         let text = proof_file(&result, out.path());
         assert!(!text.contains("sp 9 9."), "{text}");
-        assert!(labelled_admits(&text).iter().all(|r| r != "interrupted"), "{text}");
+        assert!(
+            labelled_admits(&text).iter().all(|r| r != "interrupted"),
+            "{text}"
+        );
         if let Err(e) = compile(
             &crate::easycrypt::session::locate_binary(),
             out.path(),
@@ -2930,16 +3165,25 @@ wait $ec
         };
         let record = read_record(&record_path(&first_run, out.path()));
         let entry = record.oracle("Second").unwrap();
-        assert_eq!((entry.status, entry.in_flight()), (OracleStatus::Interrupted, Some("N0")));
+        assert_eq!(
+            (entry.status, entry.in_flight()),
+            (OracleStatus::Interrupted, Some("N0"))
+        );
         walk_events();
         let result = run_again_on(FOUR_ORACLES, out.path(), &resume_with(ResumeMode::Trust));
         let events = walk_events();
         // the done oracles are resumed as story 37 resumes them, the sealed one on its tree
-        assert!(!events.iter().any(|e| e.starts_with("lockstep ")), "{events:?}");
+        assert!(
+            !events.iter().any(|e| e.starts_with("lockstep ")),
+            "{events:?}"
+        );
         let eq = &result.equivalences[0];
         let second = eq.oracles.iter().find(|o| o.oracle == "Second").unwrap();
         assert_eq!(
-            second.resumed_at.as_ref().map(|r| (r.node.as_str(), r.kept)),
+            second
+                .resumed_at
+                .as_ref()
+                .map(|r| (r.node.as_str(), r.kept)),
             Some(("N0", 0)),
             "{}",
             eq.render()
@@ -3007,11 +3251,20 @@ fn each_record_says_why_the_driver_sent_its_sentence() {
         a = r#"{"kind":"app","pp":"a","op":"Top.a"}"#
     );
     let proofs = [
-        ("two", format!(r#"{{"front":{prog},"kinds":["program","program"]}}"#)),
+        (
+            "two",
+            format!(r#"{{"front":{prog},"kinds":["program","program"]}}"#),
+        ),
         ("prog", format!(r#"{{"front":{prog},"kinds":["program"]}}"#)),
         ("conj", format!(r#"{{"front":{conj},"kinds":["formula"]}}"#)),
-        ("two_atoms", format!(r#"{{"front":{atom},"kinds":["formula","formula"]}}"#)),
-        ("one_atom", format!(r#"{{"front":{atom},"kinds":["formula"]}}"#)),
+        (
+            "two_atoms",
+            format!(r#"{{"front":{atom},"kinds":["formula","formula"]}}"#),
+        ),
+        (
+            "one_atom",
+            format!(r#"{{"front":{atom},"kinds":["formula"]}}"#),
+        ),
         ("none", r#"{"front":null,"kinds":[]}"#.to_string()),
     ];
     for (name, proof) in &proofs {
@@ -3067,7 +3320,10 @@ done
         EcTranscriptMode::Capped,
         "Eq.ec",
     );
-    assert_eq!(session.send("start.", Want::Full).unwrap().status, crate::easycrypt::json::Status::Ok);
+    assert_eq!(
+        session.send("start.", Want::Full).unwrap().status,
+        crate::easycrypt::json::Status::Ok
+    );
     let mut prover = super::driver::Prover {
         judgement: super::driver::Judgement::Equiv,
         session: &mut session,
@@ -3156,14 +3412,22 @@ fn a_one_sided_invariant_part_has_the_view_of_its_own_part_verdict() {
     let p = pair(
         Verdict::Verified,
         fails(),
-        &[("PkgInv_l_Prf", fails()), ("PkgInv_r_Prf", Verdict::Verified)],
+        &[
+            ("PkgInv_l_Prf", fails()),
+            ("PkgInv_r_Prf", Verdict::Verified),
+        ],
         false,
     );
     assert_eq!(pair_view_for_tests(&p, &left), "fails");
     assert_eq!(pair_view_for_tests(&p, &right), "verified");
 
     // a pair where a side aborts: a failure counts as inconclusive
-    let aborting = pair(Verdict::Verified, fails(), &[("PkgInv_l_Prf", fails())], true);
+    let aborting = pair(
+        Verdict::Verified,
+        fails(),
+        &[("PkgInv_l_Prf", fails())],
+        true,
+    );
     assert_eq!(pair_view_for_tests(&aborting, &left), "inconclusive");
 
     // a part verdict that is not there (a tree saved before story 21)
@@ -3176,7 +3440,10 @@ fn a_one_sided_invariant_part_has_the_view_of_its_own_part_verdict() {
 #[test]
 fn a_part_on_a_pair_with_invariant_verified_is_verified() {
     let p = pair(Verdict::Verified, Verdict::Verified, &[], false);
-    assert_eq!(pair_view_for_tests(&p, &Part::Relation("a".into())), "verified");
+    assert_eq!(
+        pair_view_for_tests(&p, &Part::Relation("a".into())),
+        "verified"
+    );
     let side = Part::SideInvariant {
         op: "GameInv_G".into(),
         claim: "game-invariant!main!G!".into(),
@@ -3192,11 +3459,17 @@ fn the_exit_decision_that_domino_predicts_comes_first() {
     let tail = "ec_result = None<:int * bits_n>";
     assert_eq!(exit_decisions(tail, Some(true)), ["rcondt", "rcondf"]);
     assert_eq!(exit_decisions(tail, Some(false)), ["rcondf", "rcondt"]);
-    assert_eq!(exit_decisions(" (ec_result = None)", Some(true)), ["rcondt", "rcondf"]);
+    assert_eq!(
+        exit_decisions(" (ec_result = None)", Some(true)),
+        ["rcondt", "rcondf"]
+    );
     // a done-flag guard comes after the side's terminal: it does not hold
     assert_eq!(exit_decisions("!ec_done", Some(true)), ["rcondf", "rcondt"]);
     // no prediction: `rcondf` first
-    assert_eq!(exit_decisions("ec_r1 <> None", Some(true)), ["rcondf", "rcondt"]);
+    assert_eq!(
+        exit_decisions("ec_r1 <> None", Some(true)),
+        ["rcondf", "rcondt"]
+    );
     assert_eq!(exit_decisions(tail, None), ["rcondf", "rcondt"]);
 }
 
@@ -3278,7 +3551,10 @@ done
         EcTranscriptMode::Capped,
         "Eq.ec",
     );
-    assert_eq!(session.send("start.", Want::Full).unwrap().status, crate::easycrypt::json::Status::Ok);
+    assert_eq!(
+        session.send("start.", Want::Full).unwrap().status,
+        crate::easycrypt::json::Status::Ok
+    );
     let mut prover = super::driver::Prover {
         judgement: super::driver::Judgement::Equiv,
         session: &mut session,
@@ -3331,7 +3607,13 @@ done
         .unwrap()
         .lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .map(|r| format!("{} {}", r["want"].as_str().unwrap(), r["sentence"].as_str().unwrap()))
+        .map(|r| {
+            format!(
+                "{} {}",
+                r["want"].as_str().unwrap(),
+                r["sentence"].as_str().unwrap()
+            )
+        })
         .collect();
     LeafRun {
         said,
@@ -3348,13 +3630,22 @@ done
 fn fallbacks_and_admits_ask_for_status_and_the_opening_for_the_head() {
     let goals = [
         ("start", proof_of(&program_with_ifs(&[], &[]), 1)),
-        ("atom", proof_of(&formula(r#"{"kind":"app","pp":"a","op":"Top.a"}"#), 1)),
+        (
+            "atom",
+            proof_of(&formula(r#"{"kind":"app","pp":"a","op":"Top.a"}"#), 1),
+        ),
     ];
     let arms = r#"
     "auto => &1 &2 hpre.") g=atom; ans;;
     "pragma Goals:printall.") n=$((n-1)); ans;;
     admit.) g=none; ans;;"#;
-    let run = run_leaf(&goals, "start", arms, vec![leaf_pair(false, Verdict::Verified, &[])], &[]);
+    let run = run_leaf(
+        &goals,
+        "start",
+        arms,
+        vec![leaf_pair(false, Verdict::Verified, &[])],
+        &[],
+    );
     let hints = "smt(get_setE mem_set remE mem_rem emptyE).";
     assert_eq!(
         run.requests,
@@ -3389,7 +3680,9 @@ fn program_with_ifs(left: &[&str], right: &[&str]) -> String {
         let stmt: Vec<String> = conds
             .iter()
             .map(|c| {
-                format!(r#"{{"kind":"if","pp":"if ({c}) {{}}","cond":{{"kind":"app","pp":"{c}"}}}}"#)
+                format!(
+                    r#"{{"kind":"if","pp":"if ({c}) {{}}","cond":{{"kind":"app","pp":"{c}"}}}}"#
+                )
             })
             .collect();
         format!(r#"{{"stmt":[{}]}}"#, stmt.join(","))
@@ -3414,8 +3707,14 @@ fn leaf_pair(left_aborts: bool, invariant: Verdict, relations: &[(&str, Verdict)
 #[test]
 fn the_exit_path_tries_the_predicted_decision_first_then_the_other_one() {
     let goals = [
-        ("start", proof_of(&program_with_ifs(&["ec_result = None"], &["!ec_done"]), 1)),
-        ("right_only", proof_of(&program_with_ifs(&[], &["!ec_done"]), 1)),
+        (
+            "start",
+            proof_of(&program_with_ifs(&["ec_result = None"], &["!ec_done"]), 1),
+        ),
+        (
+            "right_only",
+            proof_of(&program_with_ifs(&[], &["!ec_done"]), 1),
+        ),
         ("no_ifs", proof_of(&program_with_ifs(&[], &[]), 1)),
     ];
     let arms = r#"
@@ -3423,7 +3722,13 @@ fn the_exit_path_tries_the_predicted_decision_first_then_the_other_one() {
     "rcondf{2} ^if; 1: by auto.") g=no_ifs; ans;;
     "auto => &1 &2 hpre.") g=none; ans;;"#;
     // side 1 does not abort: `rcondf` is predicted and refused, then `rcondt` is accepted
-    let run = run_leaf(&goals, "start", arms, vec![leaf_pair(false, Verdict::Verified, &[])], &[]);
+    let run = run_leaf(
+        &goals,
+        "start",
+        arms,
+        vec![leaf_pair(false, Verdict::Verified, &[])],
+        &[],
+    );
     assert_eq!(
         run.said,
         [
@@ -3436,7 +3741,13 @@ fn the_exit_path_tries_the_predicted_decision_first_then_the_other_one() {
     assert!(run.admits.is_empty());
 
     // side 1 aborts: `rcondt` on the router's tail is predicted, and accepted at once
-    let run = run_leaf(&goals, "start", arms, vec![leaf_pair(true, Verdict::Verified, &[])], &[]);
+    let run = run_leaf(
+        &goals,
+        "start",
+        arms,
+        vec![leaf_pair(true, Verdict::Verified, &[])],
+        &[],
+    );
     assert_eq!(run.said[0], "exit-path rcondt{1} ^if; 1: by auto.");
     assert_eq!(run.said[1], "exit-path rcondf{2} ^if; 1: by auto.");
 }
@@ -3448,7 +3759,13 @@ fn an_if_that_no_decision_takes_stops_the_exit_path_and_a_program_after_auto_is_
     let arms = r#"
     "auto => &1 &2 hpre.") ans;;
     admit.) g=none; ans;;"#;
-    let run = run_leaf(&goals, "start", arms, vec![leaf_pair(false, fails(), &[])], &[]);
+    let run = run_leaf(
+        &goals,
+        "start",
+        arms,
+        vec![leaf_pair(false, fails(), &[])],
+        &[],
+    );
     assert_eq!(
         run.said,
         [
@@ -3535,7 +3852,10 @@ fn the_leaf_is_opened_until_only_parts_are_left_and_no_split_is_sent() {
     }
     assert_eq!(run.said, expected);
     assert!(!run.said.iter().any(|s| s.contains("get_set_neqE")));
-    assert!(!run.said.iter().any(|s| s.ends_with(" split.") && !s.ends_with("do split.")));
+    assert!(!run
+        .said
+        .iter()
+        .any(|s| s.ends_with(" split.") && !s.ends_with("do split.")));
     assert!(!run.said.iter().any(|s| s.starts_with("leaf-fallback")));
     assert_eq!(run.admits.len(), 3);
     for admit in &run.admits {
@@ -3544,7 +3864,11 @@ fn the_leaf_is_opened_until_only_parts_are_left_and_no_split_is_sent() {
         assert_eq!(admit.domino, DominoView::Verified);
         // the last fallback was refused with no prover outcome
         assert_eq!(admit.smt, Some(SmtOutcome::Error));
-        assert!(admit.label().ends_with("; smt: error *)"), "{}", admit.label());
+        assert!(
+            admit.label().ends_with("; smt: error *)"),
+            "{}",
+            admit.label()
+        );
     }
 }
 
@@ -3565,9 +3889,18 @@ fn the_smt_outcome_is_timeout_then_unknown_then_error() {
         )
     };
     let of = |r| SmtOutcome::of_answer(&r);
-    assert_eq!(of(answer("error", &calls(0, 1, 2))), Some(SmtOutcome::Timeout));
-    assert_eq!(of(answer("error", &calls(1, 0, 2))), Some(SmtOutcome::Unknown));
-    assert_eq!(of(answer("error", &calls(0, 0, 0))), Some(SmtOutcome::Error));
+    assert_eq!(
+        of(answer("error", &calls(0, 1, 2))),
+        Some(SmtOutcome::Timeout)
+    );
+    assert_eq!(
+        of(answer("error", &calls(1, 0, 2))),
+        Some(SmtOutcome::Unknown)
+    );
+    assert_eq!(
+        of(answer("error", &calls(0, 0, 0))),
+        Some(SmtOutcome::Error)
+    );
     assert_eq!(of(answer("error", "")), Some(SmtOutcome::Error));
     assert_eq!(of(answer("ok", &calls(1, 0, 0))), None);
 }
@@ -3645,7 +3978,13 @@ fn a_claim_that_fails_in_domino_is_admitted_at_once_and_a_part_without_a_claim_i
     let ops = [relation_op("StateRelation_r", "r")];
     let pair = leaf_pair(false, fails(), &[("StateRelation_r", fails())]);
     let run = run_leaf(&goals, "start", arms, vec![pair], &ops);
-    assert!(!run.said.iter().any(|s| s.contains("rewrite /StateRelation_r")), "{:?}", run.said);
+    assert!(
+        !run.said
+            .iter()
+            .any(|s| s.contains("rewrite /StateRelation_r")),
+        "{:?}",
+        run.said
+    );
     assert_eq!(run.said[2], "admit admit. [invariant/StateRelation_r]");
     let [rel_admit, whole] = run.admits.as_slice() else {
         panic!("{:?}", run.admits)
@@ -3672,7 +4011,10 @@ fn run_key_split(last_closes: bool) -> LeafRun {
             key(k),
             local("v")
         );
-        format!(r#"{{"kind":"app","op":"Top.FMap._.[_]","args":[{set},{}]}}"#, local(b))
+        format!(
+            r#"{{"kind":"app","op":"Top.FMap._.[_]","args":[{set},{}]}}"#,
+            local(b)
+        )
     };
     let body = format!(
         r#"{{"kind":"app","pp":"","op":"Top.P","args":[{},{}]}}"#,
@@ -3756,9 +4098,17 @@ fn two_key_pairs_split_into_four_cases_each_a_bullet() {
 fn one_failing_case_undoes_the_whole_split() {
     let run = run_key_split(false);
     let n = run.said.len();
-    assert!(run.said[n - 3].starts_with("part-fallback smt("), "{:?}", run.said);
+    assert!(
+        run.said[n - 3].starts_with("part-fallback smt("),
+        "{:?}",
+        run.said
+    );
     assert!(run.said[n - 2].starts_with("undo undo "), "{:?}", run.said);
-    assert!(run.said[n - 1].starts_with("admit admit."), "{:?}", run.said);
+    assert!(
+        run.said[n - 1].starts_with("admit admit."),
+        "{:?}",
+        run.said
+    );
     assert!(!run.script.contains("case ("), "{}", run.script);
     let [admit] = run.admits.as_slice() else {
         panic!("{:?}", run.admits)
@@ -3778,10 +4128,16 @@ fn seven_key_pairs_give_no_split() {
                 local("m"),
                 local("v")
             );
-            format!(r#"{{"kind":"app","op":"Top.FMap._.[_]","args":[{set},{}]}}"#, local("c"))
+            format!(
+                r#"{{"kind":"app","op":"Top.FMap._.[_]","args":[{set},{}]}}"#,
+                local("c")
+            )
         })
         .collect();
-    let body = format!(r#"{{"kind":"app","pp":"","op":"Top.P","args":[{}]}}"#, reads.join(","));
+    let body = format!(
+        r#"{{"kind":"app","pp":"","op":"Top.P","args":[{}]}}"#,
+        reads.join(",")
+    );
     let binder = r#"{"name":"c","kind":"var","type":{"pp":"int"}}"#;
     let all = format!(
         r#"{{"kind":"quant","pp":"","quantifier":"forall","binders":[{binder}],"body":{body}}}"#
@@ -3796,7 +4152,11 @@ fn seven_key_pairs_give_no_split() {
     "move => c /=.") g=p1; ans;;
     admit.) g=none; ans;;"#;
     let run = run_leaf(&goals, "start", arms, vec![], &[]);
-    assert!(!run.said.iter().any(|s| s.contains("case (")), "{:?}", run.said);
+    assert!(
+        !run.said.iter().any(|s| s.contains("case (")),
+        "{:?}",
+        run.said
+    );
     assert_eq!(run.admits.len(), 1);
 }
 
@@ -3831,8 +4191,14 @@ mod side_invariant_jobs {
             ..TacticsOptions::default()
         };
         let plan = plan_run(&exported, out.path(), &options).unwrap();
-        assert!(plan.equivalences.is_empty(), "the equivalence does not start");
-        assert!(plan.side.is_empty(), "a proof job never proves side invariants");
+        assert!(
+            plan.equivalences.is_empty(),
+            "the equivalence does not start"
+        );
+        assert!(
+            plan.side.is_empty(),
+            "a proof job never proves side invariants"
+        );
         assert_eq!(plan.unproved, ["Game"]);
         assert_eq!(
             unproved_side_invariants_line("Game"),
@@ -3873,9 +4239,9 @@ mod side_invariant_jobs {
         assert!(result.equivalences.is_empty() && result.side_invariants.is_empty());
         assert_eq!(result.unproved_side_invariants, ["Game"]);
         assert!(
-            result
-                .render()
-                .contains("side invariants of Game are not proved: run prove --side-inv Game first"),
+            result.render().contains(
+                "side invariants of Game are not proved: run prove --side-inv Game first"
+            ),
             "{}",
             result.render()
         );
@@ -3981,8 +4347,15 @@ mod side_invariant_jobs {
             quick_close: false,
             ..TacticsOptions::default()
         };
-        let result = run_tactics(theorem, &project, &exported, out.path(), &backend(), &options)
-            .unwrap();
+        let result = run_tactics(
+            theorem,
+            &project,
+            &exported,
+            out.path(),
+            &backend(),
+            &options,
+        )
+        .unwrap();
         let [job] = result.side_invariants.as_slice() else {
             panic!("one side-invariant job: {}", result.render());
         };
@@ -3996,7 +4369,12 @@ mod side_invariant_jobs {
         assert!(!o.stats.admits.is_empty(), "{}", result.render());
         for a in &o.stats.admits {
             assert_eq!(a.reason, AdmitReason::DominoFails, "{}", result.render());
-            assert_eq!(a.claim, "invariant/PkgInv_main_of_p_in_S", "{}", result.render());
+            assert_eq!(
+                a.claim,
+                "invariant/PkgInv_main_of_p_in_S",
+                "{}",
+                result.render()
+            );
         }
         compiles(out.path(), "SideInv_S_O.ec").unwrap();
     }
@@ -4021,8 +4399,15 @@ mod side_invariant_jobs {
             quick_close: false,
             ..TacticsOptions::default()
         };
-        let result = run_tactics(theorem, &project, &exported, out.path(), &backend(), &options)
-            .unwrap();
+        let result = run_tactics(
+            theorem,
+            &project,
+            &exported,
+            out.path(),
+            &backend(),
+            &options,
+        )
+        .unwrap();
         let [job] = result.side_invariants.as_slice() else {
             panic!("one side-invariant job: {}", result.render());
         };
@@ -4032,7 +4417,12 @@ mod side_invariant_jobs {
         assert!(!o.stats.admits.is_empty(), "{}", result.render());
         for a in &o.stats.admits {
             assert_eq!(a.reason, AdmitReason::DominoFails, "{}", result.render());
-            assert_eq!(a.claim, "invariant/PkgInv_nonneg_of_p_in_S", "{}", result.render());
+            assert_eq!(
+                a.claim,
+                "invariant/PkgInv_nonneg_of_p_in_S",
+                "{}",
+                result.render()
+            );
         }
         compiles(out.path(), "SideInv_S_O.ec").unwrap();
     }
@@ -4064,19 +4454,36 @@ mod side_invariant_jobs {
             panic!("one oracle: {}", result.render());
         };
         assert!(inc.problem.is_none(), "{}", result.render());
-        assert!(inc.joint_paths > 0, "the walk followed a side tree: {}", result.render());
+        assert!(
+            inc.joint_paths > 0,
+            "the walk followed a side tree: {}",
+            result.render()
+        );
         assert!(inc.stats.admits.is_empty(), "{}", result.render());
-        assert!(result.render().contains("tactics for SideInv_Game.ec (side invariants of Game)"));
+        assert!(result
+            .render()
+            .contains("tactics for SideInv_Game.ec (side invariants of Game)"));
         let lemma = std::fs::read_to_string(out.path().join("SideInv_Game_Inc.ec")).unwrap();
         assert!(!lemma.contains("proc; inline. admit."), "{lemma}");
         // the router prelude, then the leaf of the one terminal, opened by claim
-        for step in ["sp 1.", "if.", "auto => &hr hpre /=.", "rewrite /Comp_Game.PkgInv_main_of_C_in_Game /=."] {
+        for step in [
+            "sp 1.",
+            "if.",
+            "auto => &hr hpre /=.",
+            "rewrite /Comp_Game.PkgInv_main_of_C_in_Game /=.",
+        ] {
             assert!(lemma.contains(step), "{step} in:\n{lemma}");
         }
-        for f in ["session/SideInv_Game/Inc.record.json", "session/SideInv_Game/Inc.tree.json"] {
+        for f in [
+            "session/SideInv_Game/Inc.record.json",
+            "session/SideInv_Game/Inc.tree.json",
+        ] {
             assert!(out.path().join(f).is_file(), "{f}");
         }
-        assert!(!out.path().join("progress/SideInv_Game/Inc.lock").exists(), "the lock is released");
+        assert!(
+            !out.path().join("progress/SideInv_Game/Inc.lock").exists(),
+            "the lock is released"
+        );
         compiles(out.path(), "SideInv_Game_Inc.ec").unwrap();
 
         // the equivalence: its oracle lemma assumes the side invariants

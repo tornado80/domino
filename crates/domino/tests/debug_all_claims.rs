@@ -35,7 +35,10 @@ fn proofstep_without_proof_is_rejected() {
 #[test]
 fn sweep_prints_a_line_per_oracle_and_fails_on_a_failing_claim() {
     let out = debug(&["--lockstep"]);
-    assert!(!out.status.success(), "AbortDiff fails, so the sweep must exit non-zero");
+    assert!(
+        !out.status.success(),
+        "AbortDiff fails, so the sweep must exit non-zero"
+    );
     let stdout = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -44,15 +47,21 @@ fn sweep_prints_a_line_per_oracle_and_fails_on_a_failing_claim() {
     for oracle in ["Branch", "AbortDiff", "AbortBoth", "Admitted"] {
         assert!(stdout.contains(oracle), "missing {oracle}:\n{stdout}");
     }
-    assert!(deps_project()
-        .join("_build/debug/index.html")
-        .exists());
+    assert!(deps_project().join("_build/debug/index.html").exists());
 }
 
 #[test]
 fn easycrypt_debug_has_no_claim_flag() {
     let out = Command::new(env!("CARGO_BIN_EXE_domino"))
-        .args(["easycrypt", "debug", "--theorem", "x", "--claim", "x", "--project"])
+        .args([
+            "easycrypt",
+            "debug",
+            "--theorem",
+            "x",
+            "--claim",
+            "x",
+            "--project",
+        ])
         .arg(deps_project())
         .output()
         .unwrap();
@@ -106,7 +115,10 @@ fn a_proofstep_run_writes_no_project_index_and_updates_the_theorem_index() {
 
     debug_into(root.path(), &["--proof", "T"]);
     let before = std::fs::read_to_string(root.path().join("T/summary.txt")).unwrap();
-    let stdout = debug_into(root.path(), &["--proof", "T", "--proofstep", "0", "--lockstep"]);
+    let stdout = debug_into(
+        root.path(),
+        &["--proof", "T", "--proofstep", "0", "--lockstep"],
+    );
     assert!(stdout.contains("T/index.html      (updated)"), "{stdout}");
     let after = std::fs::read_to_string(root.path().join("T/summary.txt")).unwrap();
     assert_ne!(before, after, "the run count of step 0 grows");
@@ -120,7 +132,10 @@ fn a_proofstep_run_writes_no_project_index_and_updates_the_theorem_index() {
 #[test]
 fn a_single_claim_run_and_an_all_claim_run_of_one_oracle_both_show() {
     let root = tempfile::tempdir().unwrap();
-    debug_into(root.path(), &["--proof", "T", "--proofstep", "0", "--oracle", "Branch"]);
+    debug_into(
+        root.path(),
+        &["--proof", "T", "--proofstep", "0", "--oracle", "Branch"],
+    );
     debug_into(
         root.path(),
         &["--proof", "T", "--proofstep", "0", "--claim", "invariant"],

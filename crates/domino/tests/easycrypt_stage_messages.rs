@@ -71,16 +71,23 @@ fn stderr_lines(output: &Output) -> Vec<String> {
 /// stdout without the lines that carry timings, and with the output directory factored out.
 /// The time by role table (story 57): its rows are indented by six spaces or more.
 fn is_time_by_role(line: &str) -> bool {
-    ["    time by role", "    EasyCrypt:", "    warning: the rows sum", "      "]
-        .iter()
-        .any(|head| line.starts_with(head))
+    [
+        "    time by role",
+        "    EasyCrypt:",
+        "    warning: the rows sum",
+        "      ",
+    ]
+    .iter()
+    .any(|head| line.starts_with(head))
 }
 
 fn stable_stdout(output: &Output, out: &Path) -> String {
     String::from_utf8_lossy(&output.stdout)
         .replace(out.to_str().unwrap(), "<out>")
         .lines()
-        .filter(|l| !l.starts_with("elapsed:") && !l.contains("goals closed") && !l.contains(": lockstep "))
+        .filter(|l| {
+            !l.starts_with("elapsed:") && !l.contains("goals closed") && !l.contains(": lockstep ")
+        })
         .filter(|l| !is_time_by_role(l))
         .collect::<Vec<_>>()
         .join("\n")
@@ -90,7 +97,9 @@ fn files_under(dir: &Path) -> BTreeSet<PathBuf> {
     let mut files = BTreeSet::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
         for entry in entries {
             let path = entry.unwrap().path();
             if path.is_dir() {
@@ -126,7 +135,9 @@ fn debug_announces_translation_in_memory_and_its_lockstep_runs() {
         .unwrap_or_else(|| panic!("{lines:#?}"));
     let lockstep = lines
         .iter()
-        .position(|l| l.starts_with("easycrypt debug: lockstep execution on 2 oracles of 1 equivalence → "))
+        .position(|l| {
+            l.starts_with("easycrypt debug: lockstep execution on 2 oracles of 1 equivalence → ")
+        })
         .unwrap_or_else(|| panic!("{lines:#?}"));
     assert!(translating < lockstep, "{lines:#?}");
     assert!(lines[lockstep].ends_with("/Proof/!debug!"), "{lines:#?}");
@@ -137,18 +148,37 @@ fn debug_announces_translation_in_memory_and_its_lockstep_runs() {
     );
 
     // `auto` on a pipe is `plain`; `bar` draws nothing without a terminal, but still speaks
-    assert!(stderr_lines(&results[0].2).iter().any(|l| l.starts_with("easycrypt debug: lockstep")));
-    assert!(stderr_lines(&results[2].2).iter().any(|l| l.starts_with("easycrypt debug: lockstep")));
+    assert!(stderr_lines(&results[0].2)
+        .iter()
+        .any(|l| l.starts_with("easycrypt debug: lockstep")));
+    assert!(stderr_lines(&results[2].2)
+        .iter()
+        .any(|l| l.starts_with("easycrypt debug: lockstep")));
     // `none` prints nothing new
-    assert!(stderr_lines(&results[3].2).is_empty(), "{:#?}", stderr_lines(&results[3].2));
+    assert!(
+        stderr_lines(&results[3].2).is_empty(),
+        "{:#?}",
+        stderr_lines(&results[3].2)
+    );
 
     let (_, out0, first) = &results[0];
     let stdout0 = stable_stdout(first, out0);
     let files0 = files_under(&out0.join("Proof"));
-    assert!(files0.iter().all(|f| f.starts_with("!debug!")), "debug wrote outside !debug!: {files0:?}");
+    assert!(
+        files0.iter().all(|f| f.starts_with("!debug!")),
+        "debug wrote outside !debug!: {files0:?}"
+    );
     for (mode, out, output) in &results {
-        assert_eq!(stable_stdout(output, out), stdout0, "stdout differs in --progress {mode}");
-        assert_eq!(files_under(&out.join("Proof")), files0, "files differ in --progress {mode}");
+        assert_eq!(
+            stable_stdout(output, out),
+            stdout0,
+            "stdout differs in --progress {mode}"
+        );
+        assert_eq!(
+            files_under(&out.join("Proof")),
+            files0,
+            "files differ in --progress {mode}"
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -163,8 +193,18 @@ fn prove_says_what_it_wrote_for_each_equivalence_it_proves() {
     let prove = ["prove", "--theorem", "Proof", "--progress", "plain"];
     let fresh = domino(&dir, Some(&ec), &prove);
     let lines = stderr_lines(&fresh);
-    assert!(lines.iter().any(|l| l == "easycrypt prove: translating Proof in memory"), "{lines:#?}");
-    assert!(!lines.iter().any(|l| l.contains("missing from the translation")), "{lines:#?}");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "easycrypt prove: translating Proof in memory"),
+        "{lines:#?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains("missing from the translation")),
+        "{lines:#?}"
+    );
     let wrote: Vec<&String> = lines
         .iter()
         .filter(|l| l.starts_with("easycrypt prove: Eq_") && l.contains("translation files"))
@@ -173,32 +213,54 @@ fn prove_says_what_it_wrote_for_each_equivalence_it_proves() {
     // each equivalence is announced once; only the first one wrote the shared files
     let named = |l: &str| l.split("files: ").nth(1).map(|f| f.split(", ").count());
     for (i, line) in wrote.iter().enumerate() {
-        assert!(line.contains("wrote") || line.contains("wrote missing translation files"), "{line}");
+        assert!(
+            line.contains("wrote") || line.contains("wrote missing translation files"),
+            "{line}"
+        );
         if i == 0 {
             assert!(
                 line.contains("Types.ec") || line.contains("missing translation files"),
                 "the first equivalence writes the shared files: {line}"
             );
         } else {
-            assert_eq!(named(line), Some(1), "a later one lists only its own file: {line}");
+            assert_eq!(
+                named(line),
+                Some(1),
+                "a later one lists only its own file: {line}"
+            );
         }
     }
 
     // a complete session record skips the equivalence: no translation-files line for it
     let again = domino(&dir, Some(&ec), &prove);
     let lines = stderr_lines(&again);
-    assert!(lines.iter().any(|l| l.contains("skipping Eq_")), "{lines:#?}");
-    assert!(!lines.iter().any(|l| l.contains("translation files")), "{lines:#?}");
+    assert!(
+        lines.iter().any(|l| l.contains("skipping Eq_")),
+        "{lines:#?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("translation files")),
+        "{lines:#?}"
+    );
 
     // `--progress none` says nothing about it
     let none_dir = scratch("prove-none");
-    let quiet = domino(&none_dir, Some(&ec), &["prove", "--theorem", "Proof", "--progress", "none"]);
+    let quiet = domino(
+        &none_dir,
+        Some(&ec),
+        &["prove", "--theorem", "Proof", "--progress", "none"],
+    );
     assert!(
-        !stderr_lines(&quiet).iter().any(|l| l.contains("easycrypt prove:") || l.contains("translation files")),
+        !stderr_lines(&quiet)
+            .iter()
+            .any(|l| l.contains("easycrypt prove:") || l.contains("translation files")),
         "{:#?}",
         stderr_lines(&quiet)
     );
-    assert_eq!(stable_stdout(&fresh, &dir), stable_stdout(&quiet, &none_dir));
+    assert_eq!(
+        stable_stdout(&fresh, &dir),
+        stable_stdout(&quiet, &none_dir)
+    );
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&none_dir);
 }
@@ -235,6 +297,11 @@ fn prove_lists_the_shared_files_once_and_then_only_each_equivalences_own() {
         "easycrypt prove: Eq_H1_kem_correctness_ideal_H2 — wrote missing translation files: \
          Eq_H1_kem_correctness_ideal_H2.ec"
     );
-    assert!(!lines.iter().any(|l| l.contains("missing from the translation")), "{lines:#?}");
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains("missing from the translation")),
+        "{lines:#?}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

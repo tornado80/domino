@@ -45,10 +45,10 @@ mod page;
 
 use serde_derive::Deserialize;
 
+use crate::debug::progress::DebugObserver;
 use crate::easycrypt::json::{Response, Status};
 use crate::easycrypt::session::SessionEvent;
 use crate::easycrypt::transcript::{GoalParts, GOAL_CONCL_CAP, GOAL_HYPS_CAP};
-use crate::debug::progress::DebugObserver;
 use crate::writers::easycrypt::progress::{ExportEvent, ExportObserver, ExportPhase};
 
 use super::driver::Admit;
@@ -408,17 +408,27 @@ impl LiveHandle {
             return;
         };
         let oracle = live.eqs[eq].oracles[o].name.clone();
-        live.progress.on_event(&ExportEvent::NodeStarted { oracle: &oracle, node, total });
+        live.progress.on_event(&ExportEvent::NodeStarted {
+            oracle: &oracle,
+            node,
+            total,
+        });
     }
 
     /// The prover is about to send `sentence` (story 40).
     pub fn sentence_sent(&self, sentence: &str) {
-        self.0.borrow_mut().progress.on_event(&ExportEvent::SentenceSent { sentence });
+        self.0
+            .borrow_mut()
+            .progress
+            .on_event(&ExportEvent::SentenceSent { sentence });
     }
 
     /// Lockstep execution of `oracle` starts (story 39): the proving bar steps aside.
     pub fn lockstep_started(&self, oracle: &str) {
-        self.0.borrow_mut().progress.on_event(&ExportEvent::LockstepStarted { oracle });
+        self.0
+            .borrow_mut()
+            .progress
+            .on_event(&ExportEvent::LockstepStarted { oracle });
     }
 
     /// What watches this oracle's lockstep execution: the debugger's bar, or nothing. Give it
@@ -436,12 +446,15 @@ impl LiveHandle {
         elapsed: Duration,
         stopped: bool,
     ) {
-        self.0.borrow_mut().progress.on_event(&ExportEvent::LockstepFinished {
-            oracle,
-            found,
-            elapsed,
-            stopped,
-        });
+        self.0
+            .borrow_mut()
+            .progress
+            .on_event(&ExportEvent::LockstepFinished {
+                oracle,
+                found,
+                elapsed,
+                stopped,
+            });
     }
 
     /// Lockstep execution of the current oracle is done; its page is in `out_dir`.

@@ -56,7 +56,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::ops::ControlFlow;
 
 use crate::debug::effect::{self, EffectInput, PathEffect, PkgInput, RandEffect};
-use crate::debug::ir::{InlBlock, InlStmt, InlinedOracle, Label, Place, ExitGuard, VarKey};
+use crate::debug::ir::{ExitGuard, InlBlock, InlStmt, InlinedOracle, Label, Place, VarKey};
 use crate::expressions::{Expression, ExpressionKind};
 use crate::identifier::pkg_ident::PackageIdentifier;
 use crate::identifier::Identifier;
@@ -453,7 +453,9 @@ fn collect_referenced_pkg_consts(block: &InlBlock, out: &mut BTreeSet<(String, S
                 }
                 collect_referenced_pkg_consts(body, out);
             }
-            InlStmt::Sample { .. } | InlStmt::Return { value: None, .. } | InlStmt::Abort { .. } => {}
+            InlStmt::Sample { .. }
+            | InlStmt::Return { value: None, .. }
+            | InlStmt::Abort { .. } => {}
         }
     }
 }
@@ -517,10 +519,7 @@ pub(crate) enum BranchForm<'a> {
         else_lines: Option<(Label, Label)>,
     },
     /// `cond` is true on the *none* child, which aborts.
-    Unwrap {
-        target: &'a Place,
-        inner: SmtExpr,
-    },
+    Unwrap { target: &'a Place, inner: SmtExpr },
 }
 
 impl BranchHead<'_> {
@@ -644,8 +643,7 @@ impl<'a> Executor<'a> {
         let old_state_const = octx
             .oracle_arg_game_state_pattern()
             .old_global_const_name(game_inst.name());
-        let return_const_name =
-            format!("<return-{}-{}>", game_inst.name(), inlined.oracle_name);
+        let return_const_name = format!("<return-{}-{}>", game_inst.name(), inlined.oracle_name);
 
         let mut wanted = BTreeSet::new();
         wanted.insert(inlined.entry_pkg_inst.clone());
@@ -850,24 +848,24 @@ impl<'a> Executor<'a> {
                     // then-child: clone and recurse to completion
                     let mut st_then = st.clone();
                     let mut frames_then = frames.clone();
-                    open_if_child(&mut frames_then, &mut st_then, label, &cond_smt, d_then, then);
+                    open_if_child(
+                        &mut frames_then,
+                        &mut st_then,
+                        label,
+                        &cond_smt,
+                        d_then,
+                        then,
+                    );
                     if self
-                        .descend(
-                            oracle,
-                            label,
-                            d_then,
-                            0,
-                            st_then,
-                            |exec, oracle, mut st| {
-                                // eager: entering the block means its closing
-                                // delimiter runs, even if a `return` inside
-                                // leaves it early (story 16 §3.2).
-                                if let Some((_, close)) = then_lines {
-                                    st.visited.push(close);
-                                }
-                                exec.walk(oracle, frames_then, st, on_path)
-                            },
-                        )?
+                        .descend(oracle, label, d_then, 0, st_then, |exec, oracle, mut st| {
+                            // eager: entering the block means its closing
+                            // delimiter runs, even if a `return` inside
+                            // leaves it early (story 16 §3.2).
+                            if let Some((_, close)) = then_lines {
+                                st.visited.push(close);
+                            }
+                            exec.walk(oracle, frames_then, st, on_path)
+                        })?
                         .is_break()
                     {
                         return Ok(ControlFlow::Break(()));
@@ -875,19 +873,12 @@ impl<'a> Executor<'a> {
 
                     // else-child: consume the current frame stack, recurse, return
                     open_if_child(&mut frames, &mut st, label, &cond_smt, d_else, els);
-                    return self.descend(
-                        oracle,
-                        label,
-                        d_else,
-                        1,
-                        st,
-                        |exec, oracle, mut st| {
-                            if let Some((_, close)) = else_lines {
-                                st.visited.push(close);
-                            }
-                            exec.walk(oracle, frames, st, on_path)
-                        },
-                    );
+                    return self.descend(oracle, label, d_else, 1, st, |exec, oracle, mut st| {
+                        if let Some((_, close)) = else_lines {
+                            st.visited.push(close);
+                        }
+                        exec.walk(oracle, frames, st, on_path)
+                    });
                 }
             }
         }
@@ -1098,7 +1089,8 @@ impl<'a> Executor<'a> {
                 label,
                 decision: Decision::UnwrapSome,
             });
-            st.constraints.push(SmtAssert(SmtNot(is_none.clone())).into());
+            st.constraints
+                .push(SmtAssert(SmtNot(is_none.clone())).into());
             let getter = SmtExpr::List(vec!["maybe-get".into(), inner.clone()]);
             self.bind_fresh(st, target, getter);
         }
@@ -1244,12 +1236,7 @@ impl<'a> Executor<'a> {
             let pkg_state_term = reconstruct_pkg_state(&pctx, &st);
             let next = self
                 .gctx
-                .smt_update_gamestate_pkgstate(
-                    game_state,
-                    self.sample_info,
-                    &name,
-                    pkg_state_term,
-                )
+                .smt_update_gamestate_pkgstate(game_state, self.sample_info, &name, pkg_state_term)
                 .expect("package instance exists");
             game_state = rebind_gs(self, &mut st, next);
         }
@@ -1257,9 +1244,9 @@ impl<'a> Executor<'a> {
         // 4. build the return / abort term and the constraint that fills
         //    `<return-{GI}-{O}>`.
         let return_term = match &terminal {
-            Terminal::Return {
-                value: Some(e), ..
-            } => self.octx.smt_construct_return(game_state, to_smt(&st, e)),
+            Terminal::Return { value: Some(e), .. } => {
+                self.octx.smt_construct_return(game_state, to_smt(&st, e))
+            }
             Terminal::Return { value: None, .. } => {
                 self.octx.smt_construct_return(game_state, "mk-empty")
             }
@@ -1355,10 +1342,7 @@ impl<'a> Executor<'a> {
             .map(|(sample_id, draws)| {
                 let pos = &self.sample_info.positions[sample_id];
                 RandEffect {
-                    point: format!(
-                        "{}.{}.{}",
-                        pos.inst_name, pos.oracle_name, pos.sample_name
-                    ),
+                    point: format!("{}.{}.{}", pos.inst_name, pos.oracle_name, pos.sample_name),
                     ty: pos.ty.to_string(),
                     draws,
                 }
@@ -1587,7 +1571,14 @@ impl<'a> SideExec<'a> {
                 } else {
                     (*els, *else_lines)
                 };
-                open_if_child(&mut pos.frames, &mut pos.st, label, &head.cond, decision, block);
+                open_if_child(
+                    &mut pos.frames,
+                    &mut pos.st,
+                    label,
+                    &head.cond,
+                    decision,
+                    block,
+                );
                 if let Some((_, close)) = lines {
                     pos.st.visited.push(close);
                 }
@@ -1621,10 +1612,12 @@ impl<'a> SideExec<'a> {
     /// under a different partner.
     pub(crate) fn terminal_path(&mut self, pos: &SidePos<'a>, terminal: &Terminal) -> TerminalPath {
         let mut out = None;
-        let flow = self.exec.emit_terminal(pos.st.clone(), terminal.clone(), &mut |path| {
-            out = Some(path.clone());
-            ControlFlow::Break(())
-        });
+        let flow = self
+            .exec
+            .emit_terminal(pos.st.clone(), terminal.clone(), &mut |path| {
+                out = Some(path.clone());
+                ControlFlow::Break(())
+            });
         let _ = flow.expect("a lockstep executor has no path limit");
         out.expect("emit_terminal hands over exactly one path")
     }
@@ -1716,20 +1709,15 @@ mod tests {
     where
         F: FnOnce(&crate::theorem::Theorem, &[(String, GameInstAux)]),
     {
-        let files =
-            crate::project::DirectoryFiles::load(std::path::Path::new(dir)).unwrap();
+        let files = crate::project::DirectoryFiles::load(std::path::Path::new(dir)).unwrap();
         let project =
-            crate::project::DirectoryProject::load(std::path::PathBuf::from(dir), &files)
-                .unwrap();
+            crate::project::DirectoryProject::load(std::path::PathBuf::from(dir), &files).unwrap();
         let theorem = project.get_theorem(theorem_name).unwrap();
         let (theorem, auxs) = DebugTransform.transform_theorem(theorem).unwrap();
         f(&theorem, &auxs);
     }
 
-    fn sample_info_for<'a>(
-        auxs: &'a [(String, GameInstAux)],
-        game_inst: &str,
-    ) -> &'a SampleInfo {
+    fn sample_info_for<'a>(auxs: &'a [(String, GameInstAux)], game_inst: &str) -> &'a SampleInfo {
         &auxs
             .iter()
             .find(|(n, _)| n == game_inst)
@@ -1738,12 +1726,7 @@ mod tests {
             .sample_info
     }
 
-    fn run(
-        dir: &str,
-        theorem: &str,
-        game_inst: &str,
-        oracle: &str,
-    ) -> Vec<TerminalPath> {
+    fn run(dir: &str, theorem: &str, game_inst: &str, oracle: &str) -> Vec<TerminalPath> {
         let mut result = None;
         with_debug(dir, theorem, |th, auxs| {
             let gi = th.find_game_instance(game_inst).unwrap();
@@ -1855,7 +1838,10 @@ mod tests {
         assert_eq!(ranges(&mut vec![]), Vec::<(Label, Label)>::new());
         assert_eq!(ranges(&mut vec![5]), vec![(5, 5)]);
         assert_eq!(ranges(&mut vec![3, 4, 5]), vec![(3, 5)]);
-        assert_eq!(ranges(&mut vec![1, 3, 4, 7, 8]), vec![(1, 1), (3, 4), (7, 8)]);
+        assert_eq!(
+            ranges(&mut vec![1, 3, 4, 7, 8]),
+            vec![(1, 1), (3, 4), (7, 8)]
+        );
         assert_eq!(ranges(&mut vec![5, 1, 3]), vec![(1, 1), (3, 3), (5, 5)]);
         assert_eq!(ranges(&mut vec![3, 3, 3, 4]), vec![(3, 4)]);
     }
@@ -1916,6 +1902,95 @@ mod tests {
     /// callee body and its `}` — up to the entry frame's own `return`. Line
     /// numbers are pinned against the listing text so a rendering change that
     /// silently shifts them fails loudly.
+    /// An early return of an inlined callee (story SE-27): the listing has a
+    /// `goto end_P_O;` line and an `end_P_O:` line at the frame's indentation,
+    /// the `Return` label is the `goto` line, and a path that takes the early
+    /// return paints the `goto` line but no line between it and the label.
+    fn assert_early_return_jumps(dir: &str, theorem: &str, game: &str, oracle: &str, end: &str) {
+        with_debug(dir, theorem, |th, auxs| {
+            let gi = th.find_game_instance(game).unwrap();
+            let inl = crate::debug::ir::inline_oracle(gi, oracle).unwrap();
+            let lines: Vec<&str> = inl.listing.text.lines().collect();
+            let line_of = |needle: &str| {
+                1 + lines
+                    .iter()
+                    .position(|l| l.contains(needle))
+                    .unwrap_or_else(|| panic!("no `{needle}`"))
+            };
+            let goto = line_of(&format!("goto {end};"));
+            let label = line_of(&format!("{end}:"));
+            assert_eq!(lines[label - 1].trim(), format!("{end}:"));
+            let call = frame_opening(&inl.body.0, label).expect("a frame ends at the label");
+            let indent = |l: usize| lines[l - 1].len() - lines[l - 1].trim_start().len();
+            assert_eq!(
+                indent(label),
+                indent(call),
+                "the label is at the frame's indentation"
+            );
+            assert!(matches!(
+                inl.listing.sites[&goto].kind,
+                crate::debug::ir::SiteKind::Return
+            ));
+
+            let si = sample_info_for(auxs, game);
+            let paths = execute(&inl, gi, si, Side::Left, None).unwrap();
+            let painted =
+                |p: &TerminalPath, l: usize| p.lines.iter().any(|&(a, b)| a <= l && l <= b);
+            let early: Vec<_> = paths.iter().filter(|p| painted(p, goto)).collect();
+            assert!(!early.is_empty(), "a path takes the early return");
+            for p in early {
+                assert!(painted(p, label), "{:?}", p.lines);
+                // a closing delimiter of an entered block is painted (story 16)
+                let code = |l: usize| !lines[l - 1].trim_start().starts_with('}');
+                assert!(
+                    (goto + 1..label).all(|l| !code(l) || !painted(p, l)),
+                    "the code after the goto is not painted: {:?}",
+                    p.lines
+                );
+            }
+        });
+    }
+
+    /// The call line of the frame whose last line is `close`.
+    fn frame_opening(block: &[InlStmt], close: Label) -> Option<Label> {
+        block.iter().find_map(|stmt| match stmt {
+            InlStmt::Call {
+                label,
+                frame_lines,
+                body,
+                ..
+            } => (frame_lines.1 == close)
+                .then_some(*label)
+                .or_else(|| frame_opening(&body.0, close)),
+            InlStmt::Branch { then, els, .. } => {
+                frame_opening(&then.0, close).or_else(|| frame_opening(&els.0, close))
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn early_return_of_prf_eval_is_a_goto() {
+        assert_early_return_jumps(
+            "example-projects/4WHS",
+            "Full4WHS",
+            "H6_1",
+            "Send2",
+            "end_PRF_Eval",
+        );
+    }
+
+    #[test]
+    fn early_return_of_kem_dem_dec_is_a_goto() {
+        assert_early_return_jumps(
+            "example-projects/kem-dem/kem-dem-cca-blended-parallel",
+            "kem_dem_cca_blended_parallel",
+            "CCA_PKE_0",
+            "PKDEC",
+            "end_Scheme_KEMDEM_DEC",
+        );
+    }
+
     #[test]
     fn visited_lines_cover_the_whole_inlined_call_frame() {
         with_debug("example-projects/hello-world", "Proof", |th, auxs| {
@@ -1994,18 +2069,19 @@ UsefulOracle() -> (Integer, Bits(n)) {
 
         // a1-fail -> abort ; a1-hold,a2-fail -> abort ; hold,hold,unwrap-none ->
         // abort ; hold,hold,some,if-then -> return ; hold,hold,some,if-else -> return
-        assert_eq!(paths.len(), 5, "{:#?}", paths.iter().map(|p| &p.steps).collect::<Vec<_>>());
+        assert_eq!(
+            paths.len(),
+            5,
+            "{:#?}",
+            paths.iter().map(|p| &p.steps).collect::<Vec<_>>()
+        );
         let aborts = paths.iter().filter(|p| p.terminal.is_abort()).count();
         assert_eq!(aborts, 3);
 
         // the unwrap-none path aborts at the unwrap's own label.
         let unwrap_none = paths
             .iter()
-            .find(|p| {
-                p.steps
-                    .iter()
-                    .any(|s| s.decision == Decision::UnwrapNone)
-            })
+            .find(|p| p.steps.iter().any(|s| s.decision == Decision::UnwrapNone))
             .expect("one path takes the unwrap-none branch");
         assert!(unwrap_none.terminal.is_abort());
         let none_step = unwrap_none
@@ -2055,8 +2131,7 @@ UsefulOracle() -> (Integer, Bits(n)) {
                 "KEM_Proof",
                 |th, auxs| {
                     let gi = th.find_game_instance("Prot").unwrap();
-                    let inl =
-                        crate::debug::ir::inline_oracle(gi, "TestSender").unwrap();
+                    let inl = crate::debug::ir::inline_oracle(gi, "TestSender").unwrap();
                     let si = sample_info_for(auxs, "Prot");
                     out = execute(&inl, gi, si, Side::Left, Some(2));
                 },
@@ -2182,7 +2257,10 @@ UsefulOracle() -> (Integer, Bits(n)) {
         assert_eq!(paths.len(), 1);
         let p = &paths[0];
         let render = |v: &[SmtExpr]| {
-            v.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n")
+            v.iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
         };
         let actual = format!(
             "; decls\n{}\n; constraints\n{}\n; return\n{}\n",
@@ -2190,8 +2268,7 @@ UsefulOracle() -> (Integer, Bits(n)) {
             render(&p.constraints),
             p.return_constraint,
         );
-        let golden_path =
-            std::path::Path::new("testdata/story05/hello_world_medium.smt2");
+        let golden_path = std::path::Path::new("testdata/story05/hello_world_medium.smt2");
         if !golden_path.exists() {
             std::fs::create_dir_all(golden_path.parent().unwrap()).unwrap();
             std::fs::write(golden_path, &actual).unwrap();
@@ -2321,12 +2398,16 @@ UsefulOracle() -> (Integer, Bits(n)) {
     fn golden_simple_kem_run_right_partner() {
         // the right game instance's `Run` — the partner of left #2 (`#2.1`).
         let mut result = None;
-        with_debug("example-projects/simple-KEM-example", "KEM_Proof", |th, auxs| {
-            let gi = th.find_game_instance("H1_kem_correctness_real").unwrap();
-            let inl = crate::debug::ir::inline_oracle(gi, "Run").unwrap();
-            let si = sample_info_for(auxs, "H1_kem_correctness_real");
-            result = Some(execute(&inl, gi, si, Side::Right, None).unwrap());
-        });
+        with_debug(
+            "example-projects/simple-KEM-example",
+            "KEM_Proof",
+            |th, auxs| {
+                let gi = th.find_game_instance("H1_kem_correctness_real").unwrap();
+                let inl = crate::debug::ir::inline_oracle(gi, "Run").unwrap();
+                let si = sample_info_for(auxs, "H1_kem_correctness_real");
+                result = Some(execute(&inl, gi, si, Side::Right, None).unwrap());
+            },
+        );
         let paths = result.unwrap();
         // the partner of left #2: the `Corr_KEM.sk == None` branch is *not*
         // taken, so `Corr_KEM` is wholly unchanged.
@@ -2359,7 +2440,14 @@ UsefulOracle() -> (Integer, Bits(n)) {
             panic!("wrote missing golden {golden:?} — re-run the test");
         }
         assert_eq!(actual, std::fs::read_to_string(golden).unwrap());
-        for bad in ["<v!right!", "pkg-state", "store ", "mk-some", "mk-tuple", "el3-"] {
+        for bad in [
+            "<v!right!",
+            "pkg-state",
+            "store ",
+            "mk-some",
+            "mk-tuple",
+            "el3-",
+        ] {
             assert!(!actual.contains(bad), "leaked {bad:?}:\n{actual}");
         }
     }
@@ -2403,7 +2491,12 @@ UsefulOracle() -> (Integer, Bits(n)) {
         let baseline = run(KEM, "KEM_Proof", "Prot", "TestSender");
         let mut br = MockOracle::default();
         let with = run_with_oracle(
-            KEM, "KEM_Proof", "Prot", "TestSender", None, &mut br,
+            KEM,
+            "KEM_Proof",
+            "Prot",
+            "TestSender",
+            None,
+            &mut br,
             |_| ControlFlow::Continue(()),
         )
         .unwrap();
@@ -2430,7 +2523,12 @@ UsefulOracle() -> (Integer, Bits(n)) {
             ..MockOracle::default()
         };
         let got = run_with_oracle(
-            KEM, "KEM_Proof", "Prot", "TestSender", None, &mut br,
+            KEM,
+            "KEM_Proof",
+            "Prot",
+            "TestSender",
+            None,
+            &mut br,
             |_| ControlFlow::Continue(()),
         )
         .unwrap();
@@ -2452,7 +2550,12 @@ UsefulOracle() -> (Integer, Bits(n)) {
         let mut br = MockOracle::default();
         let mut seen = 0usize;
         let got = run_with_oracle(
-            KEM, "KEM_Proof", "Prot", "TestSender", None, &mut br,
+            KEM,
+            "KEM_Proof",
+            "Prot",
+            "TestSender",
+            None,
+            &mut br,
             |_| {
                 seen += 1;
                 ControlFlow::Break(())
@@ -2468,7 +2571,12 @@ UsefulOracle() -> (Integer, Bits(n)) {
     fn leave_balances_enter_on_max_paths() {
         let mut br = MockOracle::default();
         let err = run_with_oracle(
-            KEM, "KEM_Proof", "Prot", "TestSender", Some(2), &mut br,
+            KEM,
+            "KEM_Proof",
+            "Prot",
+            "TestSender",
+            Some(2),
+            &mut br,
             |_| ControlFlow::Continue(()),
         )
         .unwrap_err();

@@ -28,6 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::debug::claims::{check_claim, ClaimQuery, PairAborts};
 use crate::debug::driver::{ClaimVerdict, DebugError, StopReason, Verdict};
+use crate::debug::exec::Side;
 use crate::debug::exec::{Head, SideExec, SidePos, Terminal};
 use crate::debug::layout::Layout;
 use crate::debug::lockstep::{
@@ -35,7 +36,6 @@ use crate::debug::lockstep::{
     LockstepOutcome, LockstepSide, NodeKind, PairRecord, PairSide, SideStep, SideView,
     SolverAnswer,
 };
-use crate::debug::exec::Side;
 use crate::util::smtsolver::{SmtSolver, SmtSolverResponse};
 use crate::writers::smt::exprs::{SmtAssert, SmtExpr, SmtNot};
 

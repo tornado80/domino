@@ -61,7 +61,11 @@ pub fn render_file(f: &EcFile) -> String {
 }
 
 fn render_require(r: &Require) -> String {
-    let keyword = if r.import { "require import" } else { "require" };
+    let keyword = if r.import {
+        "require import"
+    } else {
+        "require"
+    };
     format!("{keyword} {}.", r.names.join(" "))
 }
 
@@ -123,7 +127,12 @@ fn render_record(name: &str, fields: &[(String, EcType)]) -> String {
     out
 }
 
-fn render_op_def(name: &str, args: &[(String, EcType)], ret: Option<&EcType>, body: &EcExpr) -> String {
+fn render_op_def(
+    name: &str,
+    args: &[(String, EcType)],
+    ret: Option<&EcType>,
+    body: &EcExpr,
+) -> String {
     let mut out = format!("op {name}");
     for (arg_name, ty) in args {
         out.push_str(&format!(" ({arg_name} : {})", render_type(ty)));
@@ -133,7 +142,11 @@ fn render_op_def(name: &str, args: &[(String, EcType)], ret: Option<&EcType>, bo
     }
     // Story 43 §3.2: the body starts on the next line, indented two spaces.
     let col = INDENT.len();
-    out.push_str(&format!(" =\n{}{}.", indent(1), render_expr_block(body, col)));
+    out.push_str(&format!(
+        " =\n{}{}.",
+        indent(1),
+        render_expr_block(body, col)
+    ));
     out
 }
 
@@ -261,7 +274,12 @@ fn render_proc(p: &EcProc, level: usize) -> String {
 // row can carry its own label — it must never `format!` EasyCrypt itself.
 
 /// `proc name(a : t, …) : ret = {`
-pub fn render_proc_open(name: &str, args: &[(String, EcType)], ret: &EcType, level: usize) -> String {
+pub fn render_proc_open(
+    name: &str,
+    args: &[(String, EcType)],
+    ret: &EcType,
+    level: usize,
+) -> String {
     format!(
         "{}proc {name}({}) : {} = {{",
         indent(level),
@@ -274,7 +292,11 @@ pub fn render_proc_open(name: &str, args: &[(String, EcType)], ret: &EcType, lev
 pub fn render_local_decl(name: &str, ty: &EcType, init: Option<&EcExpr>, level: usize) -> String {
     let pad = indent(level);
     match init {
-        Some(e) => format!("{pad}var {name} : {} <- {};", render_type(ty), render_expr(e)),
+        Some(e) => format!(
+            "{pad}var {name} : {} <- {};",
+            render_type(ty),
+            render_expr(e)
+        ),
         None => format!("{pad}var {name} : {};", render_type(ty)),
     }
 }
@@ -308,22 +330,16 @@ pub fn render_stmt(stmt: &EcStmt, level: usize) -> String {
         EcStmt::Assign { lhs, rhs } => {
             format!("{pad}{} <- {};", render_lvalue(lhs), render_expr(rhs))
         }
-        EcStmt::Sample { lhs, distr } => format!(
-            "{pad}{} <$ {};",
-            render_lvalue(lhs),
-            render_expr(distr)
-        ),
+        EcStmt::Sample { lhs, distr } => {
+            format!("{pad}{} <$ {};", render_lvalue(lhs), render_expr(distr))
+        }
         EcStmt::Call {
             lhs,
             module,
             proc,
             args,
         } => {
-            let rendered_args = args
-                .iter()
-                .map(render_expr)
-                .collect::<Vec<_>>()
-                .join(", ");
+            let rendered_args = args.iter().map(render_expr).collect::<Vec<_>>().join(", ");
             let call = format!("{module}.{proc}({rendered_args})");
             match lhs {
                 Some(l) => format!("{pad}{} <@ {call};", render_lvalue(l)),
@@ -428,7 +444,11 @@ fn render_lemma_binder(b: &LemmaBinder) -> String {
 
 fn render_proof_line(line: &ProofLine) -> String {
     match line {
-        ProofLine::Tactic { indent: i, bullet, text } => {
+        ProofLine::Tactic {
+            indent: i,
+            bullet,
+            text,
+        } => {
             let pad = indent(*i);
             match bullet {
                 Some(b) => format!("{pad}{b} {text}"),
@@ -627,7 +647,11 @@ pub fn render_expr_block(e: &EcExpr, col: usize) -> String {
 /// `col`, then the body laid out from there.
 fn render_body_on_next_line(body: &EcExpr, col: usize) -> String {
     let body_col = col + INDENT.len();
-    format!("\n{}{}", " ".repeat(body_col), render_expr_block(body, body_col))
+    format!(
+        "\n{}{}",
+        " ".repeat(body_col),
+        render_expr_block(body, body_col)
+    )
 }
 
 /// Render a record literal for the invariant `call` (story 43 §3.3): `{| f
@@ -649,7 +673,10 @@ pub fn render_record_block(e: &EcExpr, col: usize) -> String {
         .iter()
         .map(|(f, v)| {
             let prefix = format!("{f} = ");
-            format!("{prefix}{}", render_record_block(v, field_col + prefix.len()))
+            format!(
+                "{prefix}{}",
+                render_record_block(v, field_col + prefix.len())
+            )
         })
         .collect();
     format!(
@@ -722,9 +749,7 @@ fn prec(e: &EcExpr) -> i8 {
         | EcExpr::OracleEquiv { .. }
         | EcExpr::OracleHoare { .. } => ATOM_PREC,
         EcExpr::App { args, .. } if args.is_empty() => ATOM_PREC,
-        EcExpr::App { .. } | EcExpr::Some_(_) | EcExpr::Oget(_) | EcExpr::MapRem { .. } => {
-            APP_PREC
-        }
+        EcExpr::App { .. } | EcExpr::Some_(_) | EcExpr::Oget(_) | EcExpr::MapRem { .. } => APP_PREC,
         EcExpr::Unop { .. } => UNOP_PREC,
         EcExpr::Binop { op, .. } => binop_info(*op).1,
         EcExpr::If { .. } | EcExpr::Let { .. } | EcExpr::Quant { .. } => 0,
@@ -822,11 +847,7 @@ fn render_expr_inner(e: &EcExpr) -> String {
         EcExpr::None_(_) => "None".to_string(),
         EcExpr::Oget(inner) => format!("oget {}", render_operand(inner, ATOM_PREC)),
         EcExpr::MapGet { map, key } => {
-            format!(
-                "{}.[{}]",
-                render_operand(map, ATOM_PREC),
-                render_expr(key)
-            )
+            format!("{}.[{}]", render_operand(map, ATOM_PREC), render_expr(key))
         }
         EcExpr::MapSet { map, key, value } => format!(
             "{}.[{} <- {}]",

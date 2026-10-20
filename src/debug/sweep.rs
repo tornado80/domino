@@ -107,8 +107,7 @@ pub fn plan<P: Project>(
                 })
                 .unwrap_or_default();
             if let Some(wanted) = oracle {
-                if !exports.iter().any(|o| o == wanted) && proof.is_some() && proofstep.is_some()
-                {
+                if !exports.iter().any(|o| o == wanted) && proof.is_some() && proofstep.is_some() {
                     return Err(DebugError::OracleNotExported {
                         oracle: wanted.to_string(),
                         game_inst: eq.left_name().to_string(),
@@ -302,12 +301,15 @@ impl SweepEntry {
                     format!(
                         "{} ({})",
                         c.claim,
-                        [(c.goal_fails, "GOAL FAILS"), (c.inconclusive, "inconclusive")]
-                            .iter()
-                            .filter(|(n, _)| *n > 0)
-                            .map(|(n, w)| format!("{n} {w}"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        [
+                            (c.goal_fails, "GOAL FAILS"),
+                            (c.inconclusive, "inconclusive")
+                        ]
+                        .iter()
+                        .filter(|(n, _)| *n > 0)
+                        .map(|(n, w)| format!("{n} {w}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                     )
                 })
                 .collect();
@@ -390,7 +392,15 @@ pub fn failure_table(entries: &[SweepEntry]) -> String {
                 if pairs.is_empty() {
                     String::new()
                 } else {
-                    format!(" ({}", pairs.iter().take(SHOWN).copied().collect::<Vec<_>>().join(", "))
+                    format!(
+                        " ({}",
+                        pairs
+                            .iter()
+                            .take(SHOWN)
+                            .copied()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 },
                 if pairs.is_empty() {
                     String::new()
@@ -411,11 +421,16 @@ pub fn failure_table(entries: &[SweepEntry]) -> String {
 /// Percent-encode what a relative `href` cannot hold: `!` and spaces appear in run names
 /// (`!all-claims!`) and stay legal, but `#` and `?` would cut the path short.
 pub(crate) fn href_attr(path: &str) -> String {
-    path.replace('#', "%23").replace('?', "%3F").replace(' ', "%20")
+    path.replace('#', "%23")
+        .replace('?', "%3F")
+        .replace(' ', "%20")
 }
 
 pub(crate) fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 #[cfg(test)]
@@ -459,7 +474,10 @@ mod tests {
 
     #[test]
     fn a_clean_sweep_has_no_failure_table() {
-        assert_eq!(failure_table(&[entry(true, vec![line("same-output", 0)], vec![])]), "");
+        assert_eq!(
+            failure_table(&[entry(true, vec![line("same-output", 0)], vec![])]),
+            ""
+        );
     }
 
     #[test]
@@ -468,8 +486,18 @@ mod tests {
             false,
             vec![line("same-output", 0), line("invariant", 2)],
             vec![
-                Failure { check: "invariant".into(), part_of: None, pair: "#1.2".into(), verdict: "goal-fails" },
-                Failure { check: "invariant".into(), part_of: None, pair: "#3.1".into(), verdict: "goal-fails" },
+                Failure {
+                    check: "invariant".into(),
+                    part_of: None,
+                    pair: "#1.2".into(),
+                    verdict: "goal-fails",
+                },
+                Failure {
+                    check: "invariant".into(),
+                    part_of: None,
+                    pair: "#3.1".into(),
+                    verdict: "goal-fails",
+                },
             ],
         );
         let table = failure_table(&[e]);

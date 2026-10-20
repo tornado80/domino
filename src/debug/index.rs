@@ -196,7 +196,8 @@ pub fn write_result(entry: &SweepEntry) -> std::io::Result<PathBuf> {
     let path = entry
         .out_dir
         .join(Layout::Strategy(entry.strategy).result());
-    let json = serde_json::to_string_pretty(&ResultRecord::of(entry)).map_err(std::io::Error::other)?;
+    let json =
+        serde_json::to_string_pretty(&ResultRecord::of(entry)).map_err(std::io::Error::other)?;
     std::fs::write(&path, json + "\n")?;
     Ok(path)
 }
@@ -235,10 +236,19 @@ fn utc_of(secs: u64) -> String {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
     Project,
-    Theorem { theorem: String },
-    Proofstep { theorem: String, left: String, right: String },
+    Theorem {
+        theorem: String,
+    },
+    Proofstep {
+        theorem: String,
+        left: String,
+        right: String,
+    },
     /// The one-sided runs of a composition, in `!debug!/SideInv_<C>/` under the theorem.
-    SideInv { theorem: String, composition: String },
+    SideInv {
+        theorem: String,
+        composition: String,
+    },
 }
 
 impl Level {
@@ -263,10 +273,15 @@ impl Level {
         match self {
             Level::Project => root.to_path_buf(),
             Level::Theorem { theorem } => root.join(theorem),
-            Level::Proofstep { theorem, left, right } => proofstep_dir(root, theorem, left, right),
-            Level::SideInv { theorem, composition } => {
-                root.join(theorem).join(side_inv_rel(composition))
-            }
+            Level::Proofstep {
+                theorem,
+                left,
+                right,
+            } => proofstep_dir(root, theorem, left, right),
+            Level::SideInv {
+                theorem,
+                composition,
+            } => root.join(theorem).join(side_inv_rel(composition)),
         }
     }
 
@@ -286,10 +301,17 @@ impl Level {
         match self {
             Level::Project => "domino debug — project".to_string(),
             Level::Theorem { theorem } => format!("domino debug — theorem {theorem}"),
-            Level::Proofstep { theorem, left, right } => {
+            Level::Proofstep {
+                theorem,
+                left,
+                right,
+            } => {
                 format!("domino debug — {theorem}: {left} == {right}")
             }
-            Level::SideInv { theorem, composition } => {
+            Level::SideInv {
+                theorem,
+                composition,
+            } => {
                 format!("domino debug — {theorem}: side invariants of {composition}")
             }
         }
@@ -432,7 +454,14 @@ enum Link {
 fn header(level: &Level) -> &'static [&'static str] {
     match level {
         Level::Project => &["theorem", "runs", "runs not ok", "oldest run", ""],
-        Level::Theorem { .. } => &["proofstep", "games", "runs", "runs not ok", "oldest run", ""],
+        Level::Theorem { .. } => &[
+            "proofstep",
+            "games",
+            "runs",
+            "runs not ok",
+            "oldest run",
+            "",
+        ],
         Level::Proofstep { .. } | Level::SideInv { .. } => &[
             "oracle",
             "claim",
@@ -454,7 +483,11 @@ fn rows(level: &Level, dir: &Path, found: &[Found]) -> Vec<Row> {
                 .into_iter()
                 .map(|((theorem, _, _), runs)| {
                     let hint = format!("no index; run `domino debug --proof {theorem}`");
-                    child_row(vec![theorem.clone()], &runs, child_link(dir, &theorem, hint))
+                    child_row(
+                        vec![theorem.clone()],
+                        &runs,
+                        child_link(dir, &theorem, hint),
+                    )
                 })
                 .collect()
         }
@@ -517,8 +550,16 @@ fn child_link(dir: &Path, child: &str, hint: String) -> Link {
 
 fn child_row(mut cells: Vec<String>, runs: &[&ResultRecord], link: Link) -> Row {
     let not_ok = runs.iter().filter(|r| !r.ok).count();
-    let oldest = runs.iter().map(|r| r.finished_at.as_str()).min().unwrap_or("");
-    cells.extend([runs.len().to_string(), not_ok.to_string(), oldest.to_string()]);
+    let oldest = runs
+        .iter()
+        .map(|r| r.finished_at.as_str())
+        .min()
+        .unwrap_or("");
+    cells.extend([
+        runs.len().to_string(),
+        not_ok.to_string(),
+        oldest.to_string(),
+    ]);
     Row {
         cells,
         ok: not_ok == 0,
@@ -530,7 +571,12 @@ fn run_row(dir: &Path, f: &Found) -> Row {
     let r = &f.record;
     let failing: Vec<String> = r
         .failing_checks()
-        .map(|c| format!("{} ({} fail, {} inconclusive)", c.check, c.goal_fails, c.inconclusive))
+        .map(|c| {
+            format!(
+                "{} ({} fail, {} inconclusive)",
+                c.check, c.goal_fails, c.inconclusive
+            )
+        })
         .collect();
     Row {
         cells: vec![
@@ -560,7 +606,12 @@ fn failure_lines(dir: &Path, found: &[Found]) -> Vec<(String, String)> {
         .filter(|f| f.record.failing_checks().next().is_some() || !f.record.failures.is_empty())
         .map(|f| {
             let r = &f.record;
-            let line = format!("{} {}: {}", r.label(), r.strategy, r.failure_chains().join("; "));
+            let line = format!(
+                "{} {}: {}",
+                r.label(),
+                r.strategy,
+                r.failure_chains().join("; ")
+            );
             (line, viewer_href(dir, f))
         })
         .collect()
@@ -605,8 +656,14 @@ fn render_table(html: &mut String, text: &mut String, header: &[&str], rows: &[R
             let _ = write!(html, "<td>{}</td>", esc(cell));
         }
         let (cell, line) = match &row.link {
-            Link::To(href, label) => (format!("<a href=\"{}\">{label}</a>", esc(href)), href.clone()),
-            Link::Hint(hint) => (format!("<span class=\"dim\">{}</span>", esc(hint)), hint.clone()),
+            Link::To(href, label) => (
+                format!("<a href=\"{}\">{label}</a>", esc(href)),
+                href.clone(),
+            ),
+            Link::Hint(hint) => (
+                format!("<span class=\"dim\">{}</span>", esc(hint)),
+                hint.clone(),
+            ),
         };
         let _ = writeln!(html, "<td>{cell}</td></tr>");
         let _ = writeln!(text, "{}  {line}", row.cells.join("  "));
@@ -758,7 +815,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         put(root.path(), &record("T", 0, "O", "sequential", true));
         put(root.path(), &record("T", 1, "O", "sequential", true));
-        refresh_indexes(root.path(), &Level::Theorem { theorem: "T".into() }).unwrap();
+        refresh_indexes(
+            root.path(),
+            &Level::Theorem {
+                theorem: "T".into(),
+            },
+        )
+        .unwrap();
 
         let mut newer = record("T", 0, "O", "sequential", false);
         newer.finished_at = "2026-10-08T09:00:00Z".into();
@@ -775,8 +838,14 @@ mod tests {
         assert!(!root.path().join("index.html").exists());
 
         let theorem = read(root.path().join("T/summary.txt"));
-        assert!(theorem.contains("0  L0 == R0  1  1  2026-10-08T09:00:00Z"), "{theorem}");
-        assert!(theorem.contains("1  L1 == R1  1  0  2026-10-07T12:00:00Z"), "{theorem}");
+        assert!(
+            theorem.contains("0  L0 == R0  1  1  2026-10-08T09:00:00Z"),
+            "{theorem}"
+        );
+        assert!(
+            theorem.contains("1  L1 == R1  1  0  2026-10-07T12:00:00Z"),
+            "{theorem}"
+        );
     }
 
     #[test]
@@ -788,7 +857,10 @@ mod tests {
         put(root.path(), &record("T", 0, "B", "sequential", true));
         refresh_indexes(root.path(), &Level::Project).unwrap();
         let project = read(root.path().join("summary.txt"));
-        assert!(project.contains("T  2  0  2026-01-01T00:00:00Z  T/index.html"), "{project}");
+        assert!(
+            project.contains("T  2  0  2026-01-01T00:00:00Z  T/index.html"),
+            "{project}"
+        );
     }
 
     #[test]
@@ -821,9 +893,18 @@ mod tests {
         put(root.path(), &record("T", 1, "O", "sequential", true));
         refresh_indexes(root.path(), &step("T", 0)).unwrap();
         std::fs::write(root.path().join("T/index.html"), "").unwrap();
-        update_indexes(root.path(), &Level::Theorem { theorem: "T".into() }).unwrap();
+        update_indexes(
+            root.path(),
+            &Level::Theorem {
+                theorem: "T".into(),
+            },
+        )
+        .unwrap();
         let text = read(root.path().join("T/summary.txt"));
-        assert!(text.contains("L0 == R0  1  0  2026-10-07T12:00:00Z  L0-R0/index.html"), "{text}");
+        assert!(
+            text.contains("L0 == R0  1  0  2026-10-07T12:00:00Z  L0-R0/index.html"),
+            "{text}"
+        );
         assert!(
             text.contains("no index; run `domino debug --proof T --proofstep 1`"),
             "{text}"
@@ -834,7 +915,13 @@ mod tests {
     fn the_failures_list_names_the_checks_and_links_the_viewer() {
         let root = tempfile::tempdir().unwrap();
         put(root.path(), &record("T", 0, "O", "sequential", false));
-        refresh_indexes(root.path(), &Level::Theorem { theorem: "T".into() }).unwrap();
+        refresh_indexes(
+            root.path(),
+            &Level::Theorem {
+                theorem: "T".into(),
+            },
+        )
+        .unwrap();
         let text = read(root.path().join("T/summary.txt"));
         assert!(
             text.contains(
@@ -854,7 +941,10 @@ mod tests {
     fn the_failures_list_shows_at_most_fifty_runs() {
         let root = tempfile::tempdir().unwrap();
         for n in 0..53 {
-            put(root.path(), &record("T", 0, &format!("O{n:02}"), "sequential", false));
+            put(
+                root.path(),
+                &record("T", 0, &format!("O{n:02}"), "sequential", false),
+            );
         }
         refresh_indexes(root.path(), &step("T", 0)).unwrap();
         let text = read(root.path().join("T/L0-R0/summary.txt"));

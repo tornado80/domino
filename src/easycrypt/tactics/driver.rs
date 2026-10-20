@@ -17,11 +17,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use crate::debug::driver::Verdict;
-use crate::debug::progress::eprintln_above_bars;
 use crate::debug::lockstep::{
     ChildOutcome, HeadKind, JointChild, JointNode, LockstepOutcome, NodeKind, PairRecord,
     EQUAL_OUTPUT,
 };
+use crate::debug::progress::eprintln_above_bars;
 use crate::easycrypt::json::{Goal, GoalKind, Status};
 use crate::easycrypt::session::{Session, SessionError, Want};
 use crate::easycrypt::time_by_role::TimeByRole;
@@ -29,8 +29,8 @@ use crate::easycrypt::transcript::{Role, SentenceCtx};
 
 use super::goals;
 use super::live::{Closing, LiveHandle};
-use super::ResumeMode;
 use super::script::{Mark, Script};
+use super::ResumeMode;
 use crate::easycrypt::job::{AdmitRecord, ClosedNode};
 use crate::writers::easycrypt::invariant::{state_relation_op_name, InvariantOp};
 
@@ -365,7 +365,10 @@ pub(super) enum Part {
     /// A side invariant of a side-invariant lemma (story 73): a `PkgInv_<N>_of_<Inst>_in_<C>`
     /// wrapper or a `GameInv_<N>_of_<C>`, by its EasyCrypt name, with the one Domino claim it
     /// stands for.
-    SideInvariant { op: String, claim: String },
+    SideInvariant {
+        op: String,
+        claim: String,
+    },
 }
 
 impl Part {
@@ -376,7 +379,10 @@ impl Part {
             Part::Invariant => "invariant".into(),
             Part::Relation(name) => format!("invariant/{}", state_relation_op_name(name)),
             Part::SideInvariant { op, .. } => {
-                format!("invariant/{}", op.rsplit_once('.').map_or(op.as_str(), |(_, n)| n))
+                format!(
+                    "invariant/{}",
+                    op.rsplit_once('.').map_or(op.as_str(), |(_, n)| n)
+                )
             }
         }
     }
@@ -486,11 +492,14 @@ pub(super) fn pair_view(pair: &PairRecord, part: &Part) -> DominoView {
         Part::EqualOutput => view_of_verdict(claim(EQUAL_OUTPUT)),
         Part::Invariant => invariant(claim("invariant")),
         Part::Relation(name) if name == "invariant" => invariant(claim("invariant")),
-        Part::Relation(name) => part_view(pair, &state_relation_op_name(name), claim("invariant"), invariant),
+        Part::Relation(name) => part_view(
+            pair,
+            &state_relation_op_name(name),
+            claim("invariant"),
+            invariant,
+        ),
         Part::SideInvariant { op, .. } => part_view(pair, op, claim("invariant"), invariant),
-        Part::Whole => {
-            view_of_verdict(claim(EQUAL_OUTPUT)).worst(invariant(claim("invariant")))
-        }
+        Part::Whole => view_of_verdict(claim(EQUAL_OUTPUT)).worst(invariant(claim("invariant"))),
     }
 }
 
@@ -603,7 +612,9 @@ impl Resume {
             id.strip_prefix('N')
                 .and_then(|k| k.parse::<usize>().ok())
                 .filter(|&k| k < total)
-                .unwrap_or_else(|| panic!("node {id} of the session record is not in the saved tree"))
+                .unwrap_or_else(|| {
+                    panic!("node {id} of the session record is not in the saved tree")
+                })
         };
         let skip_quick_close = if in_flight == "router" {
             HashSet::new()
@@ -1188,7 +1199,10 @@ impl Prover<'_> {
             if closed {
                 return Ok(true);
             }
-            let unfolded = Closing::Fallback { k: k + 1, of: FALLBACKS };
+            let unfolded = Closing::Fallback {
+                k: k + 1,
+                of: FALLBACKS,
+            };
             let shown = format!("{shown} (premise unfolded)");
             let closed = self.as_role(Role::SideGoalFallback(k + 1), |p| {
                 p.closing_attempt(unfolded, &shown, |p| p.try_with_premise(tail))
@@ -1283,11 +1297,7 @@ impl Prover<'_> {
     pub(super) fn prove_node(&mut self, idx: usize) -> R<()> {
         if let Some(live) = &self.live {
             let node = self.tree.node(idx);
-            let mut ids: Vec<String> = self
-                .tree
-                .pairs_below(idx)
-                .map(|p| p.id.clone())
-                .collect();
+            let mut ids: Vec<String> = self.tree.pairs_below(idx).map(|p| p.id.clone()).collect();
             ids.extend(node.stuck.clone());
             live.node_entered(&format!("N{idx}"), node.kind.as_str(), ids, Some(idx));
             live.node_started(&format!("N{idx}"), self.tree.outcome.tree.nodes.len());
@@ -1449,7 +1459,9 @@ impl Prover<'_> {
                 // a side tree's terminal: every package and game invariant claim fails
                 Judgement::Hoare => {
                     !p.claims.is_empty()
-                        && p.claims.iter().all(|c| view_of_verdict(&c.verdict) == DominoView::Fails)
+                        && p.claims
+                            .iter()
+                            .all(|c| view_of_verdict(&c.verdict) == DominoView::Fails)
                 }
             });
             if all_fail {
@@ -1703,7 +1715,8 @@ impl Prover<'_> {
             c if c.right.is_some() => 2,
             _ => return Ok(false),
         };
-        if !self.send(&format!("if{{{side}}}."), Want::Full)? || !self.two_programs_in_front(before) {
+        if !self.send(&format!("if{{{side}}}."), Want::Full)? || !self.two_programs_in_front(before)
+        {
             return Ok(false);
         }
         for child in &node.children {
@@ -1868,10 +1881,13 @@ impl Prover<'_> {
     /// and that `if`'s condition.
     fn first_exit_if(&self) -> Option<(u8, String)> {
         let first = |side: &crate::easycrypt::json::Side| {
-            side.stmt.iter().find(|i| i.kind == "if").map(|i| match &i.cond {
-                Some(c) if !c.pp.is_empty() => c.pp.clone(),
-                _ => i.pp.trim_start_matches("if").to_string(),
-            })
+            side.stmt
+                .iter()
+                .find(|i| i.kind == "if")
+                .map(|i| match &i.cond {
+                    Some(c) if !c.pp.is_empty() => c.pp.clone(),
+                    _ => i.pp.trim_start_matches("if").to_string(),
+                })
         };
         (1u8..)
             .zip(self.programs())
@@ -2001,7 +2017,8 @@ impl Prover<'_> {
             Step::Intro(names) => {
                 let sent = self.send(&format!("move => {names} /=."), Want::Head)?;
                 if sent {
-                    self.binders.extend(names.split_whitespace().map(String::from));
+                    self.binders
+                        .extend(names.split_whitespace().map(String::from));
                 }
                 Ok(sent)
             }
@@ -2346,7 +2363,9 @@ impl Prover<'_> {
                 continue;
             }
             let snap = self.snap();
-            if self.send(&format!("if{{{side}}}."), Want::Full)? && self.two_programs_in_front(before) {
+            if self.send(&format!("if{{{side}}}."), Want::Full)?
+                && self.two_programs_in_front(before)
+            {
                 self.bullet(|p| p.prove_blind(node, budget - 1))?;
                 return self.bullet(|p| p.prove_blind(node, budget - 1));
             }

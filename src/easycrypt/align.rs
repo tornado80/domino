@@ -14,7 +14,7 @@
 //! [`align_router`] first peels off the router: after `proc; inline.` the whole program of an
 //! exported oracle is the router's `if (!abort_flag) { … }`, and only its body is compared.
 
-use crate::debug::ir::{Label, ExitGuard};
+use crate::debug::ir::{ExitGuard, Label};
 
 use super::skeleton::{Arm, EcPos, Node, NodeKind};
 
@@ -453,7 +453,10 @@ mod tests {
 
     #[test]
     fn unknown_ec_instruction_is_reported_and_skipped() {
-        let ec = [Node::ec(NodeKind::Unknown, "while (i < 3) { … }"), ecs("x <$ d")];
+        let ec = [
+            Node::ec(NodeKind::Unknown, "while (i < 3) { … }"),
+            ecs("x <$ d"),
+        ];
         let a = align(&ec, &[irs(1)]);
         assert_eq!(kinds(&a), [MismatchKind::UnknownEcInstruction]);
         assert_eq!(a.matches.len(), 1);
@@ -472,17 +475,27 @@ mod tests {
         assert_eq!(kinds(&a), [MismatchKind::ExtraEcDecision]);
         assert_eq!(a.mismatches[0].ec.as_deref(), Some("surprise"));
         let labels: Vec<Label> = a.matches.iter().map(|m| m.ir_label).collect();
-        assert_eq!(labels, [1, 2, 3], "everything after the surprise still aligns");
+        assert_eq!(
+            labels,
+            [1, 2, 3],
+            "everything after the surprise still aligns"
+        );
     }
 
     #[test]
     fn a_mismatch_inside_a_branch_carries_its_path_and_does_not_hide_later_ones() {
-        let ec = [ecb("c", vec![ecs("a <$ d")], vec![ecs("z <$ d")]), ecs("b <$ d")];
+        let ec = [
+            ecb("c", vec![ecs("a <$ d")], vec![ecs("z <$ d")]),
+            ecs("b <$ d"),
+        ];
         let ir = [irb(7, vec![irs(8), irs(9)], vec![]), irs(10)];
         let a = align(&ec, &ir);
         assert_eq!(
             kinds(&a),
-            [MismatchKind::MissingEcDecision, MismatchKind::ExtraEcDecision]
+            [
+                MismatchKind::MissingEcDecision,
+                MismatchKind::ExtraEcDecision
+            ]
         );
         assert_eq!(
             a.mismatches[0].path,

@@ -7,8 +7,8 @@ use crate::{
     gamehops::equivalence::smtrewrite::SmtStatementKind,
     hacks,
     theorem::{
-        BuiltInFact, ClaimKind, GameInstance, InvariantSide, RandomnessMappingInjectivityCheck, RandomnessType,
-        ResolvedClaim, ResolvedDependency,
+        BuiltInFact, ClaimKind, GameInstance, InvariantSide, RandomnessMappingInjectivityCheck,
+        RandomnessType, ResolvedClaim, ResolvedDependency,
     },
     transforms::samplify::SampleInfo,
     types::{Type, TypeKind},
@@ -207,7 +207,10 @@ impl<'a> EquivalenceContext<'a> {
         .into()
     }
 
-    pub(crate) fn emit_game_or_package_invariant_start_assert(&self, claim: &ResolvedClaim) -> SmtExpr {
+    pub(crate) fn emit_game_or_package_invariant_start_assert(
+        &self,
+        claim: &ResolvedClaim,
+    ) -> SmtExpr {
         let gctx = match claim.kind().invariant_side() {
             Some(InvariantSide::Left) => self.left_game_inst_ctx(),
             Some(InvariantSide::Right) => self.right_game_inst_ctx(),
@@ -430,7 +433,11 @@ impl<'a> EquivalenceContext<'a> {
 
     /// The single-refutation claim assertion `prove` uses:
     /// `(assert (not (=> (and <deps>) <goal>)))`.
-    pub(crate) fn emit_oracle_claim_assert(&self, claim: &ResolvedClaim, oracle_name: &str) -> SmtExpr {
+    pub(crate) fn emit_oracle_claim_assert(
+        &self,
+        claim: &ResolvedClaim,
+        oracle_name: &str,
+    ) -> SmtExpr {
         let (deps, goal) = self.claim_assumptions_and_goal(claim, oracle_name);
         crate::writers::smt::exprs::SmtAssert(SmtNot(SmtImplies(SmtAnd(deps), goal))).into()
     }
@@ -444,7 +451,11 @@ impl<'a> EquivalenceContext<'a> {
     /// [`emit_oracle_claim_assert`](Self::emit_oracle_claim_assert) produces.
     // Consumed by `domino debug` (story 06); no non-test caller on this branch yet.
     #[allow(dead_code)]
-    pub(crate) fn emit_claim_assumptions(&self, claim: &ResolvedClaim, oracle_name: &str) -> Vec<SmtExpr> {
+    pub(crate) fn emit_claim_assumptions(
+        &self,
+        claim: &ResolvedClaim,
+        oracle_name: &str,
+    ) -> Vec<SmtExpr> {
         let (deps, _goal) = self.claim_assumptions_and_goal(claim, oracle_name);
         deps.into_iter()
             .map(|dep| crate::writers::smt::exprs::SmtAssert(dep).into())
@@ -472,7 +483,11 @@ impl<'a> EquivalenceContext<'a> {
     /// — what [`emit_claim_assumptions`](Self::emit_claim_assumptions) has beyond
     /// [`emit_shared_assumptions`](Self::emit_shared_assumptions). Story 19 asserts these at the
     /// terminal pair in an all-claim run.
-    pub(crate) fn emit_claim_own_assumptions(&self, claim: &ResolvedClaim, oracle_name: &str) -> Vec<SmtExpr> {
+    pub(crate) fn emit_claim_own_assumptions(
+        &self,
+        claim: &ResolvedClaim,
+        oracle_name: &str,
+    ) -> Vec<SmtExpr> {
         let (_shared, own, _goal) = self.claim_assumption_parts(claim, oracle_name);
         own.into_iter()
             .map(|dep| crate::writers::smt::exprs::SmtAssert(dep).into())
@@ -484,7 +499,11 @@ impl<'a> EquivalenceContext<'a> {
     /// are already on the stack.
     // Consumed by `domino debug` (story 06); no non-test caller on this branch yet.
     #[allow(dead_code)]
-    pub(crate) fn emit_claim_goal_negated(&self, claim: &ResolvedClaim, oracle_name: &str) -> SmtExpr {
+    pub(crate) fn emit_claim_goal_negated(
+        &self,
+        claim: &ResolvedClaim,
+        oracle_name: &str,
+    ) -> SmtExpr {
         let (_deps, goal) = self.claim_assumptions_and_goal(claim, oracle_name);
         crate::writers::smt::exprs::SmtAssert(SmtNot(goal)).into()
     }
@@ -524,7 +543,10 @@ impl<'a> EquivalenceContext<'a> {
         }
 
         let mut claims = invariant_claims(&self.left_invariants, InvariantSide::Left);
-        claims.extend(invariant_claims(&self.right_invariants, InvariantSide::Right));
+        claims.extend(invariant_claims(
+            &self.right_invariants,
+            InvariantSide::Right,
+        ));
         claims
     }
 
@@ -544,7 +566,10 @@ impl<'a> EquivalenceContext<'a> {
             .collect()
     }
 
-    pub(crate) fn randomness_mapping_candidates(&self, oracle_name: &str) -> Vec<RandomnessMappingEntry> {
+    pub(crate) fn randomness_mapping_candidates(
+        &self,
+        oracle_name: &str,
+    ) -> Vec<RandomnessMappingEntry> {
         let left_export = self
             .left_game_inst_ctx()
             .game()
@@ -593,8 +618,8 @@ impl<'a> EquivalenceContext<'a> {
                 right_entries
                     .iter()
                     .filter(move |(_, _, _, ty_right)| ty_left.types_match(ty_right))
-                    .map(
-                        move |(right_position, sample_id_right, offset_right, _)| RandomnessMappingEntry {
+                    .map(move |(right_position, sample_id_right, offset_right, _)| {
+                        RandomnessMappingEntry {
                             sample_left: left_position.sample_id,
                             sample_right: right_position.sample_id,
                             sample_id_left: sample_id_left.clone(),
@@ -605,8 +630,8 @@ impl<'a> EquivalenceContext<'a> {
                             // sort, so either type can be used to pick the `__sample-rand-*`
                             // functions for both sides.
                             ty: (*ty_left).clone(),
-                        },
-                    )
+                        }
+                    })
             })
             .collect()
     }

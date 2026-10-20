@@ -108,11 +108,15 @@ fn a_proof_job_touches_only_its_own_files_skips_a_done_equivalence_and_recreates
         !String::from_utf8_lossy(&after[&format!("{EQ}_UsefulOracle.ec")].0)
             .contains("+ proc; inline. admit.")
     );
-    assert!(theorem.join("session").join(EQ).join("UsefulOracle.record.json").is_file());
+    assert!(theorem
+        .join("session")
+        .join(EQ)
+        .join("UsefulOracle.record.json")
+        .is_file());
     // story 67: no record, tree or report at the top level
-    assert!(after
-        .keys()
-        .all(|n| !n.ends_with(".session.json") && !n.ends_with(".tree.json") && !n.ends_with(".report.txt")));
+    assert!(after.keys().all(|n| !n.ends_with(".session.json")
+        && !n.ends_with(".tree.json")
+        && !n.ends_with(".report.txt")));
     assert!(!stderr(&out).contains("created"), "{}", stderr(&out));
     // `--out` is honoured by lockstep output too
     assert!(theorem.join("!debug!").is_dir());
@@ -139,7 +143,8 @@ fn a_proof_job_touches_only_its_own_files_skips_a_done_equivalence_and_recreates
     assert!(
         stderr(&out)
             .lines()
-            .any(|l| l == format!("easycrypt prove: {EQ} — wrote missing translation files: Types.ec")),
+            .any(|l| l
+                == format!("easycrypt prove: {EQ} — wrote missing translation files: Types.ec")),
         "{}",
         stderr(&out)
     );
@@ -298,7 +303,10 @@ fn two_proof_jobs_on_different_equivalences_run_at_once() {
         assert!(job.join("index.html").is_file());
         for entry in std::fs::read_dir(&job).unwrap() {
             let path = entry.unwrap().path();
-            assert!(!path.to_string_lossy().ends_with(".lock"), "{stem}: lock left behind");
+            assert!(
+                !path.to_string_lossy().ends_with(".lock"),
+                "{stem}: lock left behind"
+            );
             if !path.is_dir() {
                 continue;
             }
@@ -333,7 +341,15 @@ fn a_proof_job_recreates_a_missing_invariants_file() {
         "hello-world",
         &dir,
         &ec,
-        &["prove", "--theorem", "Proof", "--proofstep", "0", "--progress", "plain"],
+        &[
+            "prove",
+            "--theorem",
+            "Proof",
+            "--proofstep",
+            "0",
+            "--progress",
+            "plain",
+        ],
     );
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(

@@ -295,7 +295,9 @@ impl SmtWriter {
         s.push_str("(check-sat)\n\n");
         if right.claims.is_empty() {
             let goal = goals.first().map_or("", |g| g.negated.as_str());
-            s.push_str("; ---- negated goal -----------------------------------------------------\n");
+            s.push_str(
+                "; ---- negated goal -----------------------------------------------------\n",
+            );
             s.push_str("(push 1)\n");
             s.push_str(goal);
             s.push('\n');
@@ -329,7 +331,6 @@ impl SmtWriter {
         )
     }
 }
-
 
 /// `L12 then L19 holds -> L27 return` — a one-line summary of a path's steps and
 /// terminal, for the file header comment.

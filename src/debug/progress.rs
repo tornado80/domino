@@ -109,7 +109,10 @@ pub enum DebugEvent<'a> {
     LeftPathFinished { index: usize, running: Summary },
 
     /// Exploration stopped — naturally, by `--max-paths`, or by `Ctrl-C`.
-    Finished { summary: Summary, stop_reason: StopReason },
+    Finished {
+        summary: Summary,
+        stop_reason: StopReason,
+    },
 
     /// Lockstep execution (story 23): joint node `index` has been decided.
     /// `kind` is its [`NodeKind`](crate::debug::lockstep::NodeKind) name.
@@ -522,8 +525,7 @@ impl DebugObserver for BarObserver {
                 self.pairs.set_message(self.tally.render());
             }
             DebugEvent::LeftPathStarted { index, id } => {
-                self.left
-                    .set_position((*index as u64).saturating_sub(1));
+                self.left.set_position((*index as u64).saturating_sub(1));
                 self.left.set_message(format!("#{id}"));
                 self.pairs.set_position(0);
                 self.pairs.set_message(self.tally.render());
@@ -570,7 +572,12 @@ impl DebugObserver for BarObserver {
                     let _ = self.mp.println(format!("⚠ GOAL FAILS at {id}"));
                 }
             }
-            DebugEvent::StuckPointFound { id, side, label, reason } => {
+            DebugEvent::StuckPointFound {
+                id,
+                side,
+                label,
+                reason,
+            } => {
                 let _ = self
                     .mp
                     .println(format!("stuck point {id} ({side} L{label}): {reason}"));

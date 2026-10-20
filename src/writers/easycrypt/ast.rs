@@ -31,18 +31,32 @@ pub struct Require {
 pub enum EcItem {
     Comment(String),
     /// `type bits_n.`
-    TypeAbstract { name: String },
-    TypeAlias { name: String, ty: EcType },
-    Record { name: String, fields: Vec<(String, EcType)> },
+    TypeAbstract {
+        name: String,
+    },
+    TypeAlias {
+        name: String,
+        ty: EcType,
+    },
+    Record {
+        name: String,
+        fields: Vec<(String, EcType)>,
+    },
     /// `op zero_n : bits_n.`
-    OpDecl { name: String, ty: EcType },
+    OpDecl {
+        name: String,
+        ty: EcType,
+    },
     OpDef {
         name: String,
         args: Vec<(String, EcType)>,
         ret: Option<EcType>,
         body: EcExpr,
     },
-    Axiom { name: String, formula: EcExpr },
+    Axiom {
+        name: String,
+        formula: EcExpr,
+    },
     /// A plain module type has `includes` empty and lists its own `procs`.
     /// `module type X = { include Y }.` (story 11) is `includes: vec![Y]`
     /// with `procs` empty — `module type X = Y.` is a parse error in
@@ -117,9 +131,15 @@ pub struct EcBlock(pub Vec<EcStmt>);
 pub enum EcStmt {
     Comment(String),
     /// `x <- e;`
-    Assign { lhs: EcLvalue, rhs: EcExpr },
+    Assign {
+        lhs: EcLvalue,
+        rhs: EcExpr,
+    },
     /// `x <$ d;`
-    Sample { lhs: EcLvalue, distr: EcExpr },
+    Sample {
+        lhs: EcLvalue,
+        distr: EcExpr,
+    },
     /// `r <@ M.p(a);`
     Call {
         lhs: Option<EcLvalue>,
@@ -141,7 +161,10 @@ pub enum EcLvalue {
     Tuple(Vec<String>),
     /// `m.[k] <- v;` — only legal when `m` is a program variable of `fmap`
     /// type.
-    MapSet { map: String, key: EcExpr },
+    MapSet {
+        map: String,
+        key: EcExpr,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -149,16 +172,27 @@ pub enum EcExpr {
     Var(String),
     /// Qualified: `Pkg_Inst_KX.ltk_map`, or a memory-tagged one in a formula,
     /// `M.x{1}`.
-    Qualified { path: Vec<String>, mem: Option<u8> },
+    Qualified {
+        path: Vec<String>,
+        mem: Option<u8>,
+    },
     Int(i64),
     Bool(bool),
     Unit,
     Tuple(Vec<EcExpr>),
     /// `` e.`1 `` — 1-based, as EasyCrypt counts.
-    Proj { expr: Box<EcExpr>, index: usize },
+    Proj {
+        expr: Box<EcExpr>,
+        index: usize,
+    },
     /// `` e.`field `` for records.
-    Field { expr: Box<EcExpr>, field: String },
-    RecordLit { fields: Vec<(String, EcExpr)> },
+    Field {
+        expr: Box<EcExpr>,
+        field: String,
+    },
+    RecordLit {
+        fields: Vec<(String, EcExpr)>,
+    },
     Some_(Box<EcExpr>),
     /// Renders as bare `None`, never `None<:t>` — every position the
     /// exporter emits `None` in is already constrained (a typed local or
@@ -171,7 +205,10 @@ pub enum EcExpr {
     None_(EcType),
     Oget(Box<EcExpr>),
     /// `m.[k]`
-    MapGet { map: Box<EcExpr>, key: Box<EcExpr> },
+    MapGet {
+        map: Box<EcExpr>,
+        key: Box<EcExpr>,
+    },
     /// `m.[k <- v]`
     MapSet {
         map: Box<EcExpr>,
@@ -179,11 +216,20 @@ pub enum EcExpr {
         value: Box<EcExpr>,
     },
     /// `rem m k`
-    MapRem { map: Box<EcExpr>, key: Box<EcExpr> },
+    MapRem {
+        map: Box<EcExpr>,
+        key: Box<EcExpr>,
+    },
     MapEmpty,
     /// `func_prf a b`
-    App { head: String, args: Vec<EcExpr> },
-    Unop { op: EcUnop, arg: Box<EcExpr> },
+    App {
+        head: String,
+        args: Vec<EcExpr>,
+    },
+    Unop {
+        op: EcUnop,
+        arg: Box<EcExpr>,
+    },
     Binop {
         op: EcBinop,
         lhs: Box<EcExpr>,
@@ -235,7 +281,10 @@ pub enum EcExpr {
     /// `hoare[proc : inv ==> inv]`: the statement of a side-invariant lemma (story 69), `proc`
     /// the procedure's qualified path. Renders over several lines, `inv` laid out as in the
     /// `call`.
-    OracleHoare { proc: String, inv: Box<EcExpr> },
+    OracleHoare {
+        proc: String,
+        inv: Box<EcExpr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -131,7 +131,10 @@ impl TimeByRole {
         }
         self.0.between_ms += other.0.between_ms;
         if let Some(more) = &other.0.easycrypt {
-            self.0.easycrypt.get_or_insert_with(EcSums::default).merge(more);
+            self.0
+                .easycrypt
+                .get_or_insert_with(EcSums::default)
+                .merge(more);
         }
     }
 
@@ -156,7 +159,11 @@ impl TimeByRole {
             "    {:<22}{:>6}{:>10}{:>9}{:>17}\n",
             "time by role", "count", "time", "failed", "largest answer"
         );
-        for (name, row) in ROLES.iter().zip(self.0.roles.iter()).filter(|(_, r)| r.count > 0) {
+        for (name, row) in ROLES
+            .iter()
+            .zip(self.0.roles.iter())
+            .filter(|(_, r)| r.count > 0)
+        {
             let _ = writeln!(
                 out,
                 "      {name:<19}{:>6}{:>10}{:>9}{:>17}",
@@ -166,8 +173,16 @@ impl TimeByRole {
                 size(row.largest)
             );
         }
-        for (name, row) in [("interrupts", self.0.interrupts), ("respawns", self.0.respawns)] {
-            let _ = writeln!(out, "      {name:<19}{:>6}{:>10}", row.count, duration(row.ms));
+        for (name, row) in [
+            ("interrupts", self.0.interrupts),
+            ("respawns", self.0.respawns),
+        ] {
+            let _ = writeln!(
+                out,
+                "      {name:<19}{:>6}{:>10}",
+                row.count,
+                duration(row.ms)
+            );
         }
         let _ = writeln!(
             out,
@@ -327,7 +342,9 @@ mod tests {
     fn rows_that_miss_the_easycrypt_time_by_more_than_one_percent_give_a_warning() {
         let text = known().render(Duration::from_secs(3_100));
         assert!(
-            text.ends_with("    warning: the rows sum to 50m 42s, not to the EasyCrypt time 51m 40s\n"),
+            text.ends_with(
+                "    warning: the rows sum to 50m 42s, not to the EasyCrypt time 51m 40s\n"
+            ),
             "{text}"
         );
     }
@@ -381,8 +398,17 @@ mod tests {
         t.merge(&respawned);
         assert_eq!(t.total(), Duration::from_millis(3_051_000));
         let text = t.render(Duration::from_millis(3_051_000));
-        assert!(text.contains("      quick close             3    7m 41s        2           1.2 MB\n"), "{text}");
-        assert!(text.contains("      resume                  1      3.0s        0           2.0 MB\n"), "{text}");
-        assert!(text.contains("      respawns                1      5.0s\n"), "{text}");
+        assert!(
+            text.contains("      quick close             3    7m 41s        2           1.2 MB\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("      resume                  1      3.0s        0           2.0 MB\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("      respawns                1      5.0s\n"),
+            "{text}"
+        );
     }
 }

@@ -29,6 +29,14 @@
 //! and records `label = current_line_number` plus a [`SiteInfo`] in
 //! [`Listing::sites`]; structural lines (braces, the frame header) get no label.
 //!
+//! # Early returns
+//!
+//! A callee's `return` prints as `bind <- e;  // return from P.O`. An early
+//! return (see [`super::inline_rules`]) prints on the same one line as
+//! `bind <- e; goto end_P_O;  // returns from P.O`, and the frame's closing
+//! `}` becomes `end_P_O:`, so `frame_lines` ends at the label line. The IR does
+//! not change: a `Return` in a frame still resumes the caller.
+//!
 //! # Locals vs. state
 //!
 //! - **Locals** (oracle arguments and body-local variables) are alpha-renamed
@@ -42,6 +50,9 @@
 //! - **Package/game/theorem constants** are left completely alone so the SMT they
 //!   generate keeps matching the prover's.
 
+use std::cell::OnceCell;
+
+use super::inline_rules::{condition_value, tail_positions, EndLabels};
 use std::collections::BTreeMap;
 
 use miette::SourceSpan;
@@ -380,6 +391,7 @@ fn inline_oracle_impl(
         line: 0,
         sites: BTreeMap::new(),
         lossy,
+        labels: EndLabels::default(),
     };
 
     let entry_frame = Frame {
@@ -387,6 +399,7 @@ fn inline_oracle_impl(
         pkg_inst_name: entry_pkg_inst.name.clone(),
         oracle_name: export.sig().name.clone(),
         ret: Ret::Top,
+        end: OnceCell::new(),
     };
 
     inliner.emit(
@@ -399,7 +412,7 @@ fn inline_oracle_impl(
         ),
     );
     inliner.emit(0, &format!("{} {{", render_signature(export.sig())));
-    let body = inliner.render_block(&odef.code, &entry_frame, 0, 1)?;
+    let body = inliner.render_block(&odef.code, &entry_frame, 0, 1, true)?;
     inliner.emit(0, "}");
 
     Ok(InlinedOracle {
@@ -463,6 +476,8 @@ struct Frame {
     pkg_inst_name: String,
     oracle_name: String,
     ret: Ret,
+    /// The label after the inlined body, set by the first early return.
+    end: OnceCell<String>,
 }
 
 /// How a `return` inside this frame is rendered / interpreted.
@@ -512,6 +527,7 @@ struct Inliner<'c> {
     sites: BTreeMap<Label, SiteInfo>,
     /// See [`inline_oracle_rendered`].
     lossy: bool,
+    labels: EndLabels,
 }
 
 impl<'c> Inliner<'c> {
@@ -564,17 +580,21 @@ impl<'c> Inliner<'c> {
         );
     }
 
+    /// `tail`: `block` ends the frame (see [`tail_positions`]).
     fn render_block(
         &mut self,
         block: &CodeBlock,
         frame: &Frame,
         depth: usize,
         indent: usize,
+        tail: bool,
     ) -> Result<InlBlock, InlineError> {
+        let tails = tail_positions(&block.0, tail, &condition_value);
         let stmts = block
             .0
             .iter()
-            .map(|stmt| self.render_stmt(stmt, frame, depth, indent))
+            .zip(tails)
+            .map(|(stmt, tail)| self.render_stmt(stmt, frame, depth, indent, tail))
             .collect::<Result<_, _>>()?;
         Ok(InlBlock(stmts))
     }
@@ -585,6 +605,7 @@ impl<'c> Inliner<'c> {
         frame: &Frame,
         depth: usize,
         indent: usize,
+        tail: bool,
     ) -> Result<InlStmt, InlineError> {
         match stmt {
             Statement::Abort(span) => {
@@ -600,12 +621,15 @@ impl<'c> Inliner<'c> {
                         Some(e) => format!("return {};", self.expr(e)),
                         None => "return;".to_string(),
                     },
-                    Ret::Inlined { bind_text, from } => match value {
-                        Some(e) => {
-                            format!("{bind_text} <- {};  // return from {from}", self.expr(e))
+                    Ret::Inlined { bind_text, from } => {
+                        let value = value.as_ref().map_or("()".to_string(), |e| self.expr(e));
+                        if tail {
+                            format!("{bind_text} <- {value};  // return from {from}")
+                        } else {
+                            let label = frame.end.get_or_init(|| self.labels.fresh(from));
+                            format!("{bind_text} <- {value}; goto {label};  // returns from {from}")
                         }
-                        None => format!("{bind_text} <- ();  // return from {from}"),
-                    },
+                    }
                 };
                 let label = self.emit(indent, &content);
                 self.record_site(label, SiteKind::Return, &content, *span, frame, depth);
@@ -745,14 +769,16 @@ impl<'c> Inliner<'c> {
                         depth,
                     );
                     let then_first = label + 1;
-                    let then = self.render_block(&ite.then_block, frame, depth, indent + 1)?;
+                    let then =
+                        self.render_block(&ite.then_block, frame, depth, indent + 1, tail)?;
                     let (then_close, els, else_lines) = if ite.else_block.0.is_empty() {
                         let close = self.emit(indent, "}");
                         (close, InlBlock(vec![]), None)
                     } else {
                         let close = self.emit(indent, "} else {");
                         let els_first = close + 1;
-                        let els = self.render_block(&ite.else_block, frame, depth, indent + 1)?;
+                        let els =
+                            self.render_block(&ite.else_block, frame, depth, indent + 1, tail)?;
                         let els_close = self.emit(indent, "}");
                         (close, els, Some((els_first, els_close)))
                     };
@@ -851,6 +877,7 @@ impl<'c> Inliner<'c> {
                 bind_text,
                 from: from.clone(),
             },
+            end: OnceCell::new(),
         };
 
         let mut arg_bindings = Vec::with_capacity(target_sig.args.len());
@@ -872,8 +899,19 @@ impl<'c> Inliner<'c> {
             ));
         }
 
-        let body = self.render_block(&target_odef.code, &callee_frame, depth + 1, indent + 1)?;
-        let close_label = self.emit(indent, "}");
+        let body = self.render_block(
+            &target_odef.code,
+            &callee_frame,
+            depth + 1,
+            indent + 1,
+            true,
+        )?;
+        // a frame with an early return ends at the label its `goto`s jump to
+        let close = callee_frame
+            .end
+            .get()
+            .map_or("}".to_string(), |l| format!("{l}:"));
+        let close_label = self.emit(indent, &close);
 
         Ok(InlStmt::Call {
             label,

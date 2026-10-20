@@ -37,8 +37,8 @@ use super::invariant::{composition_items, has_side_invariants, SideCtx, StateOwn
 use super::package::compute_package_variants_observed;
 use super::progress::{ExportEvent, ExportObserver, ExportPhase, NopExportObserver, PhaseScope};
 use super::proof::{compute_equivalence_files_observed, state_files, EquivalenceFiles};
-use super::sideinv::{build_side_inv_files, SideInvFiles};
 use super::render::render_file;
+use super::sideinv::{build_side_inv_files, SideInvFiles};
 use super::types::func_op_name;
 use super::typesfile::{build_types_file, collect_bits_types, collect_fn_consts};
 use super::EcExportError;
@@ -237,7 +237,13 @@ pub fn export_theorem_observed(
             v.file.items.extend(items);
         }
     }
-    add_side_invariants(&theorem, project, &interfaces_output, &owners, &mut game_files)?;
+    add_side_invariants(
+        &theorem,
+        project,
+        &interfaces_output,
+        &owners,
+        &mut game_files,
+    )?;
 
     let package_variant_names = package_variants.iter().map(|v| v.name.clone()).collect();
     let game_names = game_files.iter().map(|g| g.name.clone()).collect();
@@ -261,7 +267,8 @@ pub fn export_theorem_observed(
         );
     }
 
-    let equivalence_files = compute_equivalence_files_observed(&theorem, project, &interfaces_output, observer)?;
+    let equivalence_files =
+        compute_equivalence_files_observed(&theorem, project, &interfaces_output, observer)?;
     let mut equivalences = Vec::with_capacity(equivalence_files.len());
     for ef in &equivalence_files {
         files.insert(
@@ -420,7 +427,10 @@ fn lemma_files<'a>(
         }
         out.push(LemmaFile {
             name: &f.join_file,
-            owner: format!("the side-invariant lemmas of composition `{}`", f.composition),
+            owner: format!(
+                "the side-invariant lemmas of composition `{}`",
+                f.composition
+            ),
             file: &f.join,
         });
     }
@@ -439,7 +449,10 @@ fn insert_lemma_files(
         .keys()
         .map(|rel| {
             let name = rel.display().to_string();
-            (name.to_lowercase(), format!("the file `{name}` of the export"))
+            (
+                name.to_lowercase(),
+                format!("the file `{name}` of the export"),
+            )
         })
         .collect();
     for lemma in lemmas {
@@ -492,7 +505,9 @@ pub fn write_all_observed(
         }
     }
     scope.finish();
-    observer.on_event(&ExportEvent::Finished { files_written: total });
+    observer.on_event(&ExportEvent::Finished {
+        files_written: total,
+    });
     Ok(())
 }
 
@@ -674,7 +689,13 @@ mod tests {
             assert_eq!(eq.oracle_set_mismatch, None);
         }
         let first = &exported.files[Path::new(&exported.equivalences[0].invariants_file)];
-        for field in ["d_SENTCTXT", "d_SENTKEY", "d_RECEIVEDCTXT", "d_RECEIVEDKEY", "d_TESTED"] {
+        for field in [
+            "d_SENTCTXT",
+            "d_SENTKEY",
+            "d_RECEIVEDCTXT",
+            "d_RECEIVEDKEY",
+            "d_TESTED",
+        ] {
             assert!(
                 first.contains(&format!(
                     "l.`l_pkg_Prot.`Prot_{field} = r.`r_pkg_Corr_reduction.`Corr_reduction_{field}"
@@ -682,13 +703,19 @@ mod tests {
                 "{field}: {first}"
             );
         }
-        assert!(first.contains("l.`l_pkg_Prot.`Prot_sk = r.`r_pkg_Corr_KEM.`Corr_KEM_sk"), "{first}");
+        assert!(
+            first.contains("l.`l_pkg_Prot.`Prot_sk = r.`r_pkg_Corr_KEM.`Corr_KEM_sk"),
+            "{first}"
+        );
         let second = &exported.files[Path::new(&exported.equivalences[1].invariants_file)];
         assert!(
             second.contains("l.`l_pkg_Corr_reduction.`Corr_reduction_ctr = r.`r_pkg_CPA.`CPA_ctr"),
             "{second}"
         );
-        assert!(second.contains("l.`l_pkg_Corr_KEM.`Corr_KEM_pk = r.`r_pkg_CPA.`CPA_pk"), "{second}");
+        assert!(
+            second.contains("l.`l_pkg_Corr_KEM.`Corr_KEM_pk = r.`r_pkg_CPA.`CPA_pk"),
+            "{second}"
+        );
     }
 
     #[test]
@@ -721,15 +748,15 @@ mod tests {
         assert_eq!(eq.oracle_count, 3);
         assert_eq!(eq.admit_count, 3);
         assert_eq!(eq.oracle_set_mismatch, None);
-        assert!(exported
-            .files
-            .contains_key(Path::new(&eq.invariants_file)));
+        assert!(exported.files.contains_key(Path::new(&eq.invariants_file)));
         assert!(exported.files.contains_key(Path::new(&eq.proof_file)));
 
         // Story 19: the base case is one line, so the `smt` can never run on
         // the first oracle's goal when `auto => />` already closed the base.
         let proof = &exported.files[Path::new(&eq.proof_file)];
-        assert!(proof.lines().any(|l| l.trim() == "auto => />; smt(emptyE map_empty)."));
+        assert!(proof
+            .lines()
+            .any(|l| l.trim() == "auto => />; smt(emptyE map_empty)."));
         assert!(!proof.lines().any(|l| l.trim() == "smt(emptyE map_empty)."));
     }
 
@@ -771,7 +798,14 @@ mod tests {
             .collect();
         assert_eq!(
             phases,
-            ["transform", "types", "packages", "games", "invariants", "proofs"]
+            [
+                "transform",
+                "types",
+                "packages",
+                "games",
+                "invariants",
+                "proofs"
+            ]
         );
         let mut open: Option<String> = None;
         let mut next_index = 0usize;
@@ -790,26 +824,45 @@ mod tests {
                 next_index += 1;
             } else if let Some(name) = ev.strip_prefix("end ") {
                 assert_eq!(Some(name.to_string()), open);
-                assert_eq!(next_index - 1, declared, "{name}: item count != total_items");
+                assert_eq!(
+                    next_index - 1,
+                    declared,
+                    "{name}: item count != total_items"
+                );
                 open = None;
             }
         }
         assert!(open.is_none());
 
         // Items are the things the export produces.
-        assert!(events.contains(&"item transform 1 Proof".to_string()), "{events:?}");
+        assert!(
+            events.contains(&"item transform 1 Proof".to_string()),
+            "{events:?}"
+        );
         assert!(events.contains(&"item types 1 Types.ec".to_string()));
         assert!(events.contains(&"item types 2 Interfaces.ec".to_string()));
         for name in &exported.package_variant_names {
-            assert!(events.iter().any(|e| e.ends_with(&format!(" Pkg_{name}"))), "{name}");
+            assert!(
+                events.iter().any(|e| e.ends_with(&format!(" Pkg_{name}"))),
+                "{name}"
+            );
         }
         for name in &exported.game_names {
-            assert!(events.iter().any(|e| e.ends_with(&format!(" Comp_{name}"))), "{name}");
+            assert!(
+                events.iter().any(|e| e.ends_with(&format!(" Comp_{name}"))),
+                "{name}"
+            );
         }
         let eq = &exported.equivalences[0];
         let stem = eq.proof_file.trim_end_matches(".ec");
-        assert!(events.contains(&format!("item invariants 1 {stem}_Invariants")), "{events:?}");
-        assert!(events.contains(&format!("item proofs 1 {stem}")), "{events:?}");
+        assert!(
+            events.contains(&format!("item invariants 1 {stem}_Invariants")),
+            "{events:?}"
+        );
+        assert!(
+            events.contains(&format!("item proofs 1 {stem}")),
+            "{events:?}"
+        );
     }
 
     #[test]
@@ -823,14 +876,26 @@ mod tests {
     #[test]
     fn write_phase_names_every_file_and_ends_with_finished() {
         let exported = export("example-projects/hello-world", "Proof").unwrap();
-        let tmp = std::env::temp_dir().join(format!("domino-ec-write-progress-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("domino-ec-write-progress-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let mut rec = super::super::progress::tests::Recorder::default();
         write_all_observed(&[("Proof", tmp.as_path(), &exported.files)], &mut rec).unwrap();
         let n = exported.files.len();
         assert_eq!(rec.0.first().unwrap(), &format!("phase write {n}"));
-        assert_eq!(rec.0.iter().filter(|e| e.starts_with("item write ")).count(), n);
-        assert!(rec.0.contains(&"item write 8 Proof/Interfaces.ec".to_string()), "{:?}", rec.0);
+        assert_eq!(
+            rec.0
+                .iter()
+                .filter(|e| e.starts_with("item write "))
+                .count(),
+            n
+        );
+        assert!(
+            rec.0
+                .contains(&"item write 8 Proof/Interfaces.ec".to_string()),
+            "{:?}",
+            rec.0
+        );
         assert_eq!(rec.0[rec.0.len() - 2], "end write");
         assert_eq!(rec.0.last().unwrap(), &format!("finished {n}"));
         for (rel, contents) in &exported.files {
@@ -845,7 +910,11 @@ mod tests {
         let mut rec = super::super::progress::tests::Recorder::default();
         assert!(export_observed("example-projects/yao", "Yao", &mut rec).is_err());
         let last = rec.0.last().unwrap();
-        assert!(last.starts_with("item "), "last event should be an item: {:?}", rec.0);
+        assert!(
+            last.starts_with("item "),
+            "last event should be an item: {:?}",
+            rec.0
+        );
         assert!(!rec.0.iter().any(|e| e.starts_with("theorem-end")));
     }
 
@@ -923,7 +992,10 @@ mod tests {
         let exported = export("example-projects/hello-world", "Proof").unwrap();
         let eq = &exported.equivalences[0];
         let file = "Eq_medium_composition_small_composition_UsefulOracle.ec";
-        assert_eq!(eq.oracle_files, vec![("UsefulOracle".to_string(), file.to_string())]);
+        assert_eq!(
+            eq.oracle_files,
+            vec![("UsefulOracle".to_string(), file.to_string())]
+        );
         let oracle = &exported.files[Path::new(file)];
         assert!(oracle.contains(
             "lemma Eq_medium_composition_small_composition_UsefulOracle : \
@@ -934,9 +1006,9 @@ mod tests {
         assert!(oracle.contains("(* d_UsefulOracle *)\n+ proc; inline. admit.\nqed."));
         assert!(!oracle.contains("section"));
         let glue = &exported.files[Path::new(&eq.proof_file)];
-        assert!(glue.contains(
-            "require import Eq_medium_composition_small_composition_UsefulOracle."
-        ));
+        assert!(
+            glue.contains("require import Eq_medium_composition_small_composition_UsefulOracle.")
+        );
         assert!(glue.contains(
             "(* d_UsefulOracle *)\n+ by conseq Eq_medium_composition_small_composition_UsefulOracle => /#."
         ));
@@ -953,9 +1025,14 @@ mod tests {
             "{err}"
         );
         let message = err.to_string();
-        assert!(message.contains("oracle `Invariants` of `Eq_medium_composition_small_composition`"), "{message}");
         assert!(
-            message.contains("the file `Eq_medium_composition_small_composition_Invariants.ec` of the export"),
+            message.contains("oracle `Invariants` of `Eq_medium_composition_small_composition`"),
+            "{message}"
+        );
+        assert!(
+            message.contains(
+                "the file `Eq_medium_composition_small_composition_Invariants.ec` of the export"
+            ),
             "{message}"
         );
     }

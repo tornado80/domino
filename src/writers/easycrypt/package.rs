@@ -33,9 +33,9 @@ use super::ast::{
     EcBlock, EcExpr, EcFile, EcItem, EcLvalue, EcModule, EcProc, EcStmt, EcType, ProcSig, Require,
 };
 use super::names::{NameKind, Names};
-use crate::transforms::easycryptify;
 use super::types::{bits_suffix, translate_expr, translate_type};
 use super::EcExportError;
+use crate::transforms::easycryptify;
 
 // ---------------------------------------------------------------------------
 // Variant keys
@@ -89,7 +89,9 @@ fn canonical_param_value(expr: &Expression) -> ParamValue {
 /// so a key no longer depends on any other package instance's key — each
 /// instance is computed independently, in any order.
 pub(super) fn compute_all_keys(comp: &Composition) -> Vec<VariantKey> {
-    (0..comp.pkgs.len()).map(|idx| compute_key(comp, idx)).collect()
+    (0..comp.pkgs.len())
+        .map(|idx| compute_key(comp, idx))
+        .collect()
 }
 
 fn compute_key(comp: &Composition, pkg_idx: usize) -> VariantKey {
@@ -149,7 +151,10 @@ pub(super) fn assign_names(
 ) -> Result<HashMap<VariantKey, String>, EcExportError> {
     let mut groups: Vec<(String, Vec<&VariantKey>)> = Vec::new();
     for (key, _, _) in discovered {
-        match groups.iter_mut().find(|(pkg_name, _)| pkg_name == &key.pkg_name) {
+        match groups
+            .iter_mut()
+            .find(|(pkg_name, _)| pkg_name == &key.pkg_name)
+        {
             Some((_, keys)) => keys.push(key),
             None => groups.push((key.pkg_name.clone(), vec![key])),
         }
@@ -182,7 +187,9 @@ pub struct PackageVariant {
 /// Computes every package variant reachable from `theorem`, one [`EcFile`]
 /// per distinct variant, deterministic and deduplicated across the whole
 /// theorem (§3.1).
-pub fn compute_package_variants(theorem: &Theorem<'_>) -> Result<Vec<PackageVariant>, EcExportError> {
+pub fn compute_package_variants(
+    theorem: &Theorem<'_>,
+) -> Result<Vec<PackageVariant>, EcExportError> {
     compute_package_variants_observed(theorem, &mut super::progress::NopExportObserver)
 }
 
@@ -239,7 +246,10 @@ pub(super) fn ident_raw_name_and_type(id: &Identifier) -> (String, Type) {
 }
 
 fn is_state_field(id: &Identifier) -> bool {
-    matches!(id, Identifier::PackageIdentifier(PackageIdentifier::State(_)))
+    matches!(
+        id,
+        Identifier::PackageIdentifier(PackageIdentifier::State(_))
+    )
 }
 
 /// Whether `pkg`'s integer parameter `param_name` is ever used as a `Bits`
@@ -259,7 +269,9 @@ pub(super) fn integer_param_used_as_width(pkg: &Package, param_name: &str) -> bo
             TypeKind::Maybe(t) | TypeKind::List(t) | TypeKind::Set(t) => type_uses(t, name),
             TypeKind::Tuple(ts) => ts.iter().any(|t| type_uses(t, name)),
             TypeKind::Table(k, v) => type_uses(k, name) || type_uses(v, name),
-            TypeKind::Fn(args, ret) => args.iter().any(|t| type_uses(t, name)) || type_uses(ret, name),
+            TypeKind::Fn(args, ret) => {
+                args.iter().any(|t| type_uses(t, name)) || type_uses(ret, name)
+            }
             _ => false,
         }
     }
@@ -271,9 +283,9 @@ pub(super) fn integer_param_used_as_width(pkg: &Package, param_name: &str) -> bo
             | ExpressionKind::IntegerLiteral(_)
             | ExpressionKind::BooleanLiteral(_)
             | ExpressionKind::Identifier(_) => false,
-            ExpressionKind::Sample(ty) | ExpressionKind::EmptyTable(ty) | ExpressionKind::None(ty) => {
-                type_uses(ty, name)
-            }
+            ExpressionKind::Sample(ty)
+            | ExpressionKind::EmptyTable(ty)
+            | ExpressionKind::None(ty) => type_uses(ty, name),
             ExpressionKind::BitsLiteral(_, ty) => type_uses(ty, name),
             ExpressionKind::TableAccess(_, e) => expr_uses(e, name),
             ExpressionKind::Tuple(es)
@@ -315,25 +327,37 @@ pub(super) fn integer_param_used_as_width(pkg: &Package, param_name: &str) -> bo
             Statement::Abort(_) => false,
             Statement::Return(expr, _) => expr.as_ref().is_some_and(|e| expr_uses(e, name)),
             Statement::Assignment(Assignment { pattern, rhs }, _) => {
-                let pattern_uses = matches!(pattern, Pattern::Table { index, .. } if expr_uses(index, name));
+                let pattern_uses =
+                    matches!(pattern, Pattern::Table { index, .. } if expr_uses(index, name));
                 let rhs_uses = match rhs {
                     AssignmentRhs::Expression(e) => expr_uses(e, name),
                     AssignmentRhs::Sample { ty, .. } => type_uses(ty, name),
-                    AssignmentRhs::Invoke { args, return_type, .. } => {
+                    AssignmentRhs::Invoke {
+                        args, return_type, ..
+                    } => {
                         args.iter().any(|a| expr_uses(a, name))
                             || return_type.as_ref().is_some_and(|t| type_uses(t, name))
                     }
                 };
                 pattern_uses || rhs_uses
             }
-            Statement::InvokeOracle(InvokeOracle { args, .. }) => args.iter().any(|a| expr_uses(a, name)),
-            Statement::IfThenElse(IfThenElse { cond, then_block, else_block, .. }) => {
+            Statement::InvokeOracle(InvokeOracle { args, .. }) => {
+                args.iter().any(|a| expr_uses(a, name))
+            }
+            Statement::IfThenElse(IfThenElse {
+                cond,
+                then_block,
+                else_block,
+                ..
+            }) => {
                 expr_uses(cond, name)
                     || then_block.0.iter().any(|s| stmt_uses(s, name))
                     || else_block.0.iter().any(|s| stmt_uses(s, name))
             }
             Statement::For(_, start, end, body, _) => {
-                expr_uses(start, name) || expr_uses(end, name) || body.0.iter().any(|s| stmt_uses(s, name))
+                expr_uses(start, name)
+                    || expr_uses(end, name)
+                    || body.0.iter().any(|s| stmt_uses(s, name))
             }
         }
     }
@@ -342,7 +366,12 @@ pub(super) fn integer_param_used_as_width(pkg: &Package, param_name: &str) -> bo
         return true;
     }
     for oracle in &pkg.oracles {
-        if oracle.sig.args.iter().any(|(_, ty)| type_uses(ty, param_name)) {
+        if oracle
+            .sig
+            .args
+            .iter()
+            .any(|(_, ty)| type_uses(ty, param_name))
+        {
             return true;
         }
         if type_uses(&oracle.sig.ty, param_name) {
@@ -507,7 +536,9 @@ fn render_variant(
         Some((_, iface_name)) => vec![("O".to_string(), iface_name.clone())],
         None => vec![],
     };
-    let mut scope = PackageScope { names: Names::new() };
+    let mut scope = PackageScope {
+        names: Names::new(),
+    };
 
     let mut module_vars = Vec::new();
     for (name, ty, span) in &pkg.state {
@@ -619,7 +650,11 @@ fn collect_locals(
                 // assignment from `tableinitialize`) needs no new `var` here.
                 Pattern::Table { .. } => {}
             },
-            Statement::IfThenElse(IfThenElse { then_block, else_block, .. }) => {
+            Statement::IfThenElse(IfThenElse {
+                then_block,
+                else_block,
+                ..
+            }) => {
                 collect_locals(then_block, scope, out, seen)?;
                 collect_locals(else_block, scope, out, seen)?;
             }
@@ -719,8 +754,10 @@ fn build_proc(scope: &mut PackageScope, oracle: &OracleDef) -> Result<EcProc, Ec
     let body = translator.translate_block(body_stmts)?;
     let ret_expr = translator.translate_e(ret_value, *ret_span)?;
 
-    let mut ec_locals: Vec<(String, EcType, Option<EcExpr>)> =
-        locals.into_iter().map(|(name, ty)| (name, ty, None)).collect();
+    let mut ec_locals: Vec<(String, EcType, Option<EcExpr>)> = locals
+        .into_iter()
+        .map(|(name, ty)| (name, ty, None))
+        .collect();
     for (name, ty) in temps.decls {
         ec_locals.push((name, ty, None));
     }
@@ -813,7 +850,11 @@ impl OracleTranslator<'_> {
         name
     }
 
-    fn translate_e(&mut self, expr: &Expression, span: SourceSpan) -> Result<EcExpr, EcExportError> {
+    fn translate_e(
+        &mut self,
+        expr: &Expression,
+        span: SourceSpan,
+    ) -> Result<EcExpr, EcExportError> {
         let naming = &mut *self.naming;
         let mut resolver =
             |id: &Identifier, _s: SourceSpan| -> Result<EcExpr, EcExportError> { naming.expr(id) };
@@ -834,7 +875,8 @@ impl OracleTranslator<'_> {
                 Ok(EcExpr::Var(name))
             }
             _ => Err(EcExportError::UnsupportedStatement {
-                construct: "Sample of a non-Bits type (EasyCrypt export only supports sampling Bits)",
+                construct:
+                    "Sample of a non-Bits type (EasyCrypt export only supports sampling Bits)",
                 span,
             }),
         }
@@ -874,11 +916,15 @@ impl OracleTranslator<'_> {
         let mut out = Vec::new();
         {
             match stmt {
-                Statement::Abort(_) => unreachable!("easycryptify leaves no `abort` in an oracle body"),
+                Statement::Abort(_) => {
+                    unreachable!("easycryptify leaves no `abort` in an oracle body")
+                }
                 Statement::Return(..) => unreachable!(
                     "easycryptify leaves a single `return`, as the last statement of the body"
                 ),
-                Statement::For(..) => unreachable!("easycryptify rejects every surviving `for` loop"),
+                Statement::For(..) => {
+                    unreachable!("easycryptify rejects every surviving `for` loop")
+                }
 
                 Statement::IfThenElse(ite) => {
                     let cond = self.translate_e(&ite.cond, ite.full_span)?;
@@ -941,7 +987,9 @@ impl OracleTranslator<'_> {
 
                         AssignmentRhs::Invoke { args, edge, .. } => {
                             let Pattern::Ident(_) = pattern else {
-                                unreachable!("easycryptify binds every invoke to an `ec_r<N>` temporary")
+                                unreachable!(
+                                    "easycryptify binds every invoke to an `ec_r<N>` temporary"
+                                )
                             };
                             let lhs = self.translate_pattern(pattern)?;
                             out.push(self.translate_invoke(Some(lhs), args, edge, span)?);
@@ -949,7 +997,12 @@ impl OracleTranslator<'_> {
                     }
                 }
 
-                Statement::InvokeOracle(InvokeOracle { args, edge, file_pos, .. }) => {
+                Statement::InvokeOracle(InvokeOracle {
+                    args,
+                    edge,
+                    file_pos,
+                    ..
+                }) => {
                     // `easycryptify` binds even a bare invoke, to check its
                     // abort; kept for completeness.
                     out.push(self.translate_invoke(None, args, edge, *file_pos)?);
@@ -1210,7 +1263,10 @@ mod tests {
             rendered.contains("var ec_result : int option option;"),
             "got:\n{rendered}"
         );
-        assert!(rendered.contains("ec_result <- Some None;"), "got:\n{rendered}");
+        assert!(
+            rendered.contains("ec_result <- Some None;"),
+            "got:\n{rendered}"
+        );
     }
 
     /// A user identifier starting with `ec_` is still escaped (`d_ec_…`), so
@@ -1244,8 +1300,14 @@ mod tests {
             ],
         );
         let rendered = render_file(&render_single(inst).unwrap());
-        assert!(rendered.contains("var d_ec_result : int;"), "got:\n{rendered}");
-        assert!(rendered.contains("ec_result <- Some d_ec_result;"), "got:\n{rendered}");
+        assert!(
+            rendered.contains("var d_ec_result : int;"),
+            "got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("ec_result <- Some d_ec_result;"),
+            "got:\n{rendered}"
+        );
     }
 
     // --- §4: hard errors --------------------------------------------------
@@ -1304,7 +1366,8 @@ mod tests {
         assert!(matches!(
             err,
             EcExportError::UnsupportedStatement {
-                construct: "Sample of a non-Bits type (EasyCrypt export only supports sampling Bits)",
+                construct:
+                    "Sample of a non-Bits type (EasyCrypt export only supports sampling Bits)",
                 ..
             }
         ));
@@ -1315,8 +1378,9 @@ mod tests {
     fn load_variants(dir: &str, theorem_name: &str) -> Vec<PackageVariant> {
         let files: &'static DirectoryFiles =
             Box::leak(Box::new(DirectoryFiles::load(Path::new(dir)).unwrap()));
-        let project: &'static DirectoryProject =
-            Box::leak(Box::new(DirectoryProject::load(PathBuf::from(dir), files).unwrap()));
+        let project: &'static DirectoryProject = Box::leak(Box::new(
+            DirectoryProject::load(PathBuf::from(dir), files).unwrap(),
+        ));
         let theorem = project.get_theorem(theorem_name).unwrap();
         let (theorem, _auxs) = EasyCryptTransform.transform_theorem(theorem).unwrap();
         compute_package_variants(&theorem).unwrap()
@@ -1327,7 +1391,11 @@ mod tests {
         let full_path = format!("{}/{golden_path}", env!("CARGO_MANIFEST_DIR"));
         let expected = std::fs::read_to_string(&full_path)
             .unwrap_or_else(|e| panic!("failed to read golden file {full_path}: {e}"));
-        assert_eq!(rendered, expected, "rendered {} != {full_path}", variant.name);
+        assert_eq!(
+            rendered, expected,
+            "rendered {} != {full_path}",
+            variant.name
+        );
     }
 
     fn assert_compiles(dir: &str, file: &str) {
@@ -1356,13 +1424,20 @@ mod tests {
         let dir = "example-projects/hello-world";
         let files: &'static DirectoryFiles =
             Box::leak(Box::new(DirectoryFiles::load(Path::new(dir)).unwrap()));
-        let project: &'static DirectoryProject =
-            Box::leak(Box::new(DirectoryProject::load(PathBuf::from(dir), files).unwrap()));
+        let project: &'static DirectoryProject = Box::leak(Box::new(
+            DirectoryProject::load(PathBuf::from(dir), files).unwrap(),
+        ));
         let theorem = project.get_theorem("Proof").unwrap();
         let (theorem, _auxs) = EasyCryptTransform.transform_theorem(theorem).unwrap();
 
-        let medium = theorem.find_game_instance("medium_composition").unwrap().game();
-        let big = theorem.find_game_instance("big_composition").unwrap().game();
+        let medium = theorem
+            .find_game_instance("medium_composition")
+            .unwrap()
+            .game();
+        let big = theorem
+            .find_game_instance("big_composition")
+            .unwrap()
+            .game();
 
         let medium_keys = compute_all_keys(medium);
         let big_keys = compute_all_keys(big);
@@ -1411,7 +1486,15 @@ mod tests {
             // `PRF`, and its file is `Pkg_PRF.ec` (story 14 §3.6), which
             // cannot collide with EasyCrypt's own `theories/crypto/PRF.eca`
             // or with the `PRF` composition's own `Comp_PRF.ec`.
-            vec!["Prot", "KX", "Prot_NoKey", "KX_NoKeys", "PRF", "Prot_NoPrf", "KX_NoPrf"],
+            vec![
+                "Prot",
+                "KX",
+                "Prot_NoKey",
+                "KX_NoKeys",
+                "PRF",
+                "Prot_NoPrf",
+                "KX_NoPrf"
+            ],
             "each of these packages must dedup to exactly one variant across the whole theorem \
              (Real/Ideal/Hybrid0 share one boolean-parametrised KX, etc.)"
         );
@@ -1421,7 +1504,10 @@ mod tests {
     fn simple_4whs_variants_match_golden() {
         let variants = load_variants("example-projects/4WHS", "Simple4WHS");
         for v in &variants {
-            assert_golden(v, &format!("testdata/easycrypt/story03/4WHS/Pkg_{}.ec", v.name));
+            assert_golden(
+                v,
+                &format!("testdata/easycrypt/story03/4WHS/Pkg_{}.ec", v.name),
+            );
         }
     }
 
@@ -1465,7 +1551,10 @@ mod tests {
         // The `State[ctr]` test is written once (story 18 §4), so what is
         // left is the `State` test and the `invoke` guard.
         assert_eq!(send1.matches(" if (").count(), 2, "{send1}");
-        assert!(!send1.contains("else"), "no `else` on an abort-only branch:\n{send1}");
+        assert!(
+            !send1.contains("else"),
+            "no `else` on an abort-only branch:\n{send1}"
+        );
         assert!(!send1.contains("ec_done"), "{send1}");
         assert!(!send1.contains("{\n\n"), "no empty branch:\n{send1}");
     }
@@ -1487,8 +1576,16 @@ mod tests {
         let rendered = full_4whs_variant("KX_nochecks");
         let send3 = proc_text(&rendered, "d_Send3");
         assert_eq!(send3.matches("if (!ec_done)").count(), 1, "{send3}");
-        assert_eq!(send3.matches("d_State.[ctr] <- state;").count(), 1, "{send3}");
-        assert_eq!(send3.matches("ec_result <- Some msg_;").count(), 1, "{send3}");
+        assert_eq!(
+            send3.matches("d_State.[ctr] <- state;").count(),
+            1,
+            "{send3}"
+        );
+        assert_eq!(
+            send3.matches("ec_result <- Some msg_;").count(),
+            1,
+            "{send3}"
+        );
     }
 
     /// `KX_noprfkey::Send3` additionally writes `ReverseMac` *inside*
@@ -1502,8 +1599,16 @@ mod tests {
         let rendered = full_4whs_kx_noprfkey();
         let send3 = proc_text(&rendered, "d_Send3");
         assert_eq!(send3.matches("if (!ec_done)").count(), 1, "{send3}");
-        assert_eq!(send3.matches("d_State.[ctr] <- state;").count(), 1, "{send3}");
-        assert_eq!(send3.matches("ec_result <- Some msg_;").count(), 1, "{send3}");
+        assert_eq!(
+            send3.matches("d_State.[ctr] <- state;").count(),
+            1,
+            "{send3}"
+        );
+        assert_eq!(
+            send3.matches("ec_result <- Some msg_;").count(),
+            1,
+            "{send3}"
+        );
         assert_eq!(send3.matches("d_ReverseMac.[").count(), 1, "{send3}");
         assert_eq!(send3.matches("(sid = None)").count(), 1, "{send3}");
         assert!(!send3.contains("unwrap_"), "{send3}");
@@ -1554,7 +1659,12 @@ mod tests {
 
     // --- naming / dedup on hand-built fixtures ------------------------------
 
-    fn param_ident(pkg_name: &str, name: &str, ty: Type, assigned: Expression) -> (PackageConstIdentifier, Expression) {
+    fn param_ident(
+        pkg_name: &str,
+        name: &str,
+        ty: Type,
+        assigned: Expression,
+    ) -> (PackageConstIdentifier, Expression) {
         (
             PackageConstIdentifier::new(name.to_string(), pkg_name.to_string(), ty),
             assigned,
@@ -1604,10 +1714,20 @@ mod tests {
         }
     }
 
-    fn instance_with_n(pkg: Package, pkg_name: &str, inst_name: &str, n_value: i64) -> PackageInstance {
+    fn instance_with_n(
+        pkg: Package,
+        pkg_name: &str,
+        inst_name: &str,
+        n_value: i64,
+    ) -> PackageInstance {
         PackageInstance {
             name: inst_name.to_string(),
-            params: vec![param_ident(pkg_name, "n", Type::integer(), Expression::integer(n_value))],
+            params: vec![param_ident(
+                pkg_name,
+                "n",
+                Type::integer(),
+                Expression::integer(n_value),
+            )],
             types: vec![],
             pkg,
         }
@@ -1632,7 +1752,10 @@ mod tests {
         assert_ne!(keys[0], keys[1]);
 
         let mut names = Names::new();
-        let discovered = vec![(keys[0].clone(), comp.clone(), 0), (keys[1].clone(), comp.clone(), 1)];
+        let discovered = vec![
+            (keys[0].clone(), comp.clone(), 0),
+            (keys[1].clone(), comp.clone(), 1),
+        ];
         let name_map = assign_names(&discovered, &mut names).unwrap();
         assert_eq!(name_map[&keys[0]], "P_v1");
         assert_eq!(name_map[&keys[1]], "P_v2");

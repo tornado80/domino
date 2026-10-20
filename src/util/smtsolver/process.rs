@@ -180,10 +180,15 @@ impl Communicator {
         transcript: Option<W>,
     ) -> Result<Self> {
         let mut cmd = std::process::Command::new("cvc5");
-        cmd.args(["--lang=smt2", "--produce-models", "--arrays-exp", "--incremental"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit());
+        cmd.args([
+            "--lang=smt2",
+            "--produce-models",
+            "--arrays-exp",
+            "--incremental",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit());
         Ok(Self(process::Communicator::new_from_cmd(cmd, transcript)?))
     }
 

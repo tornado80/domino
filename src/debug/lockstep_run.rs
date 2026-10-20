@@ -46,14 +46,13 @@ use crate::debug::claims::{
     no_dependency_claim, state_relation_parts, ClaimGoalView, ClaimQuery, ResolvedClaims,
 };
 use crate::debug::driver::{
-    equivalence_of, part_blocks, shared_base_frame, sites_view, ClaimInfo, DebugError, GoalBlock, SiteView,
-    StopReason, Unreachability, Verdict,
+    equivalence_of, part_blocks, shared_base_frame, sites_view, ClaimInfo, DebugError, GoalBlock,
+    SiteView, StopReason, Unreachability, Verdict,
 };
-use crate::debug::layout::{self, Layout, DOMINO_DEBUG_DIR};
-use crate::debug::index;
-use crate::debug::sweep::{SweepEntry, Target};
 use crate::debug::exec::TerminalPath;
+use crate::debug::index;
 use crate::debug::ir::{count_terminals, inline_oracle, FrameSpan, Label, LineInfo};
+use crate::debug::layout::{self, Layout, DOMINO_DEBUG_DIR};
 use crate::debug::lockstep::{
     run_lockstep, ChildOutcome, LockstepObserver, LockstepOptions, LockstepOutcome, LockstepSide,
     LockstepTerms, PairRecord, Pairing, StuckPoint, EQUAL_OUTPUT,
@@ -61,9 +60,9 @@ use crate::debug::lockstep::{
 use crate::debug::lockstep_report::{self, LockstepSmtWriter};
 use crate::debug::lockstep_viewer;
 use crate::debug::progress::{DebugEvent, DebugObserver};
-use crate::writers::easycrypt::invariant::state_relation_op_name;
 use crate::debug::render;
 use crate::debug::smtout::SmtOut;
+use crate::debug::sweep::{SweepEntry, Target};
 use crate::project::Project;
 use crate::theorem::{BuiltInFact, ClaimKind};
 use crate::transforms::theorem_transforms::{
@@ -71,6 +70,7 @@ use crate::transforms::theorem_transforms::{
 };
 use crate::transforms::TheoremTransform;
 use crate::util::smtsolver::{SmtSolver, SmtSolverBackend};
+use crate::writers::easycrypt::invariant::state_relation_op_name;
 use crate::writers::easycrypt::lower::inline_oracle_ec;
 use crate::writers::smt::contexts::EquivalenceContext;
 use crate::writers::smt::exprs::{SmtAnd, SmtAssert, SmtExpr, SmtNot};
@@ -412,8 +412,11 @@ pub(crate) fn easycrypt_queries(eqctx: &EquivalenceContext<'_>, oracle: &str) ->
         let claim = no_dependency_claim(fact.name(), ClaimKind::BuiltIn(fact));
         eqctx.claim_assumptions_and_goal(&claim, oracle).1
     };
-    let equal_output: SmtExpr =
-        SmtAnd(vec![goal_of(BuiltInFact::EqualAborts), goal_of(BuiltInFact::SameOutput)]).into();
+    let equal_output: SmtExpr = SmtAnd(vec![
+        goal_of(BuiltInFact::EqualAborts),
+        goal_of(BuiltInFact::SameOutput),
+    ])
+    .into();
     vec![
         ClaimQuery::without_dependencies(EQUAL_OUTPUT, SmtAssert(SmtNot(equal_output)).into()),
         easycrypt_invariant_query(eqctx, oracle),
@@ -446,9 +449,15 @@ fn lockstep_terms(
 /// the invariant relation on the new states. The package and game invariants are not in `inv`
 /// any more: the oracle lemma assumes them, and the side-invariant lemmas of the compositions
 /// prove them (ADR 0014). Its parts are the state relations but `invariant`.
-pub(crate) fn easycrypt_invariant_query(eqctx: &EquivalenceContext<'_>, oracle: &str) -> ClaimQuery {
+pub(crate) fn easycrypt_invariant_query(
+    eqctx: &EquivalenceContext<'_>,
+    oracle: &str,
+) -> ClaimQuery {
     let goal = eqctx
-        .claim_assumptions_and_goal(&no_dependency_claim("invariant", ClaimKind::StateRelation), oracle)
+        .claim_assumptions_and_goal(
+            &no_dependency_claim("invariant", ClaimKind::StateRelation),
+            oracle,
+        )
         .1;
     ClaimQuery {
         parts: state_relation_parts(eqctx, oracle, state_relation_op_name),
@@ -883,7 +892,13 @@ where
         stuck: Vec::new(),
         stop_reason: StopReason::Completed,
     };
-    lockstep_report::flush(&meta, &empty, &summarize(&empty, &meta.claims), &out_dir, true)?;
+    lockstep_report::flush(
+        &meta,
+        &empty,
+        &summarize(&empty, &meta.claims),
+        &out_dir,
+        true,
+    )?;
 
     let progress = RefCell::new(observer);
     let engine_opts = LockstepOptions {
@@ -1261,11 +1276,18 @@ mod tests {
             "game-invariant!main!L!",
             "game-invariant!main!R!",
         ] {
-            assert!(!invariant_goal.smt.contains(claim), "{claim} in {}", invariant_goal.smt);
+            assert!(
+                !invariant_goal.smt.contains(claim),
+                "{claim} in {}",
+                invariant_goal.smt
+            );
         }
         for pair in &run.outcome.pairs {
             assert!(
-                matches!(invariant(pair), Verdict::Verified | Verdict::Unreachable { .. }),
+                matches!(
+                    invariant(pair),
+                    Verdict::Verified | Verdict::Unreachable { .. }
+                ),
                 "{}",
                 pair.id
             );
@@ -1300,7 +1322,12 @@ mod tests {
             .outcome
             .pairs
             .iter()
-            .map(|p| p.parts().iter().map(|r| (r.name.as_str(), r.verdict.slug())).collect())
+            .map(|p| {
+                p.parts()
+                    .iter()
+                    .map(|r| (r.name.as_str(), r.verdict.slug()))
+                    .collect()
+            })
             .collect();
         assert!(parts.contains(&vec![
             ("state-relation rel_ctr", "goal-fails"),
@@ -1397,7 +1424,11 @@ mod tests {
                 LockstepDebugOptions::default(),
                 Some(b.path().to_path_buf()),
             );
-            for file in ["lockstep_trace.json", "lockstep_summary.txt", "lockstep_viewer.html"] {
+            for file in [
+                "lockstep_trace.json",
+                "lockstep_summary.txt",
+                "lockstep_viewer.html",
+            ] {
                 assert_eq!(
                     std::fs::read_to_string(a.path().join(file)).unwrap(),
                     std::fs::read_to_string(b.path().join(file)).unwrap(),
@@ -1765,7 +1796,11 @@ mod tests {
         let mut checked = 0;
         for oracle in ["StuckArg", "StuckOrder", "BadState", "Split"] {
             let out = tempfile::tempdir().unwrap();
-            run_rules_with(oracle, LockstepDebugOptions::default(), Some(out.path().to_path_buf()));
+            run_rules_with(
+                oracle,
+                LockstepDebugOptions::default(),
+                Some(out.path().to_path_buf()),
+            );
             let trace: serde_json::Value = serde_json::from_str(
                 &std::fs::read_to_string(out.path().join("lockstep_trace.json")).unwrap(),
             )
@@ -1773,22 +1808,31 @@ mod tests {
             let page = std::fs::read_to_string(out.path().join("lockstep_viewer.html")).unwrap();
             let rollups = embedded(&page, "rollups");
             let rollups = rollups.as_array().unwrap();
-            assert_eq!(rollups.len(), trace["stuck"].as_array().unwrap().len(), "{oracle}");
+            assert_eq!(
+                rollups.len(),
+                trace["stuck"].as_array().unwrap().len(),
+                "{oracle}"
+            );
             for (stuck, rollup) in trace["stuck"].as_array().unwrap().iter().zip(rollups) {
                 let pairs = below(&trace, stuck["node"].as_u64().unwrap());
                 assert_eq!(rollup["id"], stuck["id"], "{oracle}");
-                assert_eq!(rollup["pairs"].as_u64().unwrap() as usize, pairs.len(), "{oracle}");
+                assert_eq!(
+                    rollup["pairs"].as_u64().unwrap() as usize,
+                    pairs.len(),
+                    "{oracle}"
+                );
                 for claim in ["equal-output", "invariant"] {
-                    let count = |slug: &str| {
-                        pairs
-                            .iter()
-                            .filter(|p| {
-                                p["claims"].as_array().unwrap().iter().any(|c| {
-                                    c["claim"] == claim && c["verdict"]["kind"] == slug
+                    let count =
+                        |slug: &str| {
+                            pairs
+                                .iter()
+                                .filter(|p| {
+                                    p["claims"].as_array().unwrap().iter().any(|c| {
+                                        c["claim"] == claim && c["verdict"]["kind"] == slug
+                                    })
                                 })
-                            })
-                            .count() as u64
-                    };
+                                .count() as u64
+                        };
                     let rolled = rollup["claims"]
                         .as_array()
                         .unwrap()
@@ -1809,15 +1853,21 @@ mod tests {
                         );
                     }
                 }
-                let failing_relations: usize = pairs
-                    .iter()
-                    .flat_map(|p| {
-                        p["claims"].as_array().unwrap().iter().flat_map(|c| {
-                            c["relations"].as_array().cloned().unwrap_or_default()
+                let failing_relations: usize =
+                    pairs
+                        .iter()
+                        .flat_map(|p| {
+                            p["claims"].as_array().unwrap().iter().flat_map(|c| {
+                                c["relations"].as_array().cloned().unwrap_or_default()
+                            })
                         })
-                    })
-                    .filter(|r| matches!(r["verdict"]["kind"].as_str(), Some("goal-fails" | "inconclusive")))
-                    .count();
+                        .filter(|r| {
+                            matches!(
+                                r["verdict"]["kind"].as_str(),
+                                Some("goal-fails" | "inconclusive")
+                            )
+                        })
+                        .count();
                 let rolled: usize = rollup["relations"]
                     .as_array()
                     .unwrap()
@@ -1836,12 +1886,18 @@ mod tests {
         let run = lockstep_easycrypt(HELLO, "Proof", "UsefulOracle");
         let out = Path::new(&run.meta.out_dir);
         let page = std::fs::read_to_string(out.join("index.html")).unwrap();
-        assert!(!page.contains("<meta http-equiv"), "the final page has no refresh tag");
+        assert!(
+            !page.contains("<meta http-equiv"),
+            "the final page has no refresh tag"
+        );
         lockstep_report::flush(&run.meta, &run.outcome, &run.summary, out, true).unwrap();
         let live = std::fs::read_to_string(out.join("index.html")).unwrap();
         assert!(live.contains("<meta http-equiv=\"refresh\" content=\"2\">"));
         settle_page(out, Layout::Plain);
-        assert_eq!(std::fs::read_to_string(out.join("index.html")).unwrap(), page);
+        assert_eq!(
+            std::fs::read_to_string(out.join("index.html")).unwrap(),
+            page
+        );
     }
 
     #[test]
@@ -1850,9 +1906,16 @@ mod tests {
         let out = Path::new(&run.meta.out_dir);
         let page = std::fs::read_to_string(out.join("index.html")).unwrap();
         let trace: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(out.join("trace.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(out.join("trace.json")).unwrap())
+                .unwrap();
         assert_eq!(embedded(&page, "trace"), trace);
-        for needle in ["http://", "https://", "fetch(", "XMLHttpRequest", "localStorage"] {
+        for needle in [
+            "http://",
+            "https://",
+            "fetch(",
+            "XMLHttpRequest",
+            "localStorage",
+        ] {
             assert!(!page.contains(needle), "{needle}");
         }
     }
@@ -1905,11 +1968,12 @@ mod tests {
     /// has no dependencies, lockstep reports an invariant failure somewhere. A
     /// violation is a lowering or engine bug.
     fn assert_consistent(dir: &str, theorem: &str, oracle: &str, lockstep: &LockstepRun) {
-        let equal_output_everywhere = lockstep
-            .outcome
-            .pairs
-            .iter()
-            .all(|p| matches!(equal_output(p), Verdict::Verified | Verdict::Unreachable { .. }));
+        let equal_output_everywhere = lockstep.outcome.pairs.iter().all(|p| {
+            matches!(
+                equal_output(p),
+                Verdict::Verified | Verdict::Unreachable { .. }
+            )
+        });
         if equal_output_everywhere {
             for claim in ["equal-aborts", "same-output"] {
                 let (seq, _) = sequential(dir, theorem, oracle, claim);
@@ -1972,7 +2036,9 @@ mod tests {
             #[allow(unreachable_patterns)]
             match ev {
                 DebugEvent::Started { .. } => self.0.push("started".into()),
-                DebugEvent::JointNode { index, kind } => self.0.push(format!("node {index} {kind}")),
+                DebugEvent::JointNode { index, kind } => {
+                    self.0.push(format!("node {index} {kind}"))
+                }
                 DebugEvent::JointPairChecked { id, .. } => self.0.push(format!("pair {id}")),
                 DebugEvent::StuckPointFound { id, reason, .. } => {
                     self.0.push(format!("stuck {id} {reason}"))
@@ -2042,12 +2108,16 @@ mod tests {
             Some(&stop),
         )
         .unwrap();
-        let trace: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(out.path().join("lockstep_trace.json")).unwrap())
-                .unwrap();
+        let trace: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(out.path().join("lockstep_trace.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(trace["stop_reason"]["kind"], "interrupted");
         let text = std::fs::read_to_string(out.path().join("lockstep_summary.txt")).unwrap();
-        assert!(text.contains("STOPPED EARLY (interrupted by Ctrl-C)"), "{text}");
+        assert!(
+            text.contains("STOPPED EARLY (interrupted by Ctrl-C)"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -2185,9 +2255,18 @@ mod tests {
         let run = deps_run("AbortDiff", None, out.path());
         assert_eq!(run.meta.listing, "domino");
         assert!(run.meta.all_claims);
-        let names: Vec<_> = run.summary.claims.iter().map(|c| c.claim.as_str()).collect();
+        let names: Vec<_> = run
+            .summary
+            .claims
+            .iter()
+            .map(|c| c.claim.as_str())
+            .collect();
         assert_eq!(names, ["equal-aborts", "same-output", "invariant"]);
-        assert!(run.outcome.pairs.iter().all(|p| p.verdict_of(EQUAL_OUTPUT).is_none()));
+        assert!(run
+            .outcome
+            .pairs
+            .iter()
+            .all(|p| p.verdict_of(EQUAL_OUTPUT).is_none()));
 
         let aborting = run
             .outcome
@@ -2214,7 +2293,10 @@ mod tests {
         assert!(!run.is_ok(), "equal-aborts fails on that pair");
         // the counts split the two kinds of unreachable
         let same_output = &run.summary.claims[1].counts;
-        assert_eq!((same_output.unreachable, same_output.unreachable_dependency), (1, 1));
+        assert_eq!(
+            (same_output.unreachable, same_output.unreachable_dependency),
+            (1, 1)
+        );
     }
 
     #[test]
@@ -2224,7 +2306,10 @@ mod tests {
         assert!(!run.meta.all_claims);
         assert_eq!(run.meta.claim, "same-output");
         assert_eq!(run.summary.claims.len(), 1);
-        assert!(run.is_ok(), "same-output assumes no-abort, so the aborting pair is unreachable");
+        assert!(
+            run.is_ok(),
+            "same-output assumes no-abort, so the aborting pair is unreachable"
+        );
     }
 
     /// Lockstep and sequential execution give one verdict per claim, and they agree about
@@ -2287,10 +2372,20 @@ mod tests {
         let names: Vec<_> = run.meta.claims.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["equal-output", "invariant"]);
         assert!(run.meta.claims.iter().all(|c| c.dependencies.is_empty()));
-        for file in ["trace.json", "summary.txt", "index.html", "inlined.txt", "smt/base.smt2"] {
+        for file in [
+            "trace.json",
+            "summary.txt",
+            "index.html",
+            "inlined.txt",
+            "smt/base.smt2",
+        ] {
             assert!(out.path().join(file).is_file(), "{file}");
         }
-        assert!(run.outcome.pairs.iter().all(|p| p.verdict_of("equal-output").is_some()));
+        assert!(run
+            .outcome
+            .pairs
+            .iter()
+            .all(|p| p.verdict_of("equal-output").is_some()));
     }
 
     #[test]
@@ -2400,8 +2495,11 @@ mod tests {
         assert!(status.success());
         let a = dir.path().join("packages/A.smt2");
         let text = std::fs::read_to_string(&a).unwrap();
-        std::fs::write(&a, format!("{text}\n(define-package-invariant small\n  (< pkg.k 1000))\n"))
-            .unwrap();
+        std::fs::write(
+            &a,
+            format!("{text}\n(define-package-invariant small\n  (< pkg.k 1000))\n"),
+        )
+        .unwrap();
         let out = tempfile::tempdir().unwrap();
         let run = run_lockstep_on(
             ListingKind::Domino,
@@ -2420,7 +2518,11 @@ mod tests {
         let names: Vec<_> = run.summary.claims.iter().map(|c| c.claim.clone()).collect();
         for name in ["main", "small"] {
             let claim = package_invariant_claim_name(name, "gl", "p");
-            assert_eq!(names.iter().filter(|n| **n == claim).count(), 1, "{claim} in {names:?}");
+            assert_eq!(
+                names.iter().filter(|n| **n == claim).count(),
+                1,
+                "{claim} in {names:?}"
+            );
         }
     }
 
@@ -2428,7 +2530,10 @@ mod tests {
     fn the_easycrypt_listing_assumes_no_project_lemma() {
         let out = tempfile::tempdir().unwrap();
         let run = story23_lockstep(ListingKind::EasyCrypt, ClaimSet::NoDependencies, out.path());
-        assert!(run.meta.base_frame_smt.contains(MY_LEMMA), "the lemma is defined");
+        assert!(
+            run.meta.base_frame_smt.contains(MY_LEMMA),
+            "the lemma is defined"
+        );
         assert!(!asserts_my_lemma(&run.meta.base_frame_smt));
         let goals = serde_json::to_string(&run.meta.goals).unwrap();
         assert!(!goals.contains(MY_LEMMA), "{goals}");
@@ -2438,24 +2543,43 @@ mod tests {
     fn a_lockstep_core_run_checks_the_core_claims_without_the_project_lemma() {
         let out = tempfile::tempdir().unwrap();
         let run = story23_lockstep(ListingKind::Domino, ClaimSet::of(true, None), out.path());
-        let names: Vec<_> = run.summary.claims.iter().map(|c| c.claim.as_str()).collect();
+        let names: Vec<_> = run
+            .summary
+            .claims
+            .iter()
+            .map(|c| c.claim.as_str())
+            .collect();
         assert_eq!(names, CORE);
         assert!(run.meta.core && run.meta.all_claims);
         assert_eq!(run.meta.claim, "!core-claims!");
         assert!(!asserts_my_lemma(&run.meta.base_frame_smt));
         let goals = serde_json::to_string(&run.meta.goals).unwrap();
         assert!(!goals.contains(MY_LEMMA), "{goals}");
-        assert_eq!(run.summary.claims[2].counts.goal_fails, 1, "invariant fails without it");
+        assert_eq!(
+            run.summary.claims[2].counts.goal_fails, 1,
+            "invariant fails without it"
+        );
         let summary = lockstep_report::render_summary(&run);
-        assert!(summary.contains("all 5 claims of the core claim set"), "{summary}");
+        assert!(
+            summary.contains("all 5 claims of the core claim set"),
+            "{summary}"
+        );
     }
 
     #[test]
     fn with_the_obligation_set_invariant_holds_under_the_project_lemma() {
         let out = tempfile::tempdir().unwrap();
         let run = story23_lockstep(ListingKind::Domino, ClaimSet::of(false, None), out.path());
-        let invariant = run.summary.claims.iter().find(|c| c.claim == "invariant").unwrap();
-        assert_eq!((invariant.counts.goal_fails, invariant.counts.inconclusive), (0, 0));
+        let invariant = run
+            .summary
+            .claims
+            .iter()
+            .find(|c| c.claim == "invariant")
+            .unwrap();
+        assert_eq!(
+            (invariant.counts.goal_fails, invariant.counts.inconclusive),
+            (0, 0)
+        );
         assert!(run.summary.claims.iter().any(|c| c.claim == "my-lemma"));
     }
 
@@ -2465,14 +2589,25 @@ mod tests {
         let run = story23_sequential(ClaimSet::of(true, None), out.path());
         let names: Vec<_> = run.claims.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, CORE);
-        assert!(run.claims.iter().all(|c| !c.dependencies.contains(&"my-lemma".to_string())));
+        assert!(run
+            .claims
+            .iter()
+            .all(|c| !c.dependencies.contains(&"my-lemma".to_string())));
         assert!(!asserts_my_lemma(&run.base_frame_smt));
-        let invariant = run.claim_summaries.iter().find(|c| c.claim == "invariant").unwrap();
+        let invariant = run
+            .claim_summaries
+            .iter()
+            .find(|c| c.claim == "invariant")
+            .unwrap();
         assert_eq!(invariant.goal_fails, 1);
 
         let out = tempfile::tempdir().unwrap();
         let run = story23_sequential(ClaimSet::of(false, None), out.path());
-        let invariant = run.claim_summaries.iter().find(|c| c.claim == "invariant").unwrap();
+        let invariant = run
+            .claim_summaries
+            .iter()
+            .find(|c| c.claim == "invariant")
+            .unwrap();
         assert_eq!((invariant.goal_fails, invariant.inconclusive), (0, 0));
     }
 
@@ -2495,7 +2630,8 @@ mod tests {
         .err()
         .unwrap();
         assert!(
-            err.to_string().starts_with("claim `my-lemma` is not in the core claim set"),
+            err.to_string()
+                .starts_with("claim `my-lemma` is not in the core claim set"),
             "{err}"
         );
     }
@@ -2512,7 +2648,10 @@ mod throttle_tests {
         assert!(!throttle.due(t0), "the initial write just happened");
         assert!(!throttle.due(t0 + Duration::from_millis(499)));
         assert!(throttle.due(t0 + Duration::from_millis(500)));
-        assert!(!throttle.due(t0 + Duration::from_millis(600)), "counted from the last flush");
+        assert!(
+            !throttle.due(t0 + Duration::from_millis(600)),
+            "counted from the last flush"
+        );
         assert!(throttle.due(t0 + Duration::from_millis(1000)));
         assert!(FLUSH_GAP >= Duration::from_millis(500));
     }

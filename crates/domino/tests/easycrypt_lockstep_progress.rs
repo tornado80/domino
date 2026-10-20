@@ -44,14 +44,26 @@ fn prove(easycrypt: &Path, mode: &str) -> Output {
         .unwrap();
     assert!(translated.success());
     let output = Command::new(env!("CARGO_BIN_EXE_domino"))
-        .args(["easycrypt", "prove", "--theorem", "Proof", "--progress", mode, "--project"])
+        .args([
+            "easycrypt",
+            "prove",
+            "--theorem",
+            "Proof",
+            "--progress",
+            mode,
+            "--project",
+        ])
         .arg(&project)
         .arg("--out")
         .arg(&out)
         .env("DOMINO_EASYCRYPT", easycrypt)
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let _ = std::fs::remove_dir_all(&out);
     output
 }
@@ -67,15 +79,22 @@ fn lockstep_lines(output: &Output) -> Vec<String> {
 /// stdout without the lines that carry the run's timings, which differ per run.
 /// The time by role table (story 57): its rows are indented by six spaces or more.
 fn is_time_by_role(line: &str) -> bool {
-    ["    time by role", "    EasyCrypt:", "    warning: the rows sum", "      "]
-        .iter()
-        .any(|head| line.starts_with(head))
+    [
+        "    time by role",
+        "    EasyCrypt:",
+        "    warning: the rows sum",
+        "      ",
+    ]
+    .iter()
+    .any(|head| line.starts_with(head))
 }
 
 fn stable_stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout)
         .lines()
-        .filter(|l| !l.starts_with("elapsed:") && !l.contains("goals closed") && !l.contains(": lockstep "))
+        .filter(|l| {
+            !l.starts_with("elapsed:") && !l.contains("goals closed") && !l.contains(": lockstep ")
+        })
         .filter(|l| !is_time_by_role(l))
         .collect::<Vec<_>>()
         .join("\n")
@@ -89,14 +108,22 @@ fn plain_prints_two_lockstep_lines_per_oracle_and_none_prints_none() {
     };
     let plain = prove(&easycrypt, "plain");
     let lines = lockstep_lines(&plain);
-    assert!(!lines.is_empty() && lines.len().is_multiple_of(2), "{lines:#?}");
+    assert!(
+        !lines.is_empty() && lines.len().is_multiple_of(2),
+        "{lines:#?}"
+    );
     for pair in lines.chunks(2) {
         assert!(pair[0].ends_with("lockstep: started"), "{pair:#?}");
         assert!(
-            pair[1].contains("lockstep: ") && pair[1].contains(" joint path") && pair[1].contains(" stuck point"),
+            pair[1].contains("lockstep: ")
+                && pair[1].contains(" joint path")
+                && pair[1].contains(" stuck point"),
             "{pair:#?}"
         );
-        assert!(pair[1].contains(" in ") && pair[1].ends_with('s'), "{pair:#?}");
+        assert!(
+            pair[1].contains(" in ") && pair[1].ends_with('s'),
+            "{pair:#?}"
+        );
         // the same oracle name on both lines
         assert_eq!(
             pair[0].split_whitespace().next(),
@@ -111,18 +138,35 @@ fn plain_prints_two_lockstep_lines_per_oracle_and_none_prints_none() {
     let stderr = stderr.to_string();
     let nodes: Vec<&str> = stderr
         .lines()
-        .filter(|l| l.split_whitespace().nth(1).is_some_and(|n| n == "router" || n.starts_with('N') && n.contains('/')))
+        .filter(|l| {
+            l.split_whitespace()
+                .nth(1)
+                .is_some_and(|n| n == "router" || n.starts_with('N') && n.contains('/'))
+        })
         .collect();
     assert!(nodes.iter().any(|l| l.ends_with(" router")), "{stderr}");
-    assert!(nodes.iter().any(|l| l.contains(" N") && l.contains('/')), "{stderr}");
-    assert!(!stderr.contains("proc; inline."), "no sentence lines: {stderr}");
+    assert!(
+        nodes.iter().any(|l| l.contains(" N") && l.contains('/')),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("proc; inline."),
+        "no sentence lines: {stderr}"
+    );
 
     let none = prove(&easycrypt, "none");
     assert!(!String::from_utf8_lossy(&none.stderr).contains(" router"));
-    assert!(lockstep_lines(&none).is_empty(), "{:#?}", lockstep_lines(&none));
+    assert!(
+        lockstep_lines(&none).is_empty(),
+        "{:#?}",
+        lockstep_lines(&none)
+    );
 
     let bar = prove(&easycrypt, "bar");
-    assert!(lockstep_lines(&bar).is_empty(), "no terminal, nothing drawn");
+    assert!(
+        lockstep_lines(&bar).is_empty(),
+        "no terminal, nothing drawn"
+    );
     assert_eq!(stable_stdout(&plain), stable_stdout(&none));
     assert_eq!(stable_stdout(&bar), stable_stdout(&none));
 }

@@ -37,8 +37,8 @@ use crate::writers::easycrypt::progress::{
 
 use super::super::check::{equivalence_setup, side_setup, CheckError, EquivalenceSetup};
 use super::super::job::{
-    create_if_absent, ensure_translation_files, oracle_lock_path, oracle_record_path,
-    progress_dir, LiveJob, LockError, OracleStatus, ProofLock, SessionRecord,
+    create_if_absent, ensure_translation_files, oracle_lock_path, oracle_record_path, progress_dir,
+    LiveJob, LockError, OracleStatus, ProofLock, SessionRecord,
 };
 use super::{
     open_lemma, plan_job, tactics_for_oracle, translation_files_line, translation_line,
@@ -168,7 +168,9 @@ where
     });
     board.lock().unwrap().write(job, &dir);
     let translation = translation_line(job.exported, &created);
-    let workers = options.jobs.clamp(1, board.lock().unwrap().queue.len().max(1));
+    let workers = options
+        .jobs
+        .clamp(1, board.lock().unwrap().queue.len().max(1));
     if workers == 1 {
         let shared = Rc::new(RefCell::new(Shared {
             inner: progress(),
@@ -292,7 +294,10 @@ where
     if let Some(done) = entry.and_then(OracleTactics::from_record) {
         return Ok(Worked::Resumed(done));
     }
-    let prior = prior.filter(|r| r.oracle(oracle).is_some_and(|e| e.status != OracleStatus::Pending));
+    let prior = prior.filter(|r| {
+        r.oracle(oracle)
+            .is_some_and(|e| e.status != OracleStatus::Pending)
+    });
     let dir = progress_dir(job.out_dir, stem).join(oracle);
     std::fs::create_dir_all(&dir)?;
     let file = job.oracle_file(oracle);
@@ -543,7 +548,8 @@ impl Board {
                              at most {MAX_RESPAWNS} times",
                             MAX_RESPAWNS + 1
                         ));
-                        self.interrupted.get_or_insert(sealed_at(&u, run.tactics.as_ref()));
+                        self.interrupted
+                            .get_or_insert(sealed_at(&u, run.tactics.as_ref()));
                     }
                     self.unanswered.push(u);
                 }
@@ -673,13 +679,15 @@ impl ExportObserver for SharedProgress {
                 if !s.phase_started {
                     s.phase_started = true;
                     let total_items = s.total;
-                    s.inner.on_event(&ExportEvent::PhaseStarted { phase, total_items });
+                    s.inner
+                        .on_event(&ExportEvent::PhaseStarted { phase, total_items });
                 }
             }
             ExportEvent::ItemStarted { phase, name, .. } => {
                 s.items += 1;
                 let index = s.items;
-                s.inner.on_event(&ExportEvent::ItemStarted { phase, name, index });
+                s.inner
+                    .on_event(&ExportEvent::ItemStarted { phase, name, index });
             }
             // the job ends the phase, after its last oracle
             ExportEvent::PhaseFinished { .. } => {}

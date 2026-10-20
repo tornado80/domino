@@ -67,16 +67,16 @@ use crate::debug::exec::{
     execute_streaming_with_oracle, BranchOracle, BranchQuery, ExecError, Feasibility, Side, Step,
     Terminal, TerminalPath,
 };
+use crate::debug::index;
 use crate::debug::ir::{
     count_terminals, inline_oracle, InlineError, InlinedOracle, Label, Listing, SiteInfo, SiteKind,
 };
 use crate::debug::layout::{self, Layout, DOMINO_DEBUG_DIR};
-use crate::debug::index;
-use crate::debug::sweep::{SweepEntry, Target};
 use crate::debug::progress::{DebugEvent, DebugObserver, SharedObserver};
 use crate::debug::render;
 use crate::debug::report;
 use crate::debug::smtout::{SmtOut, SmtWriter};
+use crate::debug::sweep::{SweepEntry, Target};
 use crate::gamehops::equivalence::Equivalence;
 use crate::gamehops::GameHop;
 use crate::project::Project;
@@ -554,7 +554,10 @@ impl Verdict {
 
     /// The claim does not hold, or the solver could not tell.
     pub fn is_failure(&self) -> bool {
-        matches!(self, Verdict::GoalFails { .. } | Verdict::Inconclusive { .. })
+        matches!(
+            self,
+            Verdict::GoalFails { .. } | Verdict::Inconclusive { .. }
+        )
     }
 }
 
@@ -810,7 +813,11 @@ where
         oracle: oracle.to_string(),
     };
     let out_dir = out.unwrap_or_else(|| {
-        layout::run_dir(&project.get_root_dir().join(DOMINO_DEBUG_DIR), &target, claim_label)
+        layout::run_dir(
+            &project.get_root_dir().join(DOMINO_DEBUG_DIR),
+            &target,
+            claim_label,
+        )
     });
     std::fs::create_dir_all(&out_dir)?;
     std::fs::create_dir_all(layout.path(&out_dir, "models"))?;
@@ -892,8 +899,22 @@ where
         let solver = RefCell::new(solver);
         let counters = Counters::default();
         explore_paths(
-            &solver, &left_inl, &right_inl, left_inst, right_inst, left_si, right_si, opts,
-            &out_dir, &observer, stop, &smt_writer, &checking, &counters, started, &mut run,
+            &solver,
+            &left_inl,
+            &right_inl,
+            left_inst,
+            right_inst,
+            left_si,
+            right_si,
+            opts,
+            &out_dir,
+            &observer,
+            stop,
+            &smt_writer,
+            &checking,
+            &counters,
+            started,
+            &mut run,
         )?;
         run.queries = counters.snapshot();
         run.claim_summaries = checking.claim_summaries(&run);
@@ -1145,7 +1166,11 @@ impl Checking {
                     let spared =
                         self.first_failure_per_claim && self.failed.borrow().contains(claim);
                     if spared {
-                        *self.skipped.borrow_mut().entry(claim.to_string()).or_default() += 1;
+                        *self
+                            .skipped
+                            .borrow_mut()
+                            .entry(claim.to_string())
+                            .or_default() += 1;
                     }
                     spared
                 },
@@ -1169,12 +1194,24 @@ impl Checking {
             let [claim] = self.claims.as_slice() else {
                 unreachable!("a single-claim run checks one claim");
             };
-            let checked = check_claim(solver, claim, aborts, out_dir, self.layout, rid, &mut queries)?;
+            let checked = check_claim(
+                solver,
+                claim,
+                aborts,
+                out_dir,
+                self.layout,
+                rid,
+                &mut queries,
+            )?;
             PairCheck {
                 verdict: checked.verdict.clone(),
                 model_smt: checked.model.clone(),
                 // the parts are the only breakdown a single-claim run has
-                claims: if checked.parts.is_empty() { Vec::new() } else { vec![checked] },
+                claims: if checked.parts.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![checked]
+                },
             }
         };
         counters.claims.set(counters.claims.get() + queries);
@@ -1251,7 +1288,10 @@ impl GoalBlock {
             s.push_str(dependency);
             s.push('\n');
         }
-        s.push_str(&format!("(push 1)\n{}\n(check-sat)\n(get-model)\n(pop 1)\n", self.negated));
+        s.push_str(&format!(
+            "(push 1)\n{}\n(check-sat)\n(get-model)\n(pop 1)\n",
+            self.negated
+        ));
         for part in parts {
             if failures_only && !part.verdict.is_failure() {
                 continue;
@@ -1332,10 +1372,9 @@ fn explore_paths<'o, S: SmtSolver>(
             }
             let index = *left_counter;
             let lid = format!("{index}");
-            observer.borrow_mut().on_event(&DebugEvent::LeftPathStarted {
-                index,
-                id: &lid,
-            });
+            observer
+                .borrow_mut()
+                .on_event(&DebugEvent::LeftPathStarted { index, id: &lid });
             match handle_left_path(
                 solver,
                 checking,
@@ -1364,10 +1403,12 @@ fn explore_paths<'o, S: SmtSolver>(
                     run.left_paths.push(lv);
                     run.summary = summarize(&run.left_paths, &run.left_pruned_branches);
                     run.queries = counters.snapshot();
-                    observer.borrow_mut().on_event(&DebugEvent::LeftPathFinished {
-                        index,
-                        running: run.summary,
-                    });
+                    observer
+                        .borrow_mut()
+                        .on_event(&DebugEvent::LeftPathFinished {
+                            index,
+                            running: run.summary,
+                        });
                     run.elapsed = started.elapsed();
                     if let Err(e) = report::flush(run, out_dir) {
                         *fatal = Some(DebugError::Io(e));
@@ -1643,10 +1684,7 @@ fn handle_right_path<'o, S: SmtSolver>(
 /// Assert only the part of `path` not already on the solver stack — the branch
 /// prefix a [`SolverPruner`] already asserted incrementally. `reported_*` are `0`
 /// when no pruner was active on that side, so this then asserts the whole path.
-fn write_path_delta<S: SmtSolver>(
-    solver: &mut S,
-    path: &TerminalPath,
-) -> Result<(), DebugError> {
+fn write_path_delta<S: SmtSolver>(solver: &mut S, path: &TerminalPath) -> Result<(), DebugError> {
     for entry in &path.decls[path.reported_decls..] {
         solver.write_smt(entry.clone())?;
     }
@@ -1767,11 +1805,13 @@ impl<'s, 'o, S: SmtSolver> SolverPruner<'s, 'o, S> {
             .map(|s| s.line.clone())
             .unwrap_or_default();
         let id = format!("{}p{}", self.id_prefix, self.n_pruned);
-        self.observer.borrow_mut().on_event(&DebugEvent::BranchPruned {
-            side: self.side,
-            id: &id,
-            label: query.label,
-        });
+        self.observer
+            .borrow_mut()
+            .on_event(&DebugEvent::BranchPruned {
+                side: self.side,
+                id: &id,
+                label: query.label,
+            });
         let mut visited = query.visited.to_vec();
         self.pruned.push(PrunedBranch {
             id,
@@ -2005,11 +2045,7 @@ pub fn render_tree(run: &DebugRun) -> String {
         for step in &lp.steps {
             let _ = writeln!(out, "  L{} {}  -> {}", step.label, step.line, step.decision);
         }
-        let _ = writeln!(
-            out,
-            "  L{} {}",
-            lp.terminal.label, lp.terminal.line
-        );
+        let _ = writeln!(out, "  L{} {}", lp.terminal.label, lp.terminal.line);
 
         if !lp.reachable {
             let _ = writeln!(out, "  [unsat: left path unreachable — pruned]");
@@ -2153,7 +2189,10 @@ pub(crate) fn describe_unreachable(
             if aborts.is_empty() {
                 format!("this claim assumes {dependency}, which is false here")
             } else {
-                format!("{}, and this claim assumes {dependency}", aborts.join(" and "))
+                format!(
+                    "{}, and this claim assumes {dependency}",
+                    aborts.join(" and ")
+                )
             }
         }
     }
@@ -2173,9 +2212,9 @@ fn render_verdict(verdict: &Verdict) -> String {
 mod tests {
     use super::*;
     use crate::debug::progress::{DebugEvent, NopObserver};
-    use std::fmt::Write as _;
     use crate::project::{DirectoryFiles, DirectoryProject};
     use crate::util::smtsolver::cvc5lib::Cvc5LibBackend;
+    use std::fmt::Write as _;
     use std::sync::atomic::AtomicBool;
 
     fn with_project<R>(dir: &str, f: impl FnOnce(&DirectoryProject) -> R) -> R {
@@ -2209,7 +2248,16 @@ mod tests {
             let out = tempfile::tempdir().unwrap().keep();
             let backend = Cvc5LibBackend::new(true, opts.timeout_ms);
             run_debug_command(
-                proj, theorem, 0, oracle, ClaimSet::of(false, Some(claim)), &opts, &backend, Some(out), observer, stop,
+                proj,
+                theorem,
+                0,
+                oracle,
+                ClaimSet::of(false, Some(claim)),
+                &opts,
+                &backend,
+                Some(out),
+                observer,
+                stop,
             )
             .unwrap()
         })
@@ -2379,7 +2427,10 @@ mod tests {
 
         // And it is in trace.json verbatim.
         let parsed: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(std::path::Path::new(&run.out_dir).join("sequential_trace.json")).unwrap(),
+            &std::fs::read_to_string(
+                std::path::Path::new(&run.out_dir).join("sequential_trace.json"),
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(parsed["schema"], 10);
@@ -2444,8 +2495,10 @@ mod tests {
             "same-output",
             DebugOptions::default(),
         );
-        let b = std::fs::read_to_string(std::path::Path::new(&run2.out_dir).join("sequential_trace.json"))
-            .unwrap();
+        let b = std::fs::read_to_string(
+            std::path::Path::new(&run2.out_dir).join("sequential_trace.json"),
+        )
+        .unwrap();
         assert_eq!(a, b, "sequential_trace.json not byte-identical across runs");
     }
 
@@ -2463,7 +2516,9 @@ mod tests {
         assert!(run.is_ok(), "{}", render_tree(&run));
         // Story 11: `transcript.smt2` is opt-in and absent by default.
         assert!(
-            !std::path::Path::new(&run.out_dir).join("sequential/transcript.smt2").exists(),
+            !std::path::Path::new(&run.out_dir)
+                .join("sequential/transcript.smt2")
+                .exists(),
             "transcript.smt2 must not be written without --transcript"
         );
         // The `smt/` tree is the default artifact: base frame + one delta per
@@ -2493,9 +2548,10 @@ mod tests {
                 ..DebugOptions::default()
             },
         );
-        let transcript =
-            std::fs::read_to_string(std::path::Path::new(&run.out_dir).join("sequential/transcript.smt2"))
-                .unwrap();
+        let transcript = std::fs::read_to_string(
+            std::path::Path::new(&run.out_dir).join("sequential/transcript.smt2"),
+        )
+        .unwrap();
         assert!(transcript.contains("(check-sat)"));
         assert!(transcript.contains("(push 1)") && transcript.contains("(pop 1)"));
     }
@@ -2513,7 +2569,9 @@ mod tests {
                 ..DebugOptions::default()
             },
         );
-        assert!(!std::path::Path::new(&run.out_dir).join("sequential/smt").exists());
+        assert!(!std::path::Path::new(&run.out_dir)
+            .join("sequential/smt")
+            .exists());
     }
 
     /// Story 11 — the self-containment property. An emitted pair file's body is
@@ -2607,7 +2665,11 @@ mod tests {
         let smt = std::path::Path::new(&run.out_dir).join("sequential/smt");
         assert!(smt.join("base.smt2").exists());
         for lp in &run.left_paths {
-            assert!(smt.join(&lp.id).join("left.smt2").exists(), "left #{}", lp.id);
+            assert!(
+                smt.join(&lp.id).join("left.smt2").exists(),
+                "left #{}",
+                lp.id
+            );
             for rp in &lp.right_paths {
                 let rtail = rp.id.rsplit('.').next().unwrap();
                 assert!(
@@ -2671,8 +2733,8 @@ mod tests {
             assert!(!left.contains("set-logic"), "left.smt2 is always a delta");
             for rp in &lp.right_paths {
                 let rtail = rp.id.rsplit('.').next().unwrap();
-                let pair =
-                    std::fs::read_to_string(smt.join(&lp.id).join(format!("{rtail}.smt2"))).unwrap();
+                let pair = std::fs::read_to_string(smt.join(&lp.id).join(format!("{rtail}.smt2")))
+                    .unwrap();
                 assert!(
                     !pair.contains("set-logic"),
                     "deltas pair file must not carry the base frame"
@@ -3034,13 +3096,17 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&trace).unwrap();
         assert_eq!(parsed["stop_reason"]["kind"], "interrupted");
         assert!(parsed.get("partial").is_none());
-        assert!(std::path::Path::new(&run.out_dir).join("sequential_viewer.html").exists());
+        assert!(std::path::Path::new(&run.out_dir)
+            .join("sequential_viewer.html")
+            .exists());
         let summary_txt = std::path::Path::new(&run.out_dir).join("sequential_summary.txt");
         assert!(summary_txt.exists());
         // Story 22: the result record is written after an interrupt too.
         let record: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(std::path::Path::new(&run.out_dir).join("sequential_result.json"))
-                .unwrap(),
+            &std::fs::read_to_string(
+                std::path::Path::new(&run.out_dir).join("sequential_result.json"),
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(record["stop_reason"], "interrupted");
@@ -3090,7 +3156,10 @@ mod tests {
         // run still produced a well-formed, flushed trace.
         assert!(obs.pairs >= 1);
         let parsed: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(std::path::Path::new(&run.out_dir).join("sequential_trace.json")).unwrap(),
+            &std::fs::read_to_string(
+                std::path::Path::new(&run.out_dir).join("sequential_trace.json"),
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(parsed["stop_reason"]["kind"], "interrupted");
@@ -3098,26 +3167,29 @@ mod tests {
 
         // story 17: the summary.txt written by the same (interrupted) flush is
         // the per-left-path tree, ending with the bracketed stop line.
-        let summary =
-            std::fs::read_to_string(std::path::Path::new(&run.out_dir).join("sequential_summary.txt")).unwrap();
+        let summary = std::fs::read_to_string(
+            std::path::Path::new(&run.out_dir).join("sequential_summary.txt"),
+        )
+        .unwrap();
         assert!(!summary.is_empty());
         assert!(summary.starts_with(&render_tree(&run)), "{summary}");
         assert!(summary.starts_with("theorem "), "{summary}");
         assert!(
-            summary
-                .trim_end()
-                .ends_with(&format!(
-                    "[STOPPED EARLY (interrupted by Ctrl-C) — {} of {} left paths explored]",
-                    run.left_paths.len(),
-                    run.left_syntactic
-                )),
+            summary.trim_end().ends_with(&format!(
+                "[STOPPED EARLY (interrupted by Ctrl-C) — {} of {} left paths explored]",
+                run.left_paths.len(),
+                run.left_syntactic
+            )),
             "{summary}"
         );
         // one tree block per explored left path; verdict counts from render_tree
         let sm = &run.summary;
         assert_eq!(summary.matches("left path #").count(), run.left_paths.len());
         assert!(
-            summary.contains(&format!("{} verified, {} unreachable", sm.verified, sm.unreachable)),
+            summary.contains(&format!(
+                "{} verified, {} unreachable",
+                sm.verified, sm.unreachable
+            )),
             "{summary}"
         );
     }
@@ -3209,7 +3281,11 @@ mod story19_tests {
             names,
             ["equal-aborts", "same-output", "invariant", "needs-positive"]
         );
-        let checked: Vec<_> = run.claim_summaries.iter().map(|c| c.claim.as_str()).collect();
+        let checked: Vec<_> = run
+            .claim_summaries
+            .iter()
+            .map(|c| c.claim.as_str())
+            .collect();
         assert_eq!(checked, names);
         assert!(run.is_ok(), "{}", render_tree(&run));
     }
@@ -3219,7 +3295,10 @@ mod story19_tests {
         let run = all("AbortDiff");
         // the left assert holds: both return; it fails: the left aborts, the right returns
         assert_eq!(of(&run, "equal-aborts").len(), 2);
-        assert!(matches!(of(&run, "equal-aborts")[1], Verdict::GoalFails { .. }));
+        assert!(matches!(
+            of(&run, "equal-aborts")[1],
+            Verdict::GoalFails { .. }
+        ));
         for claim in ["same-output", "invariant"] {
             let verdicts = of(&run, claim);
             assert!(matches!(verdicts[0], Verdict::Verified), "{claim}");
@@ -3241,7 +3320,11 @@ mod story19_tests {
         let verdicts = of(&run, "needs-positive");
         assert_eq!(verdicts.len(), 2);
         assert!(matches!(verdicts[0], Verdict::Verified));
-        assert!(same(verdicts[1], &dependency_false("positive")), "{}", render_tree(&run));
+        assert!(
+            same(verdicts[1], &dependency_false("positive")),
+            "{}",
+            render_tree(&run)
+        );
         // the claim checks: 3 default claims x 2 pairs, and `needs-positive` on each pair, plus
         // the extra dependency queries for it: one on the pair where `positive` holds (asked
         // because the goal was unsat), and on the other pair one to find it false and one to
@@ -3253,8 +3336,12 @@ mod story19_tests {
     fn a_single_claim_run_keeps_its_dependencies_in_the_base_frame() {
         let single = one("Branch", "needs-positive");
         let everything = all("Branch");
-        assert!(single.base_frame_smt.contains("(assert (general-relation!positive!"));
-        assert!(!everything.base_frame_smt.contains("(assert (general-relation!positive!"));
+        assert!(single
+            .base_frame_smt
+            .contains("(assert (general-relation!positive!"));
+        assert!(!everything
+            .base_frame_smt
+            .contains("(assert (general-relation!positive!"));
         // with its dependencies asserted up front, the path where `positive` is false is not
         // a pair at all: it is pruned (the frame is unsat there), not reported unreachable
         assert!(single.claim_summaries.is_empty());
@@ -3292,15 +3379,29 @@ mod story19_tests {
         for (dir, theorem, oracle) in [
             (DEPS, "T", "Branch"),
             (DEPS, "T", "AbortDiff"),
-            ("example-projects/kem-dem/kem-dem-cca-ssp", "kem_dem_cca_ssp", "PKDEC"),
+            (
+                "example-projects/kem-dem/kem-dem-cca-ssp",
+                "kem_dem_cca_ssp",
+                "PKDEC",
+            ),
         ] {
             let everything = run(dir, theorem, 0, oracle, None, DebugOptions::default());
-            let narrow = run(dir, theorem, 0, oracle, Some("equal-aborts"), DebugOptions::default());
+            let narrow = run(
+                dir,
+                theorem,
+                0,
+                oracle,
+                Some("equal-aborts"),
+                DebugOptions::default(),
+            );
             assert_eq!(
                 everything.queries.exploration, narrow.queries.exploration,
                 "{oracle}: the exploration must not scale with the claim count"
             );
-            assert!(everything.queries.claims > narrow.queries.claims, "{oracle}");
+            assert!(
+                everything.queries.claims > narrow.queries.claims,
+                "{oracle}"
+            );
         }
     }
 
@@ -3312,7 +3413,11 @@ mod story19_tests {
         assert!(of(&run, "skipped").is_empty());
         assert!(run.claim_summaries.iter().all(|c| c.claim != "skipped"));
         assert!(!run.admitted, "the other claims of the oracle are not");
-        assert!(render_tree(&run).contains("admitted"), "{}", render_tree(&run));
+        assert!(
+            render_tree(&run).contains("admitted"),
+            "{}",
+            render_tree(&run)
+        );
     }
 
     #[test]
@@ -3326,7 +3431,11 @@ mod story19_tests {
                 .unwrap()
                 .clone()
         };
-        assert_eq!(fails(&everything).goal_fails, 2, "the two mixed combinations");
+        assert_eq!(
+            fails(&everything).goal_fails,
+            2,
+            "the two mixed combinations"
+        );
         assert_eq!(fails(&everything).skipped, 0);
 
         let first_only = run(
@@ -3352,13 +3461,29 @@ mod story19_tests {
         with_project(DEPS, |proj| {
             let out = tempfile::tempdir().unwrap().keep();
             let seq = run_debug_command(
-                proj, "T", 0, "Branch", ClaimSet::of(false, None), &DebugOptions::default(),
-                &Cvc5LibBackend::new(true, None), Some(out.clone()), &mut NopObserver, None,
+                proj,
+                "T",
+                0,
+                "Branch",
+                ClaimSet::of(false, None),
+                &DebugOptions::default(),
+                &Cvc5LibBackend::new(true, None),
+                Some(out.clone()),
+                &mut NopObserver,
+                None,
             )
             .unwrap();
             let lock = run_lockstep_domino(
-                proj, "T", 0, "Branch", ClaimSet::of(false, None), &LockstepDebugOptions::default(),
-                &Cvc5LibBackend::new(true, None), Some(out.clone()), &mut NopObserver, None,
+                proj,
+                "T",
+                0,
+                "Branch",
+                ClaimSet::of(false, None),
+                &LockstepDebugOptions::default(),
+                &Cvc5LibBackend::new(true, None),
+                Some(out.clone()),
+                &mut NopObserver,
+                None,
             )
             .unwrap();
             assert_eq!(seq.out_dir, lock.meta.out_dir);
@@ -3382,19 +3507,38 @@ mod story19_tests {
             }
             let seq_summary = std::fs::read_to_string(out.join("sequential_summary.txt")).unwrap();
             let lock_summary = std::fs::read_to_string(out.join("lockstep_summary.txt")).unwrap();
-            assert!(seq_summary.contains("\nstrategy sequential\n"), "{seq_summary}");
-            assert!(lock_summary.contains("\nstrategy lockstep\n"), "{lock_summary}");
-            assert!(crate::debug::report::render_summary(&seq).contains("strategy      sequential\n"));
+            assert!(
+                seq_summary.contains("\nstrategy sequential\n"),
+                "{seq_summary}"
+            );
+            assert!(
+                lock_summary.contains("\nstrategy lockstep\n"),
+                "{lock_summary}"
+            );
+            assert!(
+                crate::debug::report::render_summary(&seq).contains("strategy      sequential\n")
+            );
             assert!(crate::debug::lockstep_report::render_summary(&lock)
                 .contains("strategy      lockstep\n"));
             // running the sequential one again leaves the lockstep files as they were
             let before = std::fs::read(out.join("lockstep_trace.json")).unwrap();
             run_debug_command(
-                proj, "T", 0, "Branch", ClaimSet::of(false, None), &DebugOptions::default(),
-                &Cvc5LibBackend::new(true, None), Some(out.clone()), &mut NopObserver, None,
+                proj,
+                "T",
+                0,
+                "Branch",
+                ClaimSet::of(false, None),
+                &DebugOptions::default(),
+                &Cvc5LibBackend::new(true, None),
+                Some(out.clone()),
+                &mut NopObserver,
+                None,
             )
             .unwrap();
-            assert_eq!(before, std::fs::read(out.join("lockstep_trace.json")).unwrap());
+            assert_eq!(
+                before,
+                std::fs::read(out.join("lockstep_trace.json")).unwrap()
+            );
         });
     }
 
@@ -3434,7 +3578,15 @@ mod story19_tests {
         let mut eqctx = EquivalenceContext::new(eq, &transformed, &auxs);
         eqctx.load_invariants(proj).unwrap();
         let mut driver = EquivalenceSmtDriver::new(
-            &eqctx, proj, backend, false, Some(oracle), Some(claim), 1, false, false,
+            &eqctx,
+            proj,
+            backend,
+            false,
+            Some(oracle),
+            Some(claim),
+            1,
+            false,
+            false,
         );
         driver.verify(&mut Silent).is_ok()
     }
@@ -3466,8 +3618,16 @@ mod story19_tests {
                     let opts = DebugOptions::default();
                     let backend = Cvc5LibBackend::new(true, None);
                     let run = run_debug_command(
-                        proj, &target.theorem, target.proofstep, &target.oracle, ClaimSet::of(false, None), &opts,
-                        &backend, Some(out), &mut NopObserver, None,
+                        proj,
+                        &target.theorem,
+                        target.proofstep,
+                        &target.oracle,
+                        ClaimSet::of(false, None),
+                        &opts,
+                        &backend,
+                        Some(out),
+                        &mut NopObserver,
+                        None,
                     )
                     .unwrap();
                     assert_eq!(run.stop_reason, StopReason::Completed);
@@ -3501,7 +3661,6 @@ mod story19_tests {
         assert!(compared >= 20, "only {compared} claims were compared");
     }
 }
-
 
 #[cfg(all(test, feature = "cvc5-lib"))]
 pub(crate) mod story21_tests {
@@ -3567,20 +3726,30 @@ pub(crate) mod story21_tests {
         let (run, out) = run(None);
         assert_eq!(
             parts_of(&run, "1.1"),
-            [("state-relation rel_ctr", "goal-fails"), ("state-relation rel_seen", "verified")]
+            [
+                ("state-relation rel_ctr", "goal-fails"),
+                ("state-relation rel_seen", "verified")
+            ]
         );
         // `invariant` verified: no part is checked
         assert!(parts_of(&run, "2.1").is_empty());
         let invariant = run.checks.iter().find(|c| c.claim == "invariant").unwrap();
         let names: Vec<&str> = invariant.parts.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["state-relation rel_ctr", "state-relation rel_seen"]);
-        let failing = run.left_paths[0].right_paths[0].claims.iter().find(|c| c.claim == "invariant").unwrap();
+        let failing = run.left_paths[0].right_paths[0]
+            .claims
+            .iter()
+            .find(|c| c.claim == "invariant")
+            .unwrap();
         assert!(failing.model.is_some() && failing.parts[0].model.is_some());
 
         let pages = viewers_under(&out);
         assert!(!pages.is_empty());
         for page in pages {
-            assert!(!page.contains("StateRelation_"), "a Domino listing page names an EasyCrypt operator");
+            assert!(
+                !page.contains("StateRelation_"),
+                "a Domino listing page names an EasyCrypt operator"
+            );
             assert!(page.contains("function verdictsList("));
         }
     }
@@ -3590,7 +3759,10 @@ pub(crate) mod story21_tests {
         let (run, _) = run(Some("invariant"));
         assert_eq!(
             parts_of(&run, "1.1"),
-            [("state-relation rel_ctr", "goal-fails"), ("state-relation rel_seen", "verified")]
+            [
+                ("state-relation rel_ctr", "goal-fails"),
+                ("state-relation rel_seen", "verified")
+            ]
         );
         assert!(parts_of(&run, "2.1").is_empty());
     }

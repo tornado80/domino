@@ -28,10 +28,9 @@ use crate::writers::easycrypt::names::Names;
 use crate::writers::easycrypt::EcExportError;
 
 use super::{
-    abort_field_name, field_expr, fold_and, game_inv_op_name, instance_field_name,
-    pkg_inv_op_name, pkg_inv_template_name, pkg_state_fields, pkg_state_type_name,
-    side_inv_op_name, side_record_type_name, InvariantError, Locals, OpRegistry, Sexp,
-    StateLookup, TCtx,
+    abort_field_name, field_expr, fold_and, game_inv_op_name, instance_field_name, pkg_inv_op_name,
+    pkg_inv_template_name, pkg_state_fields, pkg_state_type_name, side_inv_op_name,
+    side_record_type_name, InvariantError, Locals, OpRegistry, Sexp, StateLookup, TCtx,
 };
 
 /// A one-sided invariant file that does not hold exactly one invariant form of its kind.
@@ -64,7 +63,9 @@ pub enum SideInvariantError {
     },
 
     /// A package invariant for a package without state fields: there is no `<Pkg>_pkgstate`.
-    #[error("invariant file `{file}` gives an invariant to package `{package}`, which has no state")]
+    #[error(
+        "invariant file `{file}` gives an invariant to package `{package}`, which has no state"
+    )]
     StatelessPackageInvariant { file: String, package: String },
 
     /// Two operators of a composition's file with one name, for example the template of a
@@ -250,10 +251,12 @@ pub(super) fn package_invariant_names(
     inst: &PackageInstance,
 ) -> Result<Vec<String>, InvariantError> {
     let owner = format!("package `{}`", inst.pkg.name);
-    Ok(named_invariants(project, &inst.pkg.invariants, &owner, Kind::Package)?
-        .into_iter()
-        .map(|i| i.name)
-        .collect())
+    Ok(
+        named_invariants(project, &inst.pkg.invariants, &owner, Kind::Package)?
+            .into_iter()
+            .map(|i| i.name)
+            .collect(),
+    )
 }
 
 /// The names of the game invariants of `comp`, empty when it has none.
@@ -265,10 +268,12 @@ pub(super) fn game_invariant_names(
         return Ok(Vec::new());
     }
     let owner = format!("composition `{}`", comp.name);
-    Ok(named_invariants(project, &comp.invariants, &owner, Kind::Game)?
-        .into_iter()
-        .map(|i| i.name)
-        .collect())
+    Ok(
+        named_invariants(project, &comp.invariants, &owner, Kind::Game)?
+            .into_iter()
+            .map(|i| i.name)
+            .collect(),
+    )
 }
 
 fn check_form(file: &str, owner: &str, want: Kind, got: Kind) -> Result<(), SideInvariantError> {
@@ -304,7 +309,10 @@ pub(crate) fn package_items<P: Project>(
     if !fields.is_empty() {
         items.push(EcItem::Record {
             name: pkg_state_type_name(package),
-            fields: fields.iter().map(|(_, f, ty)| (f.clone(), ty.clone())).collect(),
+            fields: fields
+                .iter()
+                .map(|(_, f, ty)| (f.clone(), ty.clone()))
+                .collect(),
         });
     }
     if !inst.pkg.invariants.is_empty() {
@@ -386,7 +394,10 @@ pub(crate) fn composition_items<P: Project>(
             let op = pkg_inv_op_name(&invariant, name, inst.name());
             ops.define_named(
                 &op,
-                &format!("the package invariant `{invariant}` of instance `{}`", inst.name()),
+                &format!(
+                    "the package invariant `{invariant}` of instance `{}`",
+                    inst.name()
+                ),
             )?;
             let body = EcExpr::App {
                 head: template,
@@ -453,11 +464,13 @@ fn package_templates<P: Project>(
     let invariants = named_invariants(ctx.project, &inst.pkg.invariants, &owner, Kind::Package)?;
     let fields = pkg_state_fields(inst, &mut Names::new())?;
     if fields.is_empty() {
-        return Err(InvariantError::from(SideInvariantError::StatelessPackageInvariant {
-            file: invariants[0].file.clone(),
-            package: package.to_string(),
-        })
-        .into());
+        return Err(
+            InvariantError::from(SideInvariantError::StatelessPackageInvariant {
+                file: invariants[0].file.clone(),
+                package: package.to_string(),
+            })
+            .into(),
+        );
     }
     let mut lookup = StateLookup::default();
     for (raw, field, ty) in fields {
@@ -468,9 +481,17 @@ fn package_templates<P: Project>(
     let mut items = Vec::new();
     for invariant in invariants {
         let op = pkg_inv_template_name(&invariant.name, package);
-        ops.define_named(&op, &format!("the package invariant `{}` of `{package}`", invariant.name))?;
+        ops.define_named(
+            &op,
+            &format!("the package invariant `{}` of `{package}`", invariant.name),
+        )?;
         let body = translate(ctx, &invariant.file, &lookup, &invariant.body)?;
-        items.push(op_def(&op, "s", EcType::Named(pkg_state_type_name(package)), body));
+        items.push(op_def(
+            &op,
+            "s",
+            EcType::Named(pkg_state_type_name(package)),
+            body,
+        ));
     }
     Ok(items)
 }
@@ -527,7 +548,9 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::super::tests::{find_equivalence, item_text, load_project};
-    use super::super::{build_invariant_file, invariant_ops, leaf_part_ops, side_invariant_ops, OpRegistry};
+    use super::super::{
+        build_invariant_file, invariant_ops, leaf_part_ops, side_invariant_ops, OpRegistry,
+    };
     use super::*;
     use crate::project::{DirectoryFiles, DirectoryProject};
     use crate::writers::easycrypt::export::{export_theorem, ExportedTheorem};
@@ -574,14 +597,19 @@ mod tests {
         let (theorem, project) = load_project("example-projects/4WHS", "Simple4WHS");
         let equivalence = find_equivalence(&theorem, "Hybrid1", "Hybrid2");
         let file = build_invariant_file(&theorem, equivalence, project).unwrap();
-        assert!(file.state_relations.iter().any(|r| r == "invariant"), "{:?}", file.state_relations);
+        assert!(
+            file.state_relations.iter().any(|r| r == "invariant"),
+            "{:?}",
+            file.state_relations
+        );
         let left = theorem.find_game_instance("Hybrid1").unwrap();
         let right = theorem.find_game_instance("Hybrid2").unwrap();
-        let ops: Vec<String> = invariant_ops(project, left, right, &file.state_relations, &file.helpers)
-            .unwrap()
-            .into_iter()
-            .map(|op| op.name)
-            .collect();
+        let ops: Vec<String> =
+            invariant_ops(project, left, right, &file.state_relations, &file.helpers)
+                .unwrap()
+                .into_iter()
+                .map(|op| op.name)
+                .collect();
         assert!(
             ops.iter().any(|op| op == "StateRelation_invariant"),
             "{ops:?}"
@@ -607,7 +635,10 @@ mod tests {
         ] {
             assert_eq!(count(comp, item), 1, "{item} in:\n{comp}");
         }
-        assert!(comp.contains("\nrequire import Pkg_PRF Pkg_KX_NoPrf.\n"), "{comp}");
+        assert!(
+            comp.contains("\nrequire import Pkg_PRF Pkg_KX_NoPrf.\n"),
+            "{comp}"
+        );
         assert_eq!(
             item_text(comp, "op side_inv_Hybrid2"),
             concat!(
@@ -627,7 +658,10 @@ mod tests {
             item_text(inv, "op inv").ends_with("=> StateRelation_invariant l r)."),
             "{inv}"
         );
-        golden(inv, &format!("{STORY58}/4WHS/Eq_Hybrid1_Hybrid2_Invariants.ec"));
+        golden(
+            inv,
+            &format!("{STORY58}/4WHS/Eq_Hybrid1_Hybrid2_Invariants.ec"),
+        );
     }
 
     #[test]
@@ -664,14 +698,20 @@ mod tests {
         assert_eq!(side.len(), 1);
         assert_eq!(side[0].composition, "Game");
         assert_eq!(side[0].join_file, "SideInv_Game.ec");
-        assert_eq!(side[0].oracle_files, [("Inc".to_string(), "SideInv_Game_Inc.ec".to_string())]);
+        assert_eq!(
+            side[0].oracle_files,
+            [("Inc".to_string(), "SideInv_Game_Inc.ec".to_string())]
+        );
         assert_eq!(exported.equivalences[0].side_compositions, ["Game"]);
     }
 
     #[test]
     fn a_helper_define_fun_is_a_hard_error_naming_the_file() {
         let e = error_of("HelperFun");
-        assert!(e.contains("`./packages/Helper.smt2`") && e.contains("define-fun nonneg"), "{e}");
+        assert!(
+            e.contains("`./packages/Helper.smt2`") && e.contains("define-fun nonneg"),
+            "{e}"
+        );
     }
 
     /// Story 73: each named invariant of an owner has its own template and wrapper, and
@@ -684,7 +724,10 @@ mod tests {
             assert_eq!(count(pkg, op), 1, "{op} in:\n{pkg}");
         }
         let comp = file(&exported, "Comp_TwoGame.ec");
-        for op in ["op PkgInv_main_of_T_in_TwoGame ", "op PkgInv_nonneg_of_T_in_TwoGame "] {
+        for op in [
+            "op PkgInv_main_of_T_in_TwoGame ",
+            "op PkgInv_nonneg_of_T_in_TwoGame ",
+        ] {
             assert_eq!(count(comp, op), 1, "{op} in:\n{comp}");
         }
         let side = item_text(comp, "op side_inv_TwoGame");
@@ -725,10 +768,19 @@ mod tests {
     #[test]
     fn a_b_with_c_and_a_with_b_c_give_different_operators() {
         let exported = export(STORY58, "Clash").unwrap();
-        assert_eq!(count(file(&exported, "Pkg_A_B.ec"), "op PkgInv_c_of_A__B "), 1);
-        assert_eq!(count(file(&exported, "Pkg_A.ec"), "op PkgInv_B__c_of_A "), 1);
+        assert_eq!(
+            count(file(&exported, "Pkg_A_B.ec"), "op PkgInv_c_of_A__B "),
+            1
+        );
+        assert_eq!(
+            count(file(&exported, "Pkg_A.ec"), "op PkgInv_B__c_of_A "),
+            1
+        );
         let comp = file(&exported, "Comp_ClashGame.ec");
-        for op in ["op PkgInv_c_of_A__B_in_ClashGame ", "op PkgInv_B__c_of_A_in_ClashGame "] {
+        for op in [
+            "op PkgInv_c_of_A__B_in_ClashGame ",
+            "op PkgInv_B__c_of_A_in_ClashGame ",
+        ] {
             assert_eq!(count(comp, op), 1, "{op} in:\n{comp}");
         }
     }
@@ -736,13 +788,19 @@ mod tests {
     #[test]
     fn a_form_of_the_wrong_kind_is_a_hard_error_naming_the_file() {
         let e = error_of("WrongKind");
-        assert!(e.contains("`./packages/Wrong.smt2`") && e.contains("define-game-invariant"), "{e}");
+        assert!(
+            e.contains("`./packages/Wrong.smt2`") && e.contains("define-game-invariant"),
+            "{e}"
+        );
     }
 
     #[test]
     fn a_package_invariant_of_a_stateless_package_is_a_hard_error_naming_the_file() {
         let e = error_of("Stateless");
-        assert!(e.contains("`./packages/NoState.smt2`") && e.contains("no state"), "{e}");
+        assert!(
+            e.contains("`./packages/NoState.smt2`") && e.contains("no state"),
+            "{e}"
+        );
     }
 
     #[test]
@@ -805,7 +863,11 @@ mod tests {
             project,
             left,
             right,
-            &["invariant".to_string(), "relation-a-b".to_string(), "state=".to_string()],
+            &[
+                "invariant".to_string(),
+                "relation-a-b".to_string(),
+                "state=".to_string(),
+            ],
             &["eq-prf".to_string()],
         )
         .unwrap();
@@ -828,7 +890,10 @@ mod tests {
                 ("Comp_Hybrid2.GameInv_main_of_Hybrid2", None, None),
             ]
         );
-        assert_eq!(leaf_part_ops(project, left, right, &[], &[]).unwrap().len(), 4);
+        assert_eq!(
+            leaf_part_ops(project, left, right, &[], &[]).unwrap().len(),
+            4
+        );
     }
 
     /// Story 69: in the side-invariant job, a wrapper and `GameInv_<N>_of_<C>` stand for the claims

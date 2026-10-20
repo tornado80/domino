@@ -676,10 +676,8 @@ impl UnwrapGuards {
                     // its else-branch.
                     let tested = some_test(&ite.cond).cloned();
                     let then = self.block(&ite.then_block.0, with_fact(&facts, tested.as_ref()));
-                    let els = self.block(
-                        &ite.else_block.0,
-                        with_fact(&facts, none_test(&ite.cond)),
-                    );
+                    let els =
+                        self.block(&ite.else_block.0, with_fact(&facts, none_test(&ite.cond)));
                     let then_writes = block_writes(&ite.then_block.0);
                     let mut written = then_writes.clone();
                     written.extend(block_writes(&ite.else_block.0));
@@ -1122,7 +1120,10 @@ fn branch_table_write(stmt: Statement, facts: &[Expression]) -> Statement {
     let TypeKind::Maybe(inner) = value.get_type().into_kind() else {
         unreachable!("a table write's value is always Maybe-typed: {value:?}")
     };
-    if matches!(value.kind(), ExpressionKind::Some(_) | ExpressionKind::None(_)) {
+    if matches!(
+        value.kind(),
+        ExpressionKind::Some(_) | ExpressionKind::None(_)
+    ) {
         return stmt;
     }
     let store = assign(
@@ -1257,9 +1258,13 @@ fn prune_done(
     let mut kept = Vec::with_capacity(stmts.len());
     for stmt in stmts.into_iter().rev() {
         match stmt {
-            Statement::Assignment(Assignment { pattern: Pattern::Ident(ref id), .. }, _)
-                if id == ec_done =>
-            {
+            Statement::Assignment(
+                Assignment {
+                    pattern: Pattern::Ident(ref id),
+                    ..
+                },
+                _,
+            ) if id == ec_done => {
                 if live {
                     kept.push(stmt);
                 }
@@ -1883,12 +1888,7 @@ return ec_result
         // lowered `return` and the single exit. The one difference is story
         // 18 §3.2: `if d {} else { … }` is flipped so no then is empty.
         let mut expected = body.clone();
-        expected[2] = if_then_else(
-            not(bool_var("d")),
-            vec![set("x", 2)],
-            vec![],
-            span(),
-        );
+        expected[2] = if_then_else(not(bool_var("d")), vec![set("x", 2)], vec![], span());
         assert_eq!(out.0.len(), body.len() + 3);
         assert_eq!(&out.0[1..=body.len()], expected.as_slice());
         assert_single_exit(&out);
@@ -2264,12 +2264,24 @@ return ec_result
     fn a_table_write_with_a_known_value_is_a_plain_write() {
         let cases = [
             vec![
-                ite_e(not(is_none(maybe_int("x"))), vec![put_maybe(maybe_int("x"))], vec![]),
+                ite_e(
+                    not(is_none(maybe_int("x"))),
+                    vec![put_maybe(maybe_int("x"))],
+                    vec![],
+                ),
                 ret(1),
             ],
-            vec![assert_some_e(maybe_int("x")), put_maybe(maybe_int("x")), ret(1)],
             vec![
-                ite_e(is_none(maybe_int("x")), vec![set("a", 1)], vec![put_maybe(maybe_int("x"))]),
+                assert_some_e(maybe_int("x")),
+                put_maybe(maybe_int("x")),
+                ret(1),
+            ],
+            vec![
+                ite_e(
+                    is_none(maybe_int("x")),
+                    vec![set("a", 1)],
+                    vec![put_maybe(maybe_int("x"))],
+                ),
                 ret(1),
             ],
         ];
@@ -2299,7 +2311,11 @@ return ec_result
     #[test]
     fn a_none_test_covers_unwraps_in_its_else_branch() {
         let body = vec![
-            ite_e(is_none(maybe_int("x")), vec![set("a", 1)], vec![unwrap("y", "x")]),
+            ite_e(
+                is_none(maybe_int("x")),
+                vec![set("a", 1)],
+                vec![unwrap("y", "x")],
+            ),
             ret(1),
         ];
         let text = show(&lower_int_oracle(body));
@@ -2997,11 +3013,7 @@ return ec_result
         use crate::transforms::theorem_transforms::EasyCryptTransform;
         use crate::transforms::TheoremTransform as _;
 
-        fn walk<'a>(
-            stmts: &'a [Statement],
-            path: &mut Vec<&'a Expression>,
-            where_: &str,
-        ) {
+        fn walk<'a>(stmts: &'a [Statement], path: &mut Vec<&'a Expression>, where_: &str) {
             for s in stmts {
                 if let Statement::Assignment(Assignment { pattern, .. }, _) = s {
                     for id in pattern_writes(pattern) {

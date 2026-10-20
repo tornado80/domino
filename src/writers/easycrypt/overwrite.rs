@@ -244,11 +244,9 @@ pub fn check_export_tree(out: &Path, mut theorems: &[&str]) -> Result<(), Export
         // in a theorem's directory: `--force` leaves files directly in `out` alone
         .filter(|f| f.components().count() == 2)
         .filter(|f| {
-            f.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| {
-                    n.starts_with("Eq_") && n.ends_with(".ec") && !n.ends_with("_Invariants.ec")
-                })
+            f.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n.starts_with("Eq_") && n.ends_with(".ec") && !n.ends_with("_Invariants.ec")
+            })
         })
         .filter_map(|f| {
             let text = std::fs::read_to_string(out.join(f)).ok()?;
@@ -504,7 +502,8 @@ qed.
         use crate::project::Project;
         let theorem = project.get_theorem("Proof").unwrap();
         let exported = super::super::export::export_theorem(theorem, &project).unwrap();
-        let eq = &exported.files[Path::new("Eq_medium_composition_small_composition_UsefulOracle.ec")];
+        let eq =
+            &exported.files[Path::new("Eq_medium_composition_small_composition_UsefulOracle.ec")];
         assert_eq!(
             proof_progress(eq),
             OracleCounts {

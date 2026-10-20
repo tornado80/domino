@@ -69,13 +69,13 @@ use crate::debug::driver::{
     lines_view, steps_view, terminal_view, ClaimVerdict, DebugError, PartVerdict, StepView,
     StopReason, TerminalView, Verdict,
 };
-use crate::debug::layout::Layout;
 use crate::debug::effect::PathEffect;
 use crate::debug::exec::{
     BranchForm, BranchHead, Decision, Head, SampleHead, Side, SideExec, SidePos, Terminal,
     TerminalPath,
 };
-use crate::debug::ir::{InlinedOracle, ExitGuard};
+use crate::debug::ir::{ExitGuard, InlinedOracle};
+use crate::debug::layout::Layout;
 use crate::theorem::GameInstance;
 use crate::transforms::samplify::SampleInfo;
 use crate::util::smtsolver::{SmtSolver, SmtSolverResponse};
@@ -459,9 +459,9 @@ impl PairRecord {
 
     /// Some claim failed or could not be decided.
     pub fn has_failure(&self) -> bool {
-        self.claims.iter().any(|c| {
-            c.verdict.is_failure() || c.parts.iter().any(|p| p.verdict.is_failure())
-        })
+        self.claims
+            .iter()
+            .any(|c| c.verdict.is_failure() || c.parts.iter().any(|p| p.verdict.is_failure()))
     }
 }
 

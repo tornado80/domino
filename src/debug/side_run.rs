@@ -50,7 +50,9 @@ use crate::identifier::Identifier;
 use crate::package::Composition;
 use crate::project::Project;
 use crate::theorem::{
-    BuiltInFact, ClaimKind, GameInstance, InvariantSide, ResolvedClaim, ResolvedDependency, RandomnessType, Theorem};
+    BuiltInFact, ClaimKind, GameInstance, InvariantSide, RandomnessType, ResolvedClaim,
+    ResolvedDependency, Theorem,
+};
 use crate::transforms::theorem_transforms::{
     DebugTransform, EasyCryptTransform, EquivalenceTransform,
 };
@@ -83,7 +85,10 @@ pub fn side_oracles<P: Project>(project: &P, composition: &str) -> Result<Vec<St
     Ok(comp.exports.iter().map(|e| e.name().to_string()).collect())
 }
 
-fn composition_of<'p, P: Project>(project: &'p P, name: &str) -> Result<&'p Composition, DebugError> {
+fn composition_of<'p, P: Project>(
+    project: &'p P,
+    name: &str,
+) -> Result<&'p Composition, DebugError> {
     project
         .get_game(name)
         .ok_or_else(|| DebugError::CompositionNotFound {
@@ -172,12 +177,13 @@ fn free_params(
         if !theorem.consts.iter().any(|(n, _)| *n == const_name) {
             theorem.consts.push((const_name.clone(), ty.clone()));
         }
-        let ident = Identifier::TheoremIdentifier(TheoremIdentifier::Const(TheoremConstIdentifier {
-            theorem_name: theorem.name.clone(),
-            name: const_name,
-            ty: ty.clone(),
-            inst_info: None,
-        }));
+        let ident =
+            Identifier::TheoremIdentifier(TheoremIdentifier::Const(TheoremConstIdentifier {
+                theorem_name: theorem.name.clone(),
+                name: const_name,
+                ty: ty.clone(),
+                inst_info: None,
+            }));
         if matches!(ty.kind(), TypeKind::Integer) {
             rules.push((
                 Type::bits(CountSpec::Identifier(Box::new(Identifier::GameIdentifier(
@@ -248,7 +254,10 @@ fn fingerprint_of(
     composition: &str,
     inlined: &crate::debug::ir::InlinedOracle,
 ) -> Fingerprint {
-    let names: Vec<String> = side_claims(eqctx).iter().map(|c| c.name().to_string()).collect();
+    let names: Vec<String> = side_claims(eqctx)
+        .iter()
+        .map(|c| c.name().to_string())
+        .collect();
     Fingerprint::of_side(
         theorem
             .find_game_instance(composition)
@@ -282,7 +291,9 @@ fn side_claims(eqctx: &EquivalenceContext<'_>) -> Vec<ResolvedClaim> {
 /// The base frame of a side tree: the declarations and definitions `prove` uses (both sides',
 /// the copy's never read), and then each invariant of `C` on the old state.
 fn side_base_frame(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<SmtExpr> {
-    let mut base = vec![SmtExpr::Comment(" domino easycrypt debug --side-inv — base frame ".to_string())];
+    let mut base = vec![SmtExpr::Comment(
+        " domino easycrypt debug --side-inv — base frame ".to_string(),
+    )];
     base.extend(eqctx.emit_base_declarations());
     base.extend(eqctx.emit_theorem_paramfuncs());
     base.extend(eqctx.emit_game_definitions());
@@ -290,7 +301,9 @@ fn side_base_frame(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<SmtExpr>
     base.extend(eqctx.emit_auto_randomness(oracle));
     base.extend(eqctx.emit_invariant());
     base.extend(eqctx.emit_return_value_helpers(oracle));
-    base.push(SmtExpr::Comment(" the side invariants on the old state ".to_string()));
+    base.push(SmtExpr::Comment(
+        " the side invariants on the old state ".to_string(),
+    ));
     base.extend(eqctx.emit_left_side_invariants_old(oracle));
     base
 }
@@ -353,7 +366,10 @@ where
     )?;
 
     let claims = side_claims(&eqctx);
-    let queries: Vec<ClaimQuery> = claims.iter().map(|c| ClaimQuery::of(&eqctx, c, oracle)).collect();
+    let queries: Vec<ClaimQuery> = claims
+        .iter()
+        .map(|c| ClaimQuery::of(&eqctx, c, oracle))
+        .collect();
     let fingerprint = fingerprint_of(&theorem, &eqctx, composition, &inlined);
     let base = side_base_frame(&eqctx, oracle);
 
@@ -387,7 +403,11 @@ where
         layout,
         smt_dir: layout.rel("smt"),
         options: LockstepOptionsView::from(opts),
-        base_frame_smt: base.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n"),
+        base_frame_smt: base
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
         goals: GoalsView {
             claims: queries.iter().map(ClaimQuery::view).collect(),
         },
@@ -528,8 +548,14 @@ mod tests {
         assert_eq!(package_invariant_claim_name("main", "S", "p"), PKG);
         assert_eq!(game_invariant_claim_name("main", "S"), GAME);
         // lockstep execution's names do not change: they are of the game instance
-        assert_eq!(package_invariant_claim_name("main", "s", "p"), "package-invariant!main!s-p!");
-        assert_eq!(game_invariant_claim_name("main", "s"), "game-invariant!main!s!");
+        assert_eq!(
+            package_invariant_claim_name("main", "s", "p"),
+            "package-invariant!main!s-p!"
+        );
+        assert_eq!(
+            game_invariant_claim_name("main", "s"),
+            "game-invariant!main!s!"
+        );
     }
 
     #[test]
@@ -544,7 +570,11 @@ mod tests {
         // n > 0 is free: both arms; then x < 0 on each: four terminals
         assert_eq!(run.outcome.pairs.len(), 4);
         let root = &run.outcome.tree.nodes[0];
-        assert_eq!(root.kind, NodeKind::Split, "the branch on the parameter splits");
+        assert_eq!(
+            root.kind,
+            NodeKind::Split,
+            "the branch on the parameter splits"
+        );
         assert_eq!(root.children.len(), 2);
 
         // the terminal under `x < 0` (then) breaks `k >= 0`; the others hold
@@ -557,13 +587,26 @@ mod tests {
         assert_eq!(failing, [true, false, true, false]);
         for p in &run.outcome.pairs {
             if !matches!(p.verdict_of(PKG), Some(Verdict::GoalFails { .. })) {
-                assert!(matches!(p.verdict_of(PKG), Some(Verdict::Verified)), "{}", p.id);
+                assert!(
+                    matches!(p.verdict_of(PKG), Some(Verdict::Verified)),
+                    "{}",
+                    p.id
+                );
             }
-            assert!(matches!(p.verdict_of(GAME), Some(Verdict::Verified)), "{}", p.id);
+            assert!(
+                matches!(p.verdict_of(GAME), Some(Verdict::Verified)),
+                "{}",
+                p.id
+            );
         }
         assert!(!run.summary.claims.is_empty());
 
-        for file in ["trace.json", "summary.txt", "index.html", "one-sided_result.json"] {
+        for file in [
+            "trace.json",
+            "summary.txt",
+            "index.html",
+            "one-sided_result.json",
+        ] {
             assert!(out.path().join(file).exists(), "{file}");
         }
         let trace = std::fs::read_to_string(out.path().join("trace.json")).unwrap();
@@ -589,10 +632,17 @@ mod tests {
             .collect();
         assert_eq!(failing, [true, false, true, false]);
         for p in &run.outcome.pairs {
-            assert!(matches!(p.verdict_of(MAIN), Some(Verdict::Verified)), "{}", p.id);
+            assert!(
+                matches!(p.verdict_of(MAIN), Some(Verdict::Verified)),
+                "{}",
+                p.id
+            );
         }
         let summary = std::fs::read_to_string(out.path().join("summary.txt")).unwrap();
-        assert!(summary.contains(NONNEG) && summary.contains(MAIN), "{summary}");
+        assert!(
+            summary.contains(NONNEG) && summary.contains(MAIN),
+            "{summary}"
+        );
     }
 
     #[test]
@@ -601,10 +651,22 @@ mod tests {
         let theorem_out = root.path().join("T");
         let run = side_run(&side_debug_dir(&theorem_out, "S", "O"));
         assert!(!run.is_ok(), "a path breaks the package invariant");
-        index::refresh_indexes(root.path(), &index::Level::Theorem { theorem: "T".into() }).unwrap();
+        index::refresh_indexes(
+            root.path(),
+            &index::Level::Theorem {
+                theorem: "T".into(),
+            },
+        )
+        .unwrap();
         let theorem_index = std::fs::read_to_string(theorem_out.join("summary.txt")).unwrap();
-        assert!(theorem_index.contains("side-inv  S  1  1"), "{theorem_index}");
-        assert!(theorem_index.contains("!debug!/SideInv_S/index.html"), "{theorem_index}");
+        assert!(
+            theorem_index.contains("side-inv  S  1  1"),
+            "{theorem_index}"
+        );
+        assert!(
+            theorem_index.contains("!debug!/SideInv_S/index.html"),
+            "{theorem_index}"
+        );
         let side_index =
             std::fs::read_to_string(theorem_out.join("!debug!/SideInv_S/summary.txt")).unwrap();
         assert!(side_index.contains("side invariants of S"), "{side_index}");
@@ -650,7 +712,11 @@ mod full_4whs {
                 None,
             )
             .unwrap();
-            eprintln!("{oracle}: {} terminals, ok {}", run.outcome.pairs.len(), run.is_ok());
+            eprintln!(
+                "{oracle}: {} terminals, ok {}",
+                run.outcome.pairs.len(),
+                run.is_ok()
+            );
             for file in ["trace.json", "index.html"] {
                 assert!(dir.join(file).exists(), "{oracle} {file}");
             }

@@ -18,13 +18,13 @@ use std::path::{Path, PathBuf};
 use serde_derive::Serialize;
 
 use crate::debug::driver::{describe_unreachable, GoalBlock, StopReason, Verdict};
-use crate::debug::layout::Layout;
 use crate::debug::exec::TerminalPath;
+use crate::debug::layout::Layout;
 use crate::debug::lockstep::{
     ChildOutcome, JointNode, JointTree, LockstepOutcome, PairRecord, SideStep, SideView, StuckPoint,
 };
-use crate::debug::lockstep_viewer;
 use crate::debug::lockstep_run::{LockstepMeta, LockstepRun, LockstepSummary};
+use crate::debug::lockstep_viewer;
 use crate::debug::report::format_elapsed;
 use crate::debug::smtout::SmtOut;
 
@@ -198,12 +198,7 @@ fn render_node(
                 render_verdict(&c.verdict)
             );
             for r in &c.parts {
-                let _ = writeln!(
-                    out,
-                    "{pad}      {}: {}",
-                    r.name,
-                    render_verdict(&r.verdict)
-                );
+                let _ = writeln!(out, "{pad}      {}: {}", r.name, render_verdict(&r.verdict));
             }
         }
     }
@@ -479,7 +474,11 @@ pub fn render_summary(run: &LockstepRun) -> String {
             );
         }
         for info in meta.claims.iter().filter(|c| c.admitted) {
-            let _ = writeln!(s, "           {:<width$}  admitted — not checked", info.name);
+            let _ = writeln!(
+                s,
+                "           {:<width$}  admitted — not checked",
+                info.name
+            );
         }
     }
 

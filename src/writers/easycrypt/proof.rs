@@ -135,7 +135,11 @@ pub fn compute_equivalence_files_observed(
     let mut invariant_files = Vec::with_capacity(hops.len());
     for (_, equivalence, stem) in &hops {
         scope.item(&format!("{stem}_Invariants"));
-        invariant_files.push(invariant::build_invariant_file(theorem, equivalence, project)?);
+        invariant_files.push(invariant::build_invariant_file(
+            theorem,
+            equivalence,
+            project,
+        )?);
     }
     scope.finish();
 
@@ -179,7 +183,10 @@ pub(super) struct CompLayout {
     inst_mangled: Vec<String>,
 }
 
-pub(super) fn compute_layout(comp: &Composition, interfaces: &InterfacesOutput) -> Result<CompLayout, EcExportError> {
+pub(super) fn compute_layout(
+    comp: &Composition,
+    interfaces: &InterfacesOutput,
+) -> Result<CompLayout, EcExportError> {
     let comp_mangled = interfaces.comp_mangled[&comp.name].clone();
     let comp_theory = format!("Comp_{comp_mangled}");
 
@@ -210,7 +217,10 @@ pub(super) fn compute_layout(comp: &Composition, interfaces: &InterfacesOutput) 
 /// `require`r must use to reach into that file); the module name after it
 /// keeps its own, unprefixed spelling.
 fn restrictions_for(layout: &CompLayout) -> Vec<String> {
-    let mut out = vec![format!("{}.Game_{}", layout.comp_theory, layout.comp_mangled)];
+    let mut out = vec![format!(
+        "{}.Game_{}",
+        layout.comp_theory, layout.comp_mangled
+    )];
     for inst_mangled in &layout.inst_mangled {
         out.push(format!("{}.Pkg_Inst_{inst_mangled}", layout.comp_theory));
     }
@@ -345,7 +355,10 @@ pub(super) fn side_inv_app(
         },
     ));
     Ok(Some(EcExpr::App {
-        head: format!("{theory}.{}", invariant::side_inv_op_name(&layout.comp_mangled)),
+        head: format!(
+            "{theory}.{}",
+            invariant::side_inv_op_name(&layout.comp_mangled)
+        ),
         args: vec![EcExpr::RecordLit { fields }],
     }))
 }
@@ -551,14 +564,20 @@ fn build_equivalence_file(
 
     // --- the lemma statement: Pr[...] = Pr[...] -----------------------
     let left_pr = EcExpr::Pr {
-        module: format!("{}.Exp_{}(A)", left_layout.comp_theory, left_layout.comp_mangled),
+        module: format!(
+            "{}.Exp_{}(A)",
+            left_layout.comp_theory, left_layout.comp_mangled
+        ),
         proc: "run".to_string(),
         args: left_run_args,
         memory: "m".to_string(),
         event: Box::new(EcExpr::Var("res".to_string())),
     };
     let right_pr = EcExpr::Pr {
-        module: format!("{}.Exp_{}(A)", right_layout.comp_theory, right_layout.comp_mangled),
+        module: format!(
+            "{}.Exp_{}(A)",
+            right_layout.comp_theory, right_layout.comp_mangled
+        ),
         proc: "run".to_string(),
         args: right_run_args,
         memory: "m".to_string(),
@@ -572,11 +591,7 @@ fn build_equivalence_file(
 
     let lemma_name = lemma_names.mangle(
         NameKind::Lemma,
-        &format!(
-            "{}_{}_equiv",
-            left_game_inst.name(),
-            right_game_inst.name()
-        ),
+        &format!("{}_{}_equiv", left_game_inst.name(), right_game_inst.name()),
     )?;
 
     // --- restrictions: every router and every instance clone of both
@@ -615,7 +630,9 @@ fn build_equivalence_file(
     // load-bearing per story 04's own note) -----------------------------
     let mut proc_names = Names::new();
     let mut proof = vec![
-        ProofLine::ByequivPrecondition { conjuncts: precondition },
+        ProofLine::ByequivPrecondition {
+            conjuncts: precondition,
+        },
         plain_line("proc; inline."),
         ProofLine::InvariantCall {
             inv: inv_app.clone(),
@@ -645,7 +662,10 @@ fn build_equivalence_file(
                 format!("{lemma}.{lemma}")
             })
         };
-        match (lemma(&left_side, &left_layout), lemma(&right_side, &right_layout)) {
+        match (
+            lemma(&left_side, &left_layout),
+            lemma(&right_side, &right_layout),
+        ) {
             (None, None) => vec![],
             (Some(l), None) => vec![l],
             (l, Some(r)) => vec![l.unwrap_or_else(|| "_".to_string()), r],
@@ -662,9 +682,14 @@ fn build_equivalence_file(
             .iter()
             .map(|l| format!(" {l}"))
             .collect();
-        proof.push(bullet_line(format!("by conseq {lemma_name}{joined} => /#.")));
+        proof.push(bullet_line(format!(
+            "by conseq {lemma_name}{joined} => /#."
+        )));
         let statement = EcExpr::OracleEquiv {
-            left: format!("{}.Game_{}.{proc_name}", left_layout.comp_theory, left_layout.comp_mangled),
+            left: format!(
+                "{}.Game_{}.{proc_name}",
+                left_layout.comp_theory, left_layout.comp_mangled
+            ),
             right: format!(
                 "{}.Game_{}.{proc_name}",
                 right_layout.comp_theory, right_layout.comp_mangled
@@ -709,8 +734,7 @@ fn build_equivalence_file(
         .iter()
         .map(|(name, _)| name.as_str())
         .collect();
-    let export_oracle_names: HashSet<&str> =
-        left_comp.exports.iter().map(|e| e.name()).collect();
+    let export_oracle_names: HashSet<&str> = left_comp.exports.iter().map(|e| e.name()).collect();
     let oracle_set_mismatch = if tree_oracle_names == export_oracle_names {
         None
     } else {
@@ -819,9 +843,17 @@ fn theory_requires(
     let mut requires = vec![
         Require {
             import: true,
-            names: ["AllCore", "Distr", "FMap", "Int", "IntDiv", "Types", "Interfaces"]
-                .map(String::from)
-                .to_vec(),
+            names: [
+                "AllCore",
+                "Distr",
+                "FMap",
+                "Int",
+                "IntDiv",
+                "Types",
+                "Interfaces",
+            ]
+            .map(String::from)
+            .to_vec(),
         },
         Require {
             import: false,
@@ -886,8 +918,9 @@ mod tests {
     fn load(dir: &str, theorem_name: &str) -> Vec<EquivalenceFiles> {
         let files: &'static DirectoryFiles =
             Box::leak(Box::new(DirectoryFiles::load(Path::new(dir)).unwrap()));
-        let project: &'static DirectoryProject =
-            Box::leak(Box::new(DirectoryProject::load(PathBuf::from(dir), files).unwrap()));
+        let project: &'static DirectoryProject = Box::leak(Box::new(
+            DirectoryProject::load(PathBuf::from(dir), files).unwrap(),
+        ));
         let theorem = project.get_theorem(theorem_name).unwrap();
         let (theorem, _auxs) = EasyCryptTransform.transform_theorem(theorem).unwrap();
         let interfaces = build_interfaces_file(&theorem).unwrap();
@@ -926,9 +959,9 @@ mod tests {
             .unwrap()
             .iter()
             .filter_map(|l| match l {
-                ProofLine::Tactic { text, .. } => text
-                    .strip_prefix("(* ")
-                    .and_then(|s| s.strip_suffix(" *)")),
+                ProofLine::Tactic { text, .. } => {
+                    text.strip_prefix("(* ").and_then(|s| s.strip_suffix(" *)"))
+                }
                 ProofLine::ByequivPrecondition { .. } | ProofLine::InvariantCall { .. } => None,
             })
             .collect();
@@ -1023,7 +1056,9 @@ mod tests {
             ProofLine::ByequivPrecondition { conjuncts } => {
                 conjuncts.iter().map(render_expr).collect()
             }
-            other => panic!("expected the first proof line to be the byequiv precondition, got {other:?}"),
+            other => panic!(
+                "expected the first proof line to be the byequiv precondition, got {other:?}"
+            ),
         }
     }
 
@@ -1176,9 +1211,9 @@ mod tests {
         assert!(rendered.contains(expected), "{rendered}");
         // the readers of the skeleton still find it as one sentence
         let sentences = crate::easycrypt::session::split_sentences(&rendered);
-        assert!(sentences
-            .iter()
-            .any(|s| s.starts_with("call") && s.ends_with("last first.") && s.contains("r_abort_flag")));
+        assert!(sentences.iter().any(|s| s.starts_with("call")
+            && s.ends_with("last first.")
+            && s.contains("r_abort_flag")));
     }
 
     #[test]

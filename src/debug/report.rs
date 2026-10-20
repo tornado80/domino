@@ -29,8 +29,7 @@ fn layout_of(run: &DebugRun) -> Layout {
 /// Write the JSON trace (`<strategy>_trace.json`) into `out_dir`. Returns the path written.
 pub fn write_trace_json(run: &DebugRun, out_dir: &Path) -> std::io::Result<PathBuf> {
     let path = out_dir.join(layout_of(run).trace());
-    let mut json = serde_json::to_string_pretty(run)
-        .map_err(std::io::Error::other)?;
+    let mut json = serde_json::to_string_pretty(run).map_err(std::io::Error::other)?;
     json.push('\n');
     std::fs::write(&path, json)?;
     Ok(path)
@@ -63,8 +62,7 @@ pub fn flush(run: &DebugRun, out_dir: &Path) -> std::io::Result<()> {
 /// written.
 pub fn write_html(run: &DebugRun, out_dir: &Path) -> std::io::Result<PathBuf> {
     let path = out_dir.join(layout_of(run).viewer());
-    let json = serde_json::to_string(run)
-        .map_err(std::io::Error::other)?;
+    let json = serde_json::to_string(run).map_err(std::io::Error::other)?;
     std::fs::write(&path, render_html(&json))?;
     Ok(path)
 }
@@ -124,7 +122,12 @@ fn stop_line(run: &DebugRun) -> Option<String> {
 pub(crate) fn format_elapsed(d: std::time::Duration) -> String {
     let total = d.as_secs();
     if total >= 3600 {
-        format!("{}h {:02}m {:02}s", total / 3600, (total % 3600) / 60, total % 60)
+        format!(
+            "{}h {:02}m {:02}s",
+            total / 3600,
+            (total % 3600) / 60,
+            total % 60
+        )
     } else if total >= 60 {
         format!("{}m {:02}s", total / 60, total % 60)
     } else {
@@ -167,8 +170,16 @@ pub fn render_summary(run: &DebugRun) -> String {
     s.push_str("domino debug — summary\n");
     s.push_str("======================\n");
     let _ = writeln!(s, "{:<14}{}", "strategy", run.strategy);
-    let _ = writeln!(s, "{:<14}{}, proofstep {}", "theorem", run.theorem, run.proofstep);
-    let _ = writeln!(s, "{:<14}{}  ==  {}", "games", run.left_game, run.right_game);
+    let _ = writeln!(
+        s,
+        "{:<14}{}, proofstep {}",
+        "theorem", run.theorem, run.proofstep
+    );
+    let _ = writeln!(
+        s,
+        "{:<14}{}  ==  {}",
+        "games", run.left_game, run.right_game
+    );
     let _ = writeln!(s, "{:<14}{}", "oracle", run.oracle);
     let _ = writeln!(s, "{:<14}{}", "claim", claim_line(run));
     let _ = writeln!(
@@ -220,7 +231,10 @@ pub fn render_summary(run: &DebugRun) -> String {
         String::new()
     };
     let left_note = if sm.left_pruned > 0 {
-        format!("   ({} unreachable, pruned at its terminal)", sm.left_pruned)
+        format!(
+            "   ({} unreachable, pruned at its terminal)",
+            sm.left_pruned
+        )
     } else {
         String::new()
     };
@@ -234,7 +248,11 @@ pub fn render_summary(run: &DebugRun) -> String {
     } else {
         String::new()
     };
-    let _ = writeln!(s, "  {:<13}{} explored{}", "right", sm.right_paths, right_note);
+    let _ = writeln!(
+        s,
+        "  {:<13}{} explored{}",
+        "right", sm.right_paths, right_note
+    );
     let _ = writeln!(
         s,
         "  {:<13}{} left / {} right pruned as unreachable",
@@ -300,8 +318,11 @@ fn failing_pairs(run: &DebugRun) -> (Vec<PairRow>, Vec<PairRow>) {
         for rp in &lp.right_paths {
             let tagged = |wanted: fn(&Verdict) -> bool| -> String {
                 let chain = chain_str(&rp.steps, &rp.terminal);
-                let checks: Vec<String> =
-                    rp.claims.iter().flat_map(|c| c.failing_checks(wanted)).collect();
+                let checks: Vec<String> = rp
+                    .claims
+                    .iter()
+                    .flat_map(|c| c.failing_checks(wanted))
+                    .collect();
                 if checks.is_empty() {
                     chain
                 } else {
@@ -332,7 +353,10 @@ fn claim_line(run: &DebugRun) -> String {
         let checked = run.claims.iter().filter(|c| !c.admitted).count();
         all_claims_line(checked, run.claims.len() - checked, run.core)
     } else if run.core {
-        let name = run.claims.first().map_or(run.claim.as_str(), |c| c.name.as_str());
+        let name = run
+            .claims
+            .first()
+            .map_or(run.claim.as_str(), |c| c.name.as_str());
         format!("{name} (core claim set)")
     } else {
         run.claim.clone()
@@ -342,7 +366,11 @@ fn claim_line(run: &DebugRun) -> String {
 /// `all <checked> claims of the oracle` (or `of the core claim set`), with the admitted count
 /// when there is one. Both strategies' summaries say this.
 pub(crate) fn all_claims_line(checked: usize, admitted: usize, core: bool) -> String {
-    let set = if core { "the core claim set" } else { "the oracle" };
+    let set = if core {
+        "the core claim set"
+    } else {
+        "the oracle"
+    };
     if admitted == 0 {
         format!("all {checked} claims of {set}")
     } else {
@@ -380,14 +408,21 @@ fn write_claim_table(s: &mut String, run: &DebugRun) {
             c.goal_fails,
             c.inconclusive,
             if c.skipped > 0 {
-                format!("   ({} pairs not checked after its first failure)", c.skipped)
+                format!(
+                    "   ({} pairs not checked after its first failure)",
+                    c.skipped
+                )
             } else {
                 String::new()
             },
         );
     }
     for info in run.claims.iter().filter(|c| c.admitted) {
-        let _ = writeln!(s, "           {:<width$}  admitted — not checked", info.name);
+        let _ = writeln!(
+            s,
+            "           {:<width$}  admitted — not checked",
+            info.name
+        );
     }
     let q = run.queries;
     let _ = writeln!(
@@ -399,11 +434,7 @@ fn write_claim_table(s: &mut String, run: &DebugRun) {
 
 /// A `goal failures` / `inconclusive` block: heading, up to 20 entries, then a
 /// `… and N more` line. Nothing at all when the list is empty.
-fn write_pair_block(
-    s: &mut String,
-    heading: &str,
-    entries: &[(String, String, Option<String>)],
-) {
+fn write_pair_block(s: &mut String, heading: &str, entries: &[(String, String, Option<String>)]) {
     if entries.is_empty() {
         return;
     }
@@ -2036,14 +2067,23 @@ mod tests {
         assert_eq!(parsed["schema"], 10);
         assert_eq!(parsed["options"]["max_paths"], 1000);
         assert_eq!(parsed["goal_smt"], "(assert (not (= x 0)))");
-        assert_eq!(parsed["left_paths"][0]["right_paths"][1]["verdict"]["kind"], "goal-fails");
+        assert_eq!(
+            parsed["left_paths"][0]["right_paths"][1]["verdict"]["kind"],
+            "goal-fails"
+        );
         assert_eq!(parsed["summary"]["goal_fails"], 1);
         assert_eq!(parsed["left_sites"]["12"]["kind"], "branch");
         assert_eq!(parsed["left_pruned_branches"][0]["id"], "p1");
         assert_eq!(parsed["left_paths"][0]["pruned_branches"][0]["id"], "1.p1");
         assert_eq!(parsed["summary"]["right_pruned_branches"], 1);
-        assert_eq!(parsed["left_paths"][0]["lines"][0], serde_json::json!([2, 3]));
-        assert_eq!(parsed["left_pruned_branches"][0]["lines"][0], serde_json::json!([2, 2]));
+        assert_eq!(
+            parsed["left_paths"][0]["lines"][0],
+            serde_json::json!([2, 3])
+        );
+        assert_eq!(
+            parsed["left_pruned_branches"][0]["lines"][0],
+            serde_json::json!([2, 2])
+        );
     }
 
     #[test]
@@ -2066,16 +2106,22 @@ mod tests {
         let html = std::fs::read_to_string(&p).unwrap();
 
         assert!(html.starts_with("<!doctype html>"));
-        assert!(!html.contains("http://") && !html.contains("https://"),
-            "no external references allowed");
+        assert!(
+            !html.contains("http://") && !html.contains("https://"),
+            "no external references allowed"
+        );
         assert!(html.contains("application/json\" id=\"trace\""));
         assert!(html.contains("goal-fails"));
         // story 18: the effect section + a rendered table update travel in the
         // embedded trace JSON.
-        assert!(html.contains("Effect — return value &amp; new state")
-            || html.contains("Effect — return value & new state"));
-        assert!(html.contains("old.MON_CCA_PKE.ctr -&gt; ctxt")
-            || html.contains("old.MON_CCA_PKE.ctr -> ctxt"));
+        assert!(
+            html.contains("Effect — return value &amp; new state")
+                || html.contains("Effect — return value & new state")
+        );
+        assert!(
+            html.contains("old.MON_CCA_PKE.ctr -&gt; ctxt")
+                || html.contains("old.MON_CCA_PKE.ctr -> ctxt")
+        );
         // the embedded JSON must still parse after `<` escaping
         let start = html.find("id=\"trace\">").unwrap() + "id=\"trace\">".len();
         let end = html[start..].find("</script>").unwrap() + start;
@@ -2089,7 +2135,10 @@ mod tests {
         assert!(page.contains(LISTING_JS));
         assert!(!page.contains("__GRID_CSS__") && !page.contains("__LISTING_JS__"));
         for id in ["cell-tree", "cell-detail", "cell-left", "cell-right"] {
-            assert!(page.contains(&format!("id=\"{id}\"")), "the grid has the cell {id}");
+            assert!(
+                page.contains(&format!("id=\"{id}\"")),
+                "the grid has the cell {id}"
+            );
         }
     }
 
@@ -2098,7 +2147,10 @@ mod tests {
         assert!(!TEMPLATE.contains("function makeListing"));
         assert!(!TEMPLATE.contains("function paintListing"));
         assert!(!TEMPLATE.contains("function initGrid"));
-        assert!(!TEMPLATE.contains("listingBlock"), "listings are built once, not per selection");
+        assert!(
+            !TEMPLATE.contains("listingBlock"),
+            "listings are built once, not per selection"
+        );
     }
 
     #[test]
@@ -2119,7 +2171,10 @@ mod tests {
     fn stdout_report_completed_run_shape() {
         let txt = stdout_report_of(&synthetic_run("/x"), Duration::from_secs(64));
         assert!(txt.starts_with("domino debug — summary\n======================\n"));
-        assert!(txt.contains("\nstatus        COMPLETE — all paths explored\n"), "{txt}");
+        assert!(
+            txt.contains("\nstatus        COMPLETE — all paths explored\n"),
+            "{txt}"
+        );
         assert!(txt.contains("\nelapsed       1m 04s\n"), "{txt}");
         // options line is greppable and stable
         assert!(
@@ -2141,7 +2196,9 @@ mod tests {
         // story 17: artifacts block names the out dir and points `paths` at the tree
         assert!(txt.contains("\nartifacts     /x\n"), "{txt}");
         assert!(
-            txt.contains("  paths         sequential_summary.txt        (per-path tree: 1 left, 2 right)\n"),
+            txt.contains(
+                "  paths         sequential_summary.txt        (per-path tree: 1 left, 2 right)\n"
+            ),
             "{txt}"
         );
     }
@@ -2163,7 +2220,10 @@ mod tests {
         let mut run = synthetic_run("/x");
         run.admitted = true;
         let txt = stdout_report_of(&run, Duration::from_secs(1));
-        assert!(txt.contains("status        ADMITTED — nothing to check\n"), "{txt}");
+        assert!(
+            txt.contains("status        ADMITTED — nothing to check\n"),
+            "{txt}"
+        );
         assert!(!txt.contains("\nverdicts\n"), "{txt}");
         assert!(!txt.contains("\npaths\n"), "{txt}");
         assert!(!txt.contains("\nartifacts"), "{txt}");
@@ -2174,11 +2234,7 @@ mod tests {
         let run = synthetic_run("/x");
         let a = stdout_report_of(&run, Duration::from_secs(3));
         let b = stdout_report_of(&run, Duration::from_secs(9999));
-        let diffs: Vec<_> = a
-            .lines()
-            .zip(b.lines())
-            .filter(|(x, y)| x != y)
-            .collect();
+        let diffs: Vec<_> = a.lines().zip(b.lines()).filter(|(x, y)| x != y).collect();
         assert_eq!(a.lines().count(), b.lines().count());
         assert_eq!(diffs.len(), 1, "{diffs:?}");
         assert!(diffs[0].0.starts_with("elapsed"), "{diffs:?}");
@@ -2203,10 +2259,16 @@ mod tests {
         }
         assert_eq!(trace_ids, vec!["1.2".to_string()]);
         for id in &trace_ids {
-            assert!(txt.contains(&format!("#{id}")), "report must list {id}:\n{txt}");
+            assert!(
+                txt.contains(&format!("#{id}")),
+                "report must list {id}:\n{txt}"
+            );
         }
         assert_eq!(parsed["stop_reason"]["kind"], "completed");
-        assert!(parsed.get("partial").is_none(), "partial must be gone from trace.json");
+        assert!(
+            parsed.get("partial").is_none(),
+            "partial must be gone from trace.json"
+        );
     }
 
     // ---- story 17: summary.txt is the per-path tree ---------------------

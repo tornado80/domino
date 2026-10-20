@@ -177,9 +177,7 @@ impl Role {
 
     fn n(&self) -> Option<usize> {
         match self {
-            Role::SideGoalFallback(n) | Role::PartFallback { n, .. } => {
-                Some(*n)
-            }
+            Role::SideGoalFallback(n) | Role::PartFallback { n, .. } => Some(*n),
             _ => None,
         }
     }
@@ -473,7 +471,16 @@ pub(crate) mod tests {
     fn a_capped_record_of_a_real_answer_holds_its_front_goal_text_and_kinds() {
         let answer =
             std::fs::read_to_string("testdata/easycrypt/story31/answer-two-goals.json").unwrap();
-        let record = record(EcTranscriptMode::Capped, "Eq.ec", &SentenceCtx::default(), "split.", 12, 3, 0, &answer);
+        let record = record(
+            EcTranscriptMode::Capped,
+            "Eq.ec",
+            &SentenceCtx::default(),
+            "split.",
+            12,
+            3,
+            0,
+            &answer,
+        );
         assert!(record.ends_with("}\n") && record.lines().count() == 1);
         let v: serde_json::Value = serde_json::from_str(&record).unwrap();
         let full: serde_json::Value = serde_json::from_str(&answer).unwrap();
@@ -653,7 +660,10 @@ pub(crate) mod tests {
         let goal = &capped["proof"]["front"];
         let concl = goal["concl"].as_str().unwrap();
         assert!(concl.starts_with("&1 (left ) : {"), "{concl}");
-        assert!(concl.contains("pre =") && concl.contains("post ="), "{concl}");
+        assert!(
+            concl.contains("pre =") && concl.contains("post ="),
+            "{concl}"
+        );
         assert_eq!(goal["hyps"], "Type variables: <none>\n\n&m: {}");
     }
 }

@@ -12,6 +12,7 @@ pub mod driver;
 pub mod effect;
 pub mod exec;
 pub mod index;
+mod inline_rules;
 pub mod ir;
 pub mod layout;
 pub mod lockstep;

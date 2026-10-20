@@ -145,10 +145,7 @@ pub fn build_interfaces_file(theorem: &Theorem<'_>) -> Result<InterfacesOutput, 
     // preserving first-discovery order both across groups and within one.
     let mut groups: Vec<Vec<usize>> = Vec::new();
     for i in 0..comps.len() {
-        match groups
-            .iter_mut()
-            .find(|g| canonical[g[0]] == canonical[i])
-        {
+        match groups.iter_mut().find(|g| canonical[g[0]] == canonical[i]) {
             Some(g) => g.push(i),
             None => groups.push(vec![i]),
         }
@@ -236,8 +233,9 @@ mod tests {
     fn load(dir: &str, theorem_name: &str) -> InterfacesOutput {
         let files: &'static DirectoryFiles =
             Box::leak(Box::new(DirectoryFiles::load(Path::new(dir)).unwrap()));
-        let project: &'static DirectoryProject =
-            Box::leak(Box::new(DirectoryProject::load(PathBuf::from(dir), files).unwrap()));
+        let project: &'static DirectoryProject = Box::leak(Box::new(
+            DirectoryProject::load(PathBuf::from(dir), files).unwrap(),
+        ));
         let theorem = project.get_theorem(theorem_name).unwrap();
         let (theorem, _auxs) = EasyCryptTransform.transform_theorem(theorem).unwrap();
         build_interfaces_file(&theorem).unwrap()
@@ -262,18 +260,12 @@ mod tests {
     #[test]
     fn hello_world_interfaces_match_golden() {
         let out = load("example-projects/hello-world", "Proof");
-        assert_golden(
-            &out,
-            "testdata/easycrypt/story04/hello-world/Interfaces.ec",
-        );
+        assert_golden(&out, "testdata/easycrypt/story04/hello-world/Interfaces.ec");
     }
 
     #[test]
     fn hello_world_interfaces_compiles() {
-        assert_compiles(
-            "testdata/easycrypt/story04/hello-world",
-            "Interfaces.ec",
-        );
+        assert_compiles("testdata/easycrypt/story04/hello-world", "Interfaces.ec");
     }
 
     #[test]
@@ -330,4 +322,3 @@ mod tests {
         assert_eq!(render_file(&a.file), render_file(&b.file));
     }
 }
-
