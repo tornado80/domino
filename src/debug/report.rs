@@ -1046,8 +1046,8 @@ function renderDetail(lp, rp) {
 
 __LISTING_JS__
 const listings = {
-  left: makeListing(document.getElementById("cell-left"), `left · ${T.left_game} · ${T.oracle}`, T.left_listing || "", legend()),
-  right: makeListing(document.getElementById("cell-right"), `right · ${T.right_game} · ${T.oracle}`, T.right_listing || "", legend()),
+  left: makeListing(document.getElementById("cell-left"), `left · ${T.left_game} · ${T.oracle}`, T.left_listing || "", legend(), T.left_folded),
+  right: makeListing(document.getElementById("cell-right"), `right · ${T.right_game} · ${T.oracle}`, T.right_listing || "", legend(), T.right_folded),
 };
 
 // `lp` is the left path, or the synthetic row of a top-level left-branch prune;
@@ -1675,6 +1675,7 @@ main.grid {
 .ltitle { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 6px 12px 2px; flex: none; }
 .ltitle-name { font: 600 12px var(--mono); }
 .ltitle-meta { font: 11px var(--mono); color: var(--fg-muted); }
+.ltitle .fold-toggle { margin-left: auto; font: 11px var(--mono); color: var(--fg-muted); cursor: pointer; }
 .lcell > .legend { padding: 0 12px; flex: none; }
 .listing .row.wait { background: var(--bg-alt); border-left: 3px dashed var(--fg-muted); }
 .legend-item.wait .legend-swatch { background: var(--bg-alt); border: 1px dashed var(--fg-muted); }
@@ -1703,45 +1704,96 @@ main.grid {
 /// `{ exec: Set, decisions: Map, heads: Set, terminal: {label, abort} | null, cuts: Set,
 /// waits: Set, tags: Map }` and brings it to a target line. `annotateFrames` adds the
 /// story-49 callee hovers, tags and gutter brackets once, at build time.
-pub(crate) const LISTING_JS: &str = r##"function makeListing(cell, title, text, legendEl) {
+pub(crate) const LISTING_JS: &str = r##"// A listing has a full view and, when the page has one, a folded view (symbolic-execution
+// story 28): the folded listing's rows, each numbered by the full-listing label it shows.
+// Specs, frames and targets are in labels in both views. The reader's choice is kept in
+// local storage; the page works without it.
+const FOLD_KEY = "domino.hide-trivial-branches";
+const foldListings = [];
+function foldStored() {
+  try { return localStorage.getItem(FOLD_KEY) === "1"; } catch (e) { return false; }
+}
+function setFolded(on) {
+  try { localStorage.setItem(FOLD_KEY, on ? "1" : "0"); } catch (e) { /* not kept */ }
+  foldListings.forEach(L => showView(L, on));
+}
+function listingView(text, labels) {
+  const wrap = el("div", "listing");
+  const lines = text.split("\n").slice(0, labels ? labels.length : undefined);
+  const ns = labels || lines.map((_, i) => i + 1);
+  const rows = lines.map((line, i) => {
+    const row = el("div", "row");
+    row.dataset.line = String(ns[i]);
+    row.appendChild(el("span", "n", String(ns[i])));
+    row.appendChild(el("span", "c", line));
+    wrap.appendChild(row);
+    return row;
+  });
+  const index = new Map(ns.map((n, i) => [n, i]));
+  return {
+    wrap, rows, labels: ns,
+    rowOf: n => (index.has(n) ? rows[index.get(n)] : null),
+    // A label this view leaves out is shown on the first row after it.
+    shown: n => { const i = ns.findIndex(l => l >= n); return rows[i < 0 ? rows.length - 1 : i]; },
+    // The labels row `i` shows: its own, and those left out just before it.
+    covers: i => { const out = []; for (let n = i ? ns[i - 1] + 1 : 1; n <= ns[i]; n++) out.push(n); return out; },
+  };
+}
+function makeListing(cell, title, text, legendEl, folded) {
   const head = el("div", "ltitle");
   head.appendChild(el("span", "ltitle-name", title));
   const meta = el("span", "ltitle-meta");
   head.appendChild(meta);
   const pre = el("pre", "lscroll");
-  const wrap = el("div", "listing");
-  pre.appendChild(wrap);
-  const rows = text.split("\n").map((line, i) => {
-    const row = el("div", "row");
-    row.dataset.line = String(i + 1);
-    row.appendChild(el("span", "n", String(i + 1)));
-    row.appendChild(el("span", "c", line));
-    wrap.appendChild(row);
-    return row;
-  });
+  const full = listingView(text, null);
+  full.covers = i => [full.labels[i]];
+  const L = { views: { full }, view: full, meta, pre, spec: null, target: null };
+  pre.appendChild(full.wrap);
+  if (folded && folded.labels && folded.labels.length) {
+    L.views.folded = listingView(folded.text, folded.labels);
+    pre.appendChild(L.views.folded.wrap);
+    const label = el("label", "fold-toggle");
+    L.box = el("input");
+    L.box.type = "checkbox";
+    L.box.onchange = () => setFolded(L.box.checked);
+    label.append(L.box, document.createTextNode(" hide trivial branches"));
+    head.appendChild(label);
+    foldListings.push(L);
+  }
   cell.append(head, legendEl, pre);
-  return { rows, meta, pre };
+  showView(L, foldStored());
+  return L;
+}
+function showView(L, folded) {
+  L.view = folded && L.views.folded ? L.views.folded : L.views.full;
+  Object.values(L.views).forEach(V => { V.wrap.style.display = V === L.view ? "" : "none"; });
+  if (L.box) L.box.checked = L.view === L.views.folded;
+  if (L.spec) paintListing(L, L.spec);
+  if (L.target != null) bringListingTo(L, L.target);
 }
 const PAINT_CLASSES = ["exec", "head", "ret", "abort", "cut", "wait"];
-function paintClass(spec, n) {
-  if (spec.cuts.has(n)) return "cut";
-  if (spec.terminal && n === spec.terminal.label) return spec.terminal.abort ? "abort" : "ret";
-  if (spec.waits.has(n)) return "wait";
-  if (spec.heads.has(n)) return "head";
-  return spec.exec.has(n) ? "exec" : null;
+function paintClass(spec, ns) {
+  const any = set => ns.some(n => set.has(n));
+  if (any(spec.cuts)) return "cut";
+  if (spec.terminal && ns.includes(spec.terminal.label)) return spec.terminal.abort ? "abort" : "ret";
+  if (any(spec.waits)) return "wait";
+  if (any(spec.heads)) return "head";
+  return any(spec.exec) ? "exec" : null;
 }
 function paintListing(L, spec) {
-  L.rows.forEach((row, i) => {
-    const n = i + 1;
+  L.spec = spec;
+  const V = L.view;
+  V.rows.forEach((row, i) => {
+    const ns = V.covers(i);
     row.classList.remove(...PAINT_CLASSES);
-    const cls = paintClass(spec, n);
+    const cls = paintClass(spec, ns);
     if (cls) row.classList.add(cls);
     const old = row.querySelector(".dtag");
     if (old) old.remove();
-    const d = [spec.decisions.get(n), spec.tags.get(n)].filter(Boolean).join(" · ");
+    const d = ns.flatMap(n => [spec.decisions.get(n), spec.tags.get(n)]).filter(Boolean).join(" · ");
     if (d) row.appendChild(el("span", "dtag", d));
   });
-  L.meta.textContent = `${L.rows.length} lines · ${spec.exec.size} executed`;
+  L.meta.textContent = `${V.rows.length} lines · ${spec.exec.size} executed`;
 }
 // Each inlined call: a hover on every occurrence of its result names, end-of-line
 // tags on their `var` lines, its close line and its call-result guard, and a
@@ -1754,10 +1806,12 @@ function annotateFrames(L, frames, lines) {
     if (f.result_temp) titles.set(f.result_temp, `${f.result_temp}: result of ${callee} (call at L${f.open})`);
     titles.set(f.result_local, `${f.result_local}: the result inside ${callee}`);
   });
-  L.rows.forEach(row => hoverNames(row.querySelector(".c"), titles));
   const guards = lines.filter(l => l.role === "guard-head").map(l => l.line);
-  frames.forEach(f => frameTags(L, f, guards));
-  frameBrackets(L, frames);
+  Object.values(L.views).forEach(V => {
+    V.rows.forEach(row => hoverNames(row.querySelector(".c"), titles));
+    frames.forEach(f => frameTags(V, f, guards));
+    frameBrackets(V, frames);
+  });
 }
 const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function hoverNames(cell, titles) {
@@ -1775,22 +1829,22 @@ function hoverNames(cell, titles) {
 function atag(row, text) {
   if (row) row.appendChild(el("span", "atag", text));
 }
-function frameTags(L, f, guards) {
+// `V` is one view of a listing: a line the view leaves out gets no tag.
+function frameTags(V, f, guards) {
   const callee = `${f.pkg_inst}.${f.oracle}`;
-  const lineOf = n => L.rows[n - 1].querySelector(".c").textContent;
   [f.result_temp, f.result_local].filter(Boolean).forEach(name => {
-    const decl = L.rows.find(r => r.querySelector(".c").textContent.trim().startsWith(`var ${name} :`));
+    const decl = V.rows.find(r => r.querySelector(".c").textContent.trim().startsWith(`var ${name} :`));
     atag(decl, `← result of ${callee}`);
   });
-  atag(L.rows[f.close - 1], `← result of ${callee}`);
-  atag(L.rows[f.open - 1], `┌ ${callee}`);
+  atag(V.rowOf(f.close), `← result of ${callee}`);
+  atag(V.rowOf(f.open), `┌ ${callee}`);
   if (!f.result_temp) return;
-  guards.filter(g => lineOf(g).includes(`(${f.result_temp} = None)`))
-    .forEach(g => atag(L.rows[g - 1], `did ${callee} return?`));
+  guards.map(g => V.rowOf(g)).filter(r => r && r.querySelector(".c").textContent.includes(`(${f.result_temp} = None)`))
+    .forEach(r => atag(r, `did ${callee} return?`));
 }
-function frameBrackets(L, frames) {
-  L.rows.forEach((row, i) => {
-    const n = i + 1;
+function frameBrackets(V, frames) {
+  V.rows.forEach((row, i) => {
+    const n = V.labels[i];
     const gut = el("span", "gut");
     frames.forEach(f => {
       if (n < f.open || n > f.close) return;
@@ -1804,7 +1858,8 @@ function frameBrackets(L, frames) {
   });
 }
 function bringListingTo(L, line) {
-  const row = L.rows[line - 1];
+  L.target = line;
+  const row = L.view.shown(line);
   if (!row) return;
   const top = row.offsetTop - (L.pre.clientHeight - row.offsetHeight) / 2;
   const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1955,6 +2010,8 @@ mod tests {
             checks: vec![],
             left_listing: "OracleO {\n    if (k != bot) {\n    return k\n}".into(),
             right_listing: "OracleO {\n    return k\n}".into(),
+            left_folded: Default::default(),
+            right_folded: Default::default(),
             left_sites,
             right_sites: BTreeMap::new(),
             left_paths: vec![LeftPath {
@@ -2064,7 +2121,7 @@ mod tests {
         assert!(!first.contains("absolute/path"), "out_dir must be skipped");
 
         let parsed: serde_json::Value = serde_json::from_str(&first).unwrap();
-        assert_eq!(parsed["schema"], 10);
+        assert_eq!(parsed["schema"], TRACE_SCHEMA);
         assert_eq!(parsed["options"]["max_paths"], 1000);
         assert_eq!(parsed["goal_smt"], "(assert (not (= x 0)))");
         assert_eq!(
@@ -2094,7 +2151,7 @@ mod tests {
         let p = write_trace_json(&run, dir.path()).unwrap();
         let parsed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
-        assert_eq!(parsed["schema"], 10);
+        assert_eq!(parsed["schema"], TRACE_SCHEMA);
         assert!(parsed["options"]["max_paths"].is_null());
     }
 

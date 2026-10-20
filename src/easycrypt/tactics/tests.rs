@@ -1182,7 +1182,13 @@ mod live {
         // the report is written next to the file and is what stdout shows
         let report =
             std::fs::read_to_string(out.path().join(&result.equivalences[0].report_file)).unwrap();
-        assert_eq!(report, result.equivalences[0].render());
+        // the oracle job's last write measures its elapsed time a moment before the
+        // equivalence's (story 68): compare without it
+        let without_elapsed = |r: &str| r.rsplit_once(", ").unwrap().0.to_string();
+        assert_eq!(
+            without_elapsed(&report),
+            without_elapsed(&result.equivalences[0].render())
+        );
         assert!(report.contains("no admit"));
         // the transcript holds every sentence with EasyCrypt's answer
         let transcript = std::fs::read_to_string(result.equivalences[0].transcript()).unwrap();

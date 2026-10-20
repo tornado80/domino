@@ -333,6 +333,11 @@ pub(crate) struct Inline {
     /// instead of the Domino code, on both sides.
     #[clap(long)]
     pub(crate) easycrypt: bool,
+    /// Print the folded listing: a branch whose condition the game's constants decide is
+    /// replaced by the body that runs. Exit guards are never folded. Each line keeps its
+    /// number in the full listing.
+    #[clap(long)]
+    pub(crate) fold_trivial_branches: bool,
 }
 
 #[derive(clap::Args, Debug)]

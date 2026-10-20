@@ -107,7 +107,14 @@ fn assert_golden(dir: &str, theorem: &str, oracle: &str, golden: &str) {
     // Regenerate with `domino inline --easycrypt --proof <T> --proofstep 0
     // --oracle <O> > testdata/easycrypt/story08/<golden>` (run in the
     // project directory): the command prints exactly this string.
-    let out = render_side_by_side_easycrypt(raw_theorem(dir, theorem), 0, oracle, true).unwrap();
+    let out = render_side_by_side_easycrypt(
+        raw_theorem(dir, theorem),
+        0,
+        oracle,
+        true,
+        crate::debug::render::ListingView::Full,
+    )
+    .unwrap();
     let path = format!(
         "{}/testdata/easycrypt/story08/{golden}",
         env!("CARGO_MANIFEST_DIR")

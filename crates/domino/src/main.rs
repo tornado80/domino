@@ -489,7 +489,12 @@ fn inline(i: &Inline) -> Result<(), Error> {
     } else {
         sspverif::debug::render::render_side_by_side
     };
-    let listing = render(theorem, i.proofstep, &i.oracle, !i.no_line_numbers)?;
+    let view = if i.fold_trivial_branches {
+        sspverif::debug::render::ListingView::Folded
+    } else {
+        sspverif::debug::render::ListingView::Full
+    };
+    let listing = render(theorem, i.proofstep, &i.oracle, !i.no_line_numbers, view)?;
     print!("{listing}");
     Ok(())
 }

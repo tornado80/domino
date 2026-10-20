@@ -708,8 +708,8 @@ function renderDetail(nodeIdx, childIdx) {
 
 // ---- the listings: built once, repainted per selection ------------------------
 const listings = {
-  left: makeListing(document.getElementById("cell-left"), `left · ${T.left_game} · ${T.oracle}`, T.left_listing || "", legend()),
-  right: makeListing(document.getElementById("cell-right"), `right · ${T.right_game} · ${T.oracle}`, T.right_listing || "", legend()),
+  left: makeListing(document.getElementById("cell-left"), `left · ${T.left_game} · ${T.oracle}`, T.left_listing || "", legend(), T.left_folded),
+  right: makeListing(document.getElementById("cell-right"), `right · ${T.right_game} · ${T.oracle}`, T.right_listing || "", legend(), T.right_folded),
 };
 SIDES.forEach(([side]) => annotateFrames(listings[side], framesOf(side), linesOf(side)));
 

@@ -30,6 +30,7 @@ use std::time::Instant;
 
 use crate::debug::claims::ClaimQuery;
 use crate::debug::driver::{sites_view, ClaimInfo, DebugError, StopReason};
+use crate::debug::fold::FoldedListing;
 use crate::debug::index;
 use crate::debug::ir::count_terminals;
 use crate::debug::layout::Layout;
@@ -413,6 +414,8 @@ where
         },
         left_listing: inlined.listing.text.clone(),
         right_listing: String::new(),
+        left_folded: FoldedListing::of(&inlined),
+        right_folded: FoldedListing::default(),
         left_sites: sites_view(&inlined.listing),
         right_sites: BTreeMap::new(),
         left_lines: inlined.listing.lines.clone(),

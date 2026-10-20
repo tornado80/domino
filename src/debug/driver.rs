@@ -67,6 +67,7 @@ use crate::debug::exec::{
     execute_streaming_with_oracle, BranchOracle, BranchQuery, ExecError, Feasibility, Side, Step,
     Terminal, TerminalPath,
 };
+use crate::debug::fold::FoldedListing;
 use crate::debug::index;
 use crate::debug::ir::{
     count_terminals, inline_oracle, InlineError, InlinedOracle, Label, Listing, SiteInfo, SiteKind,
@@ -198,7 +199,7 @@ pub enum DebugError {
 
 /// Schema version of `trace.json` (see `docs/stories/07-…`). Bump on any
 /// breaking change to the serialised shape.
-pub const TRACE_SCHEMA: u32 = 10;
+pub const TRACE_SCHEMA: u32 = 11;
 
 /// Why exploration ended. Serialised into `trace.json` (replacing the old bare
 /// `partial: bool`); `summary.txt` prints the human-readable form.
@@ -285,6 +286,11 @@ pub struct DebugRun {
     pub left_listing: String,
     /// The right game instance's inlined listing (numbered independently).
     pub right_listing: String,
+    /// The folded listings (symbolic-execution story 28): what the page shows when the reader
+    /// hides trivial branches. Every folded line names its label; the paths keep labels of
+    /// the full listing.
+    pub left_folded: FoldedListing,
+    pub right_folded: FoldedListing,
     /// Per-label metadata for the left listing (branch/assert/return/... sites).
     pub left_sites: BTreeMap<Label, SiteView>,
     /// Per-label metadata for the right listing.
@@ -843,6 +849,8 @@ where
         checks: Vec::new(),
         left_listing: left_inl.listing.text.clone(),
         right_listing: right_inl.listing.text.clone(),
+        left_folded: FoldedListing::of(&left_inl),
+        right_folded: FoldedListing::of(&right_inl),
         left_sites: sites_view(&left_inl.listing),
         right_sites: sites_view(&right_inl.listing),
         left_paths: Vec::new(),
@@ -2433,7 +2441,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert_eq!(parsed["schema"], 10);
+        assert_eq!(parsed["schema"], TRACE_SCHEMA);
         assert_eq!(parsed["goal_smt"], run.goal_smt);
     }
 
@@ -2484,7 +2492,7 @@ mod tests {
         let trace = std::path::Path::new(&run.out_dir).join("sequential_trace.json");
         let a = std::fs::read_to_string(&trace).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&a).unwrap();
-        assert_eq!(parsed["schema"], 10);
+        assert_eq!(parsed["schema"], TRACE_SCHEMA);
         // effect is present in the serialised shape.
         assert!(a.contains("\"effect\""));
 
@@ -3163,7 +3171,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed["stop_reason"]["kind"], "interrupted");
-        assert_eq!(parsed["schema"], 10);
+        assert_eq!(parsed["schema"], TRACE_SCHEMA);
 
         // story 17: the summary.txt written by the same (interrupted) flush is
         // the per-left-path tree, ending with the bracketed stop line.

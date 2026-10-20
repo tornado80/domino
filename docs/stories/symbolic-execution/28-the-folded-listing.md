@@ -75,16 +75,16 @@ Vocabulary (`CONTEXT.md`, already updated): **Trivial branch**, **Folded listing
 
 ## 4. Acceptance criteria
 
-- [ ] A test: 4WHS `Hybrid2` (`b: false`), `Prf.Eval`: the folded listing has no ideal branch; the
+- [x] A test: 4WHS `Hybrid2` (`b: false`), `Prf.Eval`: the folded listing has no ideal branch; the
       full listing has it; each folded line maps to a label of the full listing.
-- [ ] A test: on the EasyCrypt listing, done-flag guards are present in the folded view.
-- [ ] A test: a side tree with a free parameter folds nothing but literal conditions.
-- [ ] A test: `domino inline --fold-trivial-branches` output equals the folded rendering; without the
+- [x] A test: on the EasyCrypt listing, done-flag guards are present in the folded view.
+- [x] A test: a side tree with a free parameter folds nothing but literal conditions.
+- [x] A test: `domino inline --fold-trivial-branches` output equals the folded rendering; without the
       option the output equals story 27's.
-- [ ] The viewer: the checkbox switches the listing, highlighting matches in both views, the choice
+- [x] The viewer: the checkbox switches the listing, highlighting matches in both views, the choice
       survives a reload, and the page works with local storage blocked. Check it in a browser and
       put screenshots in `28-screenshots/`.
-- [ ] `cargo build/test/clippy --workspace`, with and without `--features cvc5-lib`: clean.
+- [x] `cargo build/test/clippy --workspace`, with and without `--features cvc5-lib`: clean.
 
 ## 5. How to verify
 

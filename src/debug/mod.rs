@@ -11,6 +11,7 @@ pub mod claims;
 pub mod driver;
 pub mod effect;
 pub mod exec;
+pub mod fold;
 pub mod index;
 mod inline_rules;
 pub mod ir;

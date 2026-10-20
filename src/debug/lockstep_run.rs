@@ -41,7 +41,7 @@ use std::time::{Duration, Instant};
 
 use serde_derive::{Deserialize, Serialize};
 
-pub use crate::debug::claims::ClaimSet;
+use crate::debug::claims::ClaimSet;
 use crate::debug::claims::{
     no_dependency_claim, state_relation_parts, ClaimGoalView, ClaimQuery, ResolvedClaims,
 };
@@ -50,6 +50,7 @@ use crate::debug::driver::{
     SiteView, StopReason, Unreachability, Verdict,
 };
 use crate::debug::exec::TerminalPath;
+pub use crate::debug::fold::FoldedListing;
 use crate::debug::index;
 use crate::debug::ir::{count_terminals, inline_oracle, FrameSpan, Label, LineInfo};
 use crate::debug::layout::{self, Layout, DOMINO_DEBUG_DIR};
@@ -77,7 +78,7 @@ use crate::writers::smt::exprs::{SmtAnd, SmtAssert, SmtExpr, SmtNot};
 
 /// Schema version of a lockstep `trace.json`. Sequential traces keep
 /// [`crate::debug::driver::TRACE_SCHEMA`].
-pub const LOCKSTEP_TRACE_SCHEMA: u32 = 13;
+pub const LOCKSTEP_TRACE_SCHEMA: u32 = 14;
 
 /// The least time between two flushes of the partial artifacts while a run is
 /// in progress: at most two a second (story 24). The page refreshes every two
@@ -208,6 +209,11 @@ pub struct LockstepMeta {
     pub goals: GoalsView,
     pub left_listing: String,
     pub right_listing: String,
+    /// The folded listings (symbolic-execution story 28): what the page shows when the reader
+    /// hides trivial branches. Every folded line names its label; the paths keep labels of
+    /// the full listing.
+    pub left_folded: FoldedListing,
+    pub right_folded: FoldedListing,
     pub left_sites: BTreeMap<Label, SiteView>,
     pub right_sites: BTreeMap<Label, SiteView>,
     /// The roles of the EasyCrypt lines the IR does not decide (story 49); empty on the
@@ -839,6 +845,8 @@ where
         goals: goals_view,
         left_listing: left_inl.listing.text.clone(),
         right_listing: right_inl.listing.text.clone(),
+        left_folded: FoldedListing::of(&left_inl),
+        right_folded: FoldedListing::of(&right_inl),
         left_sites: sites_view(&left_inl.listing),
         right_sites: sites_view(&right_inl.listing),
         left_lines: left_inl.listing.lines.clone(),
@@ -1679,9 +1687,31 @@ mod tests {
             let trace: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(out.join("trace.json")).unwrap())
                     .unwrap();
-            assert_eq!(trace["schema"], 13);
+            assert_eq!(trace["schema"], LOCKSTEP_TRACE_SCHEMA);
             for key in ["left_lines", "right_lines", "left_frames", "right_frames"] {
                 assert!(trace[key].is_array(), "{oracle}: {key}");
+            }
+            // story 28: each folded listing names a label of its full listing for every line
+            for side in ["left", "right"] {
+                let folded = &trace[format!("{side}_folded")];
+                let full = trace[format!("{side}_listing")]
+                    .as_str()
+                    .unwrap()
+                    .lines()
+                    .count();
+                let labels = folded["labels"].as_array().unwrap();
+                assert_eq!(
+                    labels.len(),
+                    folded["text"].as_str().unwrap().lines().count(),
+                    "{oracle}: {side}"
+                );
+                assert!(
+                    !labels.is_empty() && labels.len() <= full,
+                    "{oracle}: {side}"
+                );
+                assert!(labels
+                    .iter()
+                    .all(|l| (1..=full as u64).contains(&l.as_u64().unwrap())));
             }
             assert_eq!(trace["mode"], "lockstep");
             assert_eq!(trace["listing"], "easycrypt");
@@ -1909,14 +1939,13 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(out.join("trace.json")).unwrap())
                 .unwrap();
         assert_eq!(embedded(&page, "trace"), trace);
-        for needle in [
-            "http://",
-            "https://",
-            "fetch(",
-            "XMLHttpRequest",
-            "localStorage",
-        ] {
+        for needle in ["http://", "https://", "fetch(", "XMLHttpRequest"] {
             assert!(!page.contains(needle), "{needle}");
+        }
+        // story 28: the folded-listing choice is kept in local storage, and the page works
+        // where the browser refuses it: every use is inside a `try`
+        for line in page.lines().filter(|l| l.contains("localStorage")) {
+            assert!(line.contains("try {"), "{line}");
         }
     }
 

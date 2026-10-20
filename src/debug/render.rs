@@ -15,7 +15,8 @@
 //! in the left [`crate::debug::ir::InlinedOracle::listing`], and likewise for the
 //! right. This is the single easiest thing to misread, so the header says so too.
 
-use crate::debug::ir::{inline_oracle, InlineError};
+use crate::debug::fold::FoldedListing;
+use crate::debug::ir::{inline_oracle, InlineError, InlinedOracle, Label};
 use crate::gamehops::{equivalence::Equivalence, GameHop};
 use crate::theorem::Theorem;
 use crate::transforms::theorem_transforms::{
@@ -34,14 +35,30 @@ pub fn side_by_side(left: &str, right: &str) -> String {
 /// Like [`side_by_side`], but `line_numbers = false` drops the numeric gutter
 /// (`domino inline --no-line-numbers`). The content is otherwise identical.
 pub fn columns(left: &str, right: &str, line_numbers: bool) -> String {
-    let prep = |text: &str| -> Vec<String> {
+    let numbered = |text: &str| -> Vec<(Label, String)> {
         text.lines()
             .enumerate()
-            .map(|(i, line)| {
+            .map(|(i, line)| (i + 1, line.to_string()))
+            .collect()
+    };
+    numbered_columns(&numbered(left), &numbered(right), line_numbers)
+}
+
+/// [`columns`] of lines that carry their own numbers: the folded listing's
+/// lines are numbered by the labels they show.
+fn numbered_columns(
+    left: &[(Label, String)],
+    right: &[(Label, String)],
+    line_numbers: bool,
+) -> String {
+    let prep = |lines: &[(Label, String)]| -> Vec<String> {
+        lines
+            .iter()
+            .map(|(n, line)| {
                 if line_numbers {
-                    format!("{:>4} | {}", i + 1, line)
+                    format!("{n:>4} | {line}")
                 } else {
-                    line.to_string()
+                    line.clone()
                 }
             })
             .collect()
@@ -69,6 +86,36 @@ pub fn columns(left: &str, right: &str, line_numbers: bool) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Which rendering of each side `domino inline` prints (symbolic-execution
+/// story 28).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListingView {
+    /// The full listing, numbered by its lines.
+    Full,
+    /// The folded listing (`--fold-trivial-branches`), each line numbered by
+    /// the label it shows.
+    Folded,
+}
+
+impl ListingView {
+    /// The lines of `inlined` in this view, each with its label.
+    fn lines(self, inlined: &InlinedOracle) -> Vec<(Label, String)> {
+        match self {
+            ListingView::Full => inlined
+                .listing
+                .text
+                .lines()
+                .enumerate()
+                .map(|(i, line)| (i + 1, line.to_string()))
+                .collect(),
+            ListingView::Folded => FoldedListing::of(inlined)
+                .numbered_lines()
+                .map(|(label, line)| (label, line.to_string()))
+                .collect(),
+        }
+    }
 }
 
 /// Everything `render_side_by_side` can reject before it produces a listing.
@@ -137,6 +184,7 @@ pub fn render_side_by_side(
     proofstep: usize,
     oracle_name: &str,
     line_numbers: bool,
+    view: ListingView,
 ) -> Result<String, RenderError> {
     let eq = equivalence_at(theorem, proofstep)?;
 
@@ -157,9 +205,9 @@ pub fn render_side_by_side(
         eq,
         oracle_name,
         "",
-        &left_inl.listing.text,
-        &right_inl.listing.text,
+        (&left_inl, &right_inl),
         line_numbers,
+        view,
     ))
 }
 
@@ -173,6 +221,7 @@ pub fn render_side_by_side_easycrypt(
     proofstep: usize,
     oracle_name: &str,
     line_numbers: bool,
+    view: ListingView,
 ) -> Result<String, RenderError> {
     let eq = equivalence_at(theorem, proofstep)?;
 
@@ -193,9 +242,9 @@ pub fn render_side_by_side_easycrypt(
         eq,
         oracle_name,
         " (EasyCrypt)",
-        &left_inl.listing.text,
-        &right_inl.listing.text,
+        (&left_inl, &right_inl),
         line_numbers,
+        view,
     ))
 }
 
@@ -227,8 +276,8 @@ fn equivalence_at<'t>(
     }
 }
 
-/// The header and the two columns. `oracle_suffix` follows the oracle name
-/// on the first header line.
+/// The header and the two columns of `view`. `oracle_suffix` follows the
+/// oracle name on the first header line.
 #[allow(clippy::too_many_arguments)]
 fn render_listings(
     theorem: &Theorem,
@@ -236,9 +285,9 @@ fn render_listings(
     eq: &Equivalence,
     oracle_name: &str,
     oracle_suffix: &str,
-    left: &str,
-    right: &str,
+    (left, right): (&InlinedOracle, &InlinedOracle),
     line_numbers: bool,
+    view: ListingView,
 ) -> String {
     use std::fmt::Write as _;
 
@@ -254,8 +303,18 @@ fn render_listings(
         out,
         "(left and right line numbers are independent — they index different columns)"
     );
+    if view == ListingView::Folded {
+        let _ = writeln!(
+            out,
+            "(trivial branches folded — each line keeps its number in the full listing)"
+        );
+    }
     out.push('\n');
-    out.push_str(&columns(left, right, line_numbers));
+    out.push_str(&numbered_columns(
+        &view.lines(left),
+        &view.lines(right),
+        line_numbers,
+    ));
     out
 }
 
@@ -303,7 +362,8 @@ mod tests {
     #[test]
     fn hello_world_header_and_left_line_numbers_match_labels() {
         with_raw_theorem("example-projects/hello-world", "Proof", |theorem| {
-            let out = render_side_by_side(theorem, 0, "UsefulOracle", true).unwrap();
+            let out =
+                render_side_by_side(theorem, 0, "UsefulOracle", true, ListingView::Full).unwrap();
 
             assert!(out.lines().next().unwrap().starts_with(
                 "theorem Proof, proofstep 0 \
@@ -331,8 +391,10 @@ mod tests {
     #[test]
     fn no_line_numbers_flag_removes_the_gutter() {
         with_raw_theorem("example-projects/hello-world", "Proof", |theorem| {
-            let numbered = render_side_by_side(theorem, 0, "UsefulOracle", true).unwrap();
-            let plain = render_side_by_side(theorem, 0, "UsefulOracle", false).unwrap();
+            let numbered =
+                render_side_by_side(theorem, 0, "UsefulOracle", true, ListingView::Full).unwrap();
+            let plain =
+                render_side_by_side(theorem, 0, "UsefulOracle", false, ListingView::Full).unwrap();
             assert!(numbered.contains(" | UsefulOracle("));
             assert!(!plain.contains(" | UsefulOracle("));
             assert!(plain.contains("UsefulOracle()"));
@@ -342,17 +404,17 @@ mod tests {
     #[test]
     fn errors_are_specific() {
         with_raw_theorem("example-projects/hello-world", "Proof", |theorem| {
-            match render_side_by_side(theorem, 9, "UsefulOracle", true) {
+            match render_side_by_side(theorem, 9, "UsefulOracle", true, ListingView::Full) {
                 Err(RenderError::ProofstepOutOfRange { len, .. }) => assert_eq!(len, 2),
                 other => panic!("expected ProofstepOutOfRange, got {other:?}"),
             }
-            match render_side_by_side(theorem, 1, "UsefulOracle", true) {
+            match render_side_by_side(theorem, 1, "UsefulOracle", true, ListingView::Full) {
                 Err(RenderError::ProofstepNotEquivalence { kind, .. }) => {
                     assert_eq!(kind, "reduction")
                 }
                 other => panic!("expected ProofstepNotEquivalence, got {other:?}"),
             }
-            match render_side_by_side(theorem, 0, "NoSuchOracle", true) {
+            match render_side_by_side(theorem, 0, "NoSuchOracle", true, ListingView::Full) {
                 Err(RenderError::Inline(InlineError::OracleNotExported { .. })) => {}
                 other => panic!("expected Inline(OracleNotExported), got {other:?}"),
             }
@@ -363,17 +425,20 @@ mod tests {
     #[test]
     fn easycrypt_errors_are_the_domino_errors() {
         with_raw_theorem("example-projects/hello-world", "Proof", |theorem| {
-            match render_side_by_side_easycrypt(theorem, 9, "UsefulOracle", true) {
+            match render_side_by_side_easycrypt(theorem, 9, "UsefulOracle", true, ListingView::Full)
+            {
                 Err(RenderError::ProofstepOutOfRange { len, .. }) => assert_eq!(len, 2),
                 other => panic!("expected ProofstepOutOfRange, got {other:?}"),
             }
-            match render_side_by_side_easycrypt(theorem, 1, "UsefulOracle", true) {
+            match render_side_by_side_easycrypt(theorem, 1, "UsefulOracle", true, ListingView::Full)
+            {
                 Err(RenderError::ProofstepNotEquivalence { kind, .. }) => {
                     assert_eq!(kind, "reduction")
                 }
                 other => panic!("expected ProofstepNotEquivalence, got {other:?}"),
             }
-            match render_side_by_side_easycrypt(theorem, 0, "NoSuchOracle", true) {
+            match render_side_by_side_easycrypt(theorem, 0, "NoSuchOracle", true, ListingView::Full)
+            {
                 Err(RenderError::Inline(InlineError::OracleNotExported { .. })) => {}
                 other => panic!("expected Inline(OracleNotExported), got {other:?}"),
             }
@@ -389,8 +454,36 @@ mod tests {
         // padding and trailing whitespace included.
         let expected = include_str!("../../testdata/story03/inline-hello-world.txt");
         with_raw_theorem("example-projects/hello-world", "Proof", |theorem| {
-            let out = render_side_by_side(theorem, 0, "UsefulOracle", true).unwrap();
+            let out =
+                render_side_by_side(theorem, 0, "UsefulOracle", true, ListingView::Full).unwrap();
             assert_eq!(out, expected);
+        });
+    }
+
+    /// `--fold-trivial-branches` prints each side's folded listing, numbered by its labels;
+    /// without it the output is the full listing (pinned by the snapshot above).
+    #[test]
+    fn the_folded_view_prints_the_folded_listing_with_its_labels() {
+        with_raw_theorem("example-projects/4WHS", "Simple4WHS", |theorem| {
+            let full = render_side_by_side(theorem, 1, "Send2", true, ListingView::Full).unwrap();
+            let out = render_side_by_side(theorem, 1, "Send2", true, ListingView::Folded).unwrap();
+            assert!(out.contains("(trivial branches folded"), "{out}");
+            assert!(!full.contains("(trivial branches folded"), "{full}");
+
+            let (dbg, _) = DebugTransform.transform_theorem(theorem).unwrap();
+            let right = inline_oracle(dbg.find_game_instance("Hybrid2").unwrap(), "Send2").unwrap();
+            let folded = FoldedListing::of(&right);
+            let body: Vec<&str> = out.lines().skip_while(|l| !l.is_empty()).skip(1).collect();
+            let printed: Vec<(Label, &str)> = body
+                .iter()
+                .filter_map(|row| {
+                    let (number, code) = row.split("  |  ").nth(1)?.split_once(" | ")?;
+                    Some((number.trim().parse().unwrap(), code))
+                })
+                .collect();
+            let expected: Vec<(Label, &str)> = folded.numbered_lines().collect();
+            assert_eq!(printed, expected);
+            assert!(printed.len() < right.listing.text.lines().count());
         });
     }
 }
