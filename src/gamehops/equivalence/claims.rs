@@ -35,7 +35,10 @@ impl<'a> Declarations<'a> {
                 SmtStatementKind::GeneralRelation { name, oracle } => {
                     decls.lemmas.push((name, oracle))
                 }
-                SmtStatementKind::Function { name } => decls.helpers.push(name),
+                SmtStatementKind::Function { name } => match hand_written_lemma(name) {
+                    Some(lemma) => decls.lemmas.push(lemma),
+                    None => decls.helpers.push(name),
+                },
                 SmtStatementKind::PackageInvariant { .. }
                 | SmtStatementKind::GameInvariant { .. }
                 | SmtStatementKind::Other => {}
@@ -115,6 +118,17 @@ impl<'a> Declarations<'a> {
             })
             .collect()
     }
+}
+
+/// `(lemma name, oracle name)` of a `define-fun` that the user wrote with the name a
+/// `define-lemma` gets, `general-relation!<lemma>!<oracle>!`. The prover calls it as a lemma of
+/// that oracle, as it did before claim kinds came from declarations.
+fn hand_written_lemma(name: &str) -> Option<(&str, &str)> {
+    let (lemma, oracle) = name
+        .strip_prefix("general-relation!")?
+        .strip_suffix('!')?
+        .split_once('!')?;
+    (!lemma.is_empty() && !oracle.is_empty() && !oracle.contains('!')).then_some((lemma, oracle))
 }
 
 #[derive(Debug, PartialEq)]
@@ -318,6 +332,24 @@ mod tests {
             "claim relaton-keys of oracle Send1 in the equivalence of L and R is not declared; \
              did you mean relation-keys?"
         );
+    }
+
+    #[test]
+    fn a_hand_written_general_relation_is_a_lemma_of_its_oracle() {
+        let kinds = vec![SmtStatementKind::Function {
+            name: "general-relation!trivial!Send1!".into(),
+        }];
+        let decls = Declarations::from_kinds(&kinds);
+        assert_eq!(
+            decls.lookup("Send1", "trivial"),
+            Ok(ClaimKind::ProjectLemma)
+        );
+        assert_eq!(
+            decls.lookup("Send2", "trivial"),
+            Err(Unresolved::Undeclared { nearest: None })
+        );
+        assert_eq!(hand_written_lemma("general-relation!a!b!c!"), None);
+        assert_eq!(hand_written_lemma("relation-keys"), None);
     }
 
     #[test]
