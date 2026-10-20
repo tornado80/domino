@@ -80,7 +80,7 @@ use crate::debug::smtout::{SmtOut, SmtWriter};
 use crate::gamehops::equivalence::Equivalence;
 use crate::gamehops::GameHop;
 use crate::project::Project;
-use crate::theorem::{Claim, GameInstance, Theorem};
+use crate::theorem::{GameInstance, ResolvedClaim, Theorem};
 use crate::transforms::samplify::SampleInfo;
 use crate::transforms::theorem_transforms::{
     DebugTransform, EquivalenceTransform, EquivalenceTransformError,
@@ -762,9 +762,9 @@ where
         all: all_claims,
         label: claim_label,
         ..
-    } = claim_set.resolve(&eqctx, eq, oracle)?;
+    } = claim_set.resolve(&eqctx, oracle)?;
     let claim_label = claim_label.as_str();
-    let admitted = claims.iter().all(Claim::is_admitted);
+    let admitted = claims.iter().all(ResolvedClaim::is_admitted);
 
     observer.on_event(&DebugEvent::Started {
         oracle,
@@ -976,7 +976,7 @@ pub(crate) fn shared_base_frame<'a>(
 pub(crate) fn base_frame<'a>(
     eqctx: &'a EquivalenceContext<'a>,
     oracle: &str,
-    claim: &Claim,
+    claim: &ResolvedClaim,
 ) -> Vec<SmtExpr> {
     let mut base = shared_base_frame(eqctx, oracle);
     base.extend(eqctx.emit_claim_own_assumptions(claim, oracle));
@@ -1038,7 +1038,7 @@ struct Checking {
 impl Checking {
     fn new(
         eqctx: &EquivalenceContext<'_>,
-        claims: &[Claim],
+        claims: &[ResolvedClaim],
         oracle: &str,
         all: bool,
         opts: &DebugOptions,
@@ -2365,7 +2365,7 @@ mod tests {
             let mut eqctx = EquivalenceContext::new(eq, &theorem_eq, &auxs_eq);
             eqctx.load_invariants(proj).unwrap();
 
-            let mut claims = eq.proof_tree_by_oracle_name("PKGEN");
+            let mut claims = eqctx.proof_tree("PKGEN");
             claims.extend(eqctx.generate_game_or_package_invariant_claims());
             let claim = claims
                 .iter()

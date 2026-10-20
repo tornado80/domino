@@ -13,7 +13,7 @@ use crate::{
         Identifier,
     },
     package::OracleSig,
-    theorem::Theorem,
+    theorem::{ResolvedClaim, Theorem},
     transforms::{
         sample_max_counter_extractor::MaxOffsets,
         samplify::SampleInfo,
@@ -41,6 +41,8 @@ pub struct EquivalenceContext<'a> {
     invariants: Vec<SmtStmt>,
     left_invariants: Vec<SmtStmt>,
     right_invariants: Vec<SmtStmt>,
+    /// Each oracle's proof tree with resolved claim kinds; set by `resolve_claims`.
+    proof_trees: Vec<(String, Vec<ResolvedClaim>)>,
 }
 
 // simple getters
@@ -57,6 +59,7 @@ impl<'a> EquivalenceContext<'a> {
             invariants: Vec::new(),
             left_invariants: Vec::new(),
             right_invariants: Vec::new(),
+            proof_trees: Vec::new(),
         }
     }
 
@@ -70,6 +73,29 @@ impl<'a> EquivalenceContext<'a> {
 
     pub(crate) fn append_invariants(&mut self, mut new_invariants: Vec<SmtStmt>) {
         self.invariants.append(&mut new_invariants);
+    }
+
+    /// The statements of all invariant files: the equivalence's, then the left and the right
+    /// game instance's.
+    pub(crate) fn all_invariant_stmts(&self) -> impl Iterator<Item = &SmtStmt> {
+        self.invariants
+            .iter()
+            .chain(&self.left_invariants)
+            .chain(&self.right_invariants)
+    }
+
+    pub(crate) fn set_proof_trees(&mut self, proof_trees: Vec<(String, Vec<ResolvedClaim>)>) {
+        self.proof_trees = proof_trees;
+    }
+
+    /// The resolved proof tree of `oracle_name`, as the proof declares it. Empty before
+    /// `load_invariants`. Panics for an oracle that the equivalence does not declare.
+    pub(crate) fn proof_tree(&self, oracle_name: &str) -> Vec<ResolvedClaim> {
+        self.proof_trees
+            .iter()
+            .find(|(name, _tree)| name == oracle_name)
+            .map(|(_oname, tree)| tree.clone())
+            .unwrap_or_else(|| panic!("can't find proof tree for {oracle_name}"))
     }
 
     pub(crate) fn append_left_invariants(&mut self, mut new_invariants: Vec<SmtStmt>) {

@@ -21,8 +21,7 @@ use crate::debug::driver::{
     write_model, ClaimInfo, ClaimVerdict, DebugError, PartVerdict, Unreachability, Verdict,
 };
 use crate::debug::layout::{self, Layout};
-use crate::gamehops::equivalence::Equivalence;
-use crate::theorem::{Claim, ClaimType};
+use crate::theorem::{ClaimKind, ResolvedClaim};
 use crate::util::smtsolver::{SmtSolver, SmtSolverResponse};
 use crate::writers::smt::contexts::EquivalenceContext;
 use crate::writers::smt::exprs::SmtExpr;
@@ -45,12 +44,12 @@ pub fn state_relation_part(relation: &str) -> String {
     format!("state-relation {relation}")
 }
 
-/// A claim of `ty` called `name` with no dependencies: its goal is the goal of that claim
+/// A claim of `kind` called `name` with no dependencies: its goal is the goal of that claim
 /// alone.
-pub(crate) fn no_dependency_claim(name: &str, ty: ClaimType) -> Claim {
-    Claim {
+pub(crate) fn no_dependency_claim(name: &str, kind: ClaimKind) -> ResolvedClaim {
+    ResolvedClaim {
         name: name.to_string(),
-        ty,
+        kind,
         dependencies: Vec::new(),
         admitted: false,
     }
@@ -69,7 +68,7 @@ pub(crate) fn state_relation_parts(
         .filter(|name| name != "invariant")
         .map(|name| {
             let negated = eqctx
-                .emit_claim_goal_negated(&no_dependency_claim(&name, ClaimType::Invariant), oracle);
+                .emit_claim_goal_negated(&no_dependency_claim(&name, ClaimKind::StateRelation), oracle);
             (name_of(&name), negated)
         })
         .collect()
@@ -94,15 +93,14 @@ pub struct PartGoalView {
 }
 
 impl ClaimQuery {
-    pub fn of(eqctx: &EquivalenceContext<'_>, claim: &Claim, oracle: &str) -> Self {
+    pub fn of(eqctx: &EquivalenceContext<'_>, claim: &ResolvedClaim, oracle: &str) -> Self {
         let assumptions = eqctx.emit_claim_own_assumptions(claim, oracle);
         debug_assert_eq!(assumptions.len(), claim.dependencies().len());
         Self {
             name: claim.name().to_string(),
             dependencies: claim
-                .dependencies()
-                .iter()
-                .cloned()
+                .dependency_names()
+                .into_iter()
                 .zip(assumptions)
                 .collect(),
             negated: eqctx.emit_claim_goal_negated(claim, oracle),
@@ -146,14 +144,10 @@ impl ClaimQuery {
 /// The full obligation set of `oracle`: what `domino prove` discharges. `equal-aborts`,
 /// `same-output` and `invariant` come first, then the rest of the proof tree in declaration
 /// order, then the generated package/game invariant claims — so a report reads like `prove`'s.
-pub(crate) fn obligations(
-    eqctx: &EquivalenceContext<'_>,
-    eq: &Equivalence,
-    oracle: &str,
-) -> Vec<Claim> {
+pub(crate) fn obligations(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<ResolvedClaim> {
     const FIRST: [&str; 3] = ["equal-aborts", "same-output", "invariant"];
-    let mut ranked: Vec<(usize, Claim)> = eq
-        .proof_tree_by_oracle_name(oracle)
+    let mut ranked: Vec<(usize, ResolvedClaim)> = eqctx
+        .proof_tree(oracle)
         .into_iter()
         .map(|claim| {
             let rank = FIRST
@@ -194,7 +188,7 @@ pub enum ClaimSet {
 pub(crate) struct ResolvedClaims {
     /// The declared claims the set holds, with the dependencies they keep. Empty for
     /// [`ClaimSet::NoDependencies`], whose checks are not declared claims.
-    pub claims: Vec<Claim>,
+    pub claims: Vec<ResolvedClaim>,
     pub queries: Vec<ClaimQuery>,
     pub infos: Vec<ClaimInfo>,
     /// No claim was named: the whole set is checked.
@@ -235,7 +229,6 @@ impl ClaimSet {
     pub(crate) fn resolve(
         &self,
         eqctx: &EquivalenceContext<'_>,
-        eq: &Equivalence,
         oracle: &str,
     ) -> Result<ResolvedClaims, DebugError> {
         let declared = match self {
@@ -256,14 +249,14 @@ impl ClaimSet {
                     label: "equal-output, invariant".to_string(),
                 });
             }
-            ClaimSet::Obligations { .. } => obligations(eqctx, eq, oracle),
+            ClaimSet::Obligations { .. } => obligations(eqctx, oracle),
             ClaimSet::Core { .. } => {
                 let generated: Vec<String> = eqctx
                     .generate_game_or_package_invariant_claims()
                     .iter()
                     .map(|c| c.name().to_string())
                     .collect();
-                core_claims(obligations(eqctx, eq, oracle), &generated)
+                core_claims(obligations(eqctx, oracle), &generated)
             }
         };
         let claims = narrow(declared, self.only(), self.is_core())?;
@@ -272,7 +265,7 @@ impl ClaimSet {
                 .iter()
                 .map(|c| ClaimInfo {
                     name: c.name().to_string(),
-                    dependencies: c.dependencies().to_vec(),
+                    dependencies: c.dependency_names(),
                     admitted: c.is_admitted(),
                 })
                 .collect(),
@@ -290,20 +283,20 @@ impl ClaimSet {
 
 /// The core claim set of `obligations`: `equal-aborts`, `same-output`, `invariant` and the
 /// claims named in `generated`, each keeping only the dependencies [`false_by_terminals`] knows.
-pub(crate) fn core_claims(obligations: Vec<Claim>, generated: &[String]) -> Vec<Claim> {
+pub(crate) fn core_claims(obligations: Vec<ResolvedClaim>, generated: &[String]) -> Vec<ResolvedClaim> {
     const CORE: [&str; 3] = ["equal-aborts", "same-output", "invariant"];
     obligations
         .into_iter()
         .filter(|c| CORE.contains(&c.name()) || generated.iter().any(|g| g == c.name()))
         .map(|mut c| {
-            c.dependencies.retain(|d| is_built_in_dependency(d));
+            c.dependencies.retain(|d| is_built_in_dependency(d.name()));
             c
         })
         .collect()
 }
 
 /// `claims` narrowed to the one called `only`, if given.
-fn narrow(claims: Vec<Claim>, only: Option<&str>, core: bool) -> Result<Vec<Claim>, DebugError> {
+fn narrow(claims: Vec<ResolvedClaim>, only: Option<&str>, core: bool) -> Result<Vec<ResolvedClaim>, DebugError> {
     let Some(name) = only else {
         return Ok(claims);
     };
@@ -559,36 +552,45 @@ pub(crate) fn aggregate(checked: &[ClaimVerdict]) -> (Verdict, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theorem::BuiltInFact;
 
     fn aborts(left: bool, right: bool) -> PairAborts {
         PairAborts { left, right }
     }
 
-    fn declared(name: &str, deps: &[&str]) -> Claim {
-        Claim {
+    /// A declared claim of `kind`; each dependency is a built-in fact or a project lemma.
+    fn declared(name: &str, kind: ClaimKind, deps: &[&str]) -> ResolvedClaim {
+        let dependencies = deps
+            .iter()
+            .map(|d| crate::theorem::ResolvedDependency {
+                name: d.to_string(),
+                kind: BuiltInFact::from_name(d).map_or(ClaimKind::ProjectLemma, ClaimKind::BuiltIn),
+            })
+            .collect();
+        ResolvedClaim {
             name: name.to_string(),
-            ty: ClaimType::guess_from_name(name),
-            dependencies: deps.iter().map(|d| d.to_string()).collect(),
+            kind,
+            dependencies,
             admitted: false,
         }
     }
 
-    fn names_and_dependencies(claims: &[Claim]) -> Vec<(String, Vec<String>)> {
+    fn names_and_dependencies(claims: &[ResolvedClaim]) -> Vec<(String, Vec<String>)> {
         claims
             .iter()
-            .map(|c| (c.name().to_string(), c.dependencies().to_vec()))
+            .map(|c| (c.name().to_string(), c.dependency_names()))
             .collect()
     }
 
     #[test]
     fn the_core_set_keeps_the_core_claims_with_their_built_in_dependencies_only() {
         let obligations = vec![
-            declared("equal-aborts", &[]),
-            declared("same-output", &["no-abort", "my-lemma"]),
-            declared("invariant", &["my-lemma", "no-abort"]),
-            declared("my-lemma", &[]),
-            declared("relation-r", &["left-no-abort"]),
-            declared("pkg-inv", &["no-abort"]),
+            declared("equal-aborts", ClaimKind::BuiltIn(BuiltInFact::EqualAborts), &[]),
+            declared("same-output", ClaimKind::BuiltIn(BuiltInFact::SameOutput), &["no-abort", "my-lemma"]),
+            declared("invariant", ClaimKind::StateRelation, &["my-lemma", "no-abort"]),
+            declared("my-lemma", ClaimKind::ProjectLemma, &[]),
+            declared("relation-r", ClaimKind::StateRelation, &["left-no-abort"]),
+            declared("pkg-inv", ClaimKind::PackageInvariant { side: crate::theorem::InvariantSide::Left }, &["no-abort"]),
         ];
         let core = core_claims(obligations, &["pkg-inv".to_string()]);
         let s = |v: &str| v.to_string();
@@ -605,7 +607,7 @@ mod tests {
 
     #[test]
     fn a_name_outside_the_core_set_is_not_found_in_it() {
-        let core = vec![declared("equal-aborts", &[]), declared("invariant", &[])];
+        let core = vec![declared("equal-aborts", ClaimKind::BuiltIn(BuiltInFact::EqualAborts), &[]), declared("invariant", ClaimKind::StateRelation, &[])];
         let err = narrow(core.clone(), Some("my-lemma"), true).unwrap_err();
         assert_eq!(
             err.to_string(),

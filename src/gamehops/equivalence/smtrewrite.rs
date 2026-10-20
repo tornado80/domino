@@ -362,6 +362,40 @@ impl SmtRewrite<'_> {
     }
 }
 
+impl SmtRewrite<'_> {
+    /// A plain `define-fun` of the equivalence's invariant file that takes the left and the
+    /// right game state and returns `Bool` declares a state relation (the form before
+    /// `define-state-relation`). The shape of the declaration decides, never the name.
+    fn is_legacy_state_relation(&self, args: &[SmtExpr], ty: &str) -> bool {
+        if self.game.is_some() || self.package.is_some() || ty != "Bool" {
+            return false;
+        }
+        let [SmtExpr::List(left), SmtExpr::List(right)] = args else {
+            return false;
+        };
+        let (Some(left_sort), Some(right_sort)) = (left.get(1), right.get(1)) else {
+            return false;
+        };
+        let state_sort = |game_inst_name: &str| {
+            let game_inst = self
+                .context
+                .theorem()
+                .find_game_instance(game_inst_name)
+                .unwrap();
+            let pattern = patterns::GameStatePattern {
+                game_name: game_inst.game_name(),
+                params: &game_inst.consts,
+            };
+            SmtExpr::from(pattern.sort_name()).to_string()
+        };
+        let equivalence = self.context.equivalence();
+        left.len() == 2
+            && right.len() == 2
+            && left_sort.to_string() == state_sort(equivalence.left_name())
+            && right_sort.to_string() == state_sort(equivalence.right_name())
+    }
+}
+
 impl SmtParser<Error> for SmtRewrite<'_> {
     type Expr = SmtExpr;
     type Stmt = SmtStmt;
@@ -386,14 +420,18 @@ impl SmtParser<Error> for SmtRewrite<'_> {
         ty: &str,
         body: SmtExpr,
     ) -> Result<SmtStmt> {
+        let kind = if self.is_legacy_state_relation(&args, ty) {
+            SmtStatementKind::StateRelation {
+                name: funname.to_string(),
+            }
+        } else {
+            SmtStatementKind::Function {
+                name: funname.to_string(),
+            }
+        };
         let expr = ("define-fun", funname, args, ty, body).into();
 
-        Ok(SmtStmt {
-            kind: SmtStatementKind::Function {
-                name: funname.to_string(),
-            },
-            expr,
-        })
+        Ok(SmtStmt { kind, expr })
     }
 
     fn handle_define_game_invariant(&mut self, invname: &str, body: SmtExpr) -> Result<SmtStmt> {

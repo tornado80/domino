@@ -6,7 +6,10 @@ use std::{
 use crate::{
     gamehops::equivalence::smtrewrite::SmtStatementKind,
     hacks,
-    theorem::{Claim, ClaimType, GameInstance, RandomnessMappingInjectivityCheck, RandomnessType},
+    theorem::{
+        BuiltInFact, ClaimKind, GameInstance, InvariantSide, RandomnessMappingInjectivityCheck, RandomnessType,
+        ResolvedClaim, ResolvedDependency,
+    },
     transforms::samplify::SampleInfo,
     types::{Type, TypeKind},
     writers::smt::{
@@ -204,15 +207,11 @@ impl<'a> EquivalenceContext<'a> {
         .into()
     }
 
-    pub(crate) fn emit_game_or_package_invariant_start_assert(&self, claim: &Claim) -> SmtExpr {
-        let gctx = match claim.ty {
-            ClaimType::LeftGameInvariant | ClaimType::LeftPackageInvariant => {
-                self.left_game_inst_ctx()
-            }
-            ClaimType::RightGameInvariant | ClaimType::RightPackageInvariant => {
-                self.right_game_inst_ctx()
-            }
-            _ => unreachable!(),
+    pub(crate) fn emit_game_or_package_invariant_start_assert(&self, claim: &ResolvedClaim) -> SmtExpr {
+        let gctx = match claim.kind().invariant_side() {
+            Some(InvariantSide::Left) => self.left_game_inst_ctx(),
+            Some(InvariantSide::Right) => self.right_game_inst_ctx(),
+            None => unreachable!("only package and game invariant claims have a start assert"),
         };
         let game_inst_name = gctx.game_inst_name();
         let state = gctx.oracle_arg_game_state_pattern();
@@ -235,7 +234,7 @@ impl<'a> EquivalenceContext<'a> {
     /// with the single combined refutation.
     pub(crate) fn claim_assumptions_and_goal(
         &self,
-        claim: &Claim,
+        claim: &ResolvedClaim,
         oracle_name: &str,
     ) -> (Vec<SmtExpr>, SmtExpr) {
         let (mut deps, own, goal) = self.claim_assumption_parts(claim, oracle_name);
@@ -249,7 +248,7 @@ impl<'a> EquivalenceContext<'a> {
     /// dependencies, then the goal.
     pub(crate) fn claim_assumption_parts(
         &self,
-        claim: &Claim,
+        claim: &ResolvedClaim,
         oracle_name: &str,
     ) -> (Vec<SmtExpr>, Vec<SmtExpr>, SmtExpr) {
         let gctx_left = self.left_game_inst_ctx();
@@ -361,14 +360,6 @@ impl<'a> EquivalenceContext<'a> {
                 .into()
         };
 
-        let build_invariant_new_call = |name: &str| -> SmtExpr {
-            (
-                name,
-                &state_left.new_global_const_name(game_inst_name_left, oracle_name.to_string()),
-                &state_right.new_global_const_name(game_inst_name_right, oracle_name.to_string()),
-            )
-                .into()
-        };
         let build_left_invariant_new_call = |name: &str| -> SmtExpr {
             (
                 name,
@@ -384,32 +375,27 @@ impl<'a> EquivalenceContext<'a> {
                 .into()
         };
 
+        // a call of the fact `name` on the new states, by the kind of its declaration
+        let build_new_call = |name: &str, kind: ClaimKind| -> SmtExpr {
+            match kind {
+                ClaimKind::BuiltIn(_) | ClaimKind::ProjectLemma => build_lemma_call.clone()(name),
+                ClaimKind::StateRelation => build_relation_call(name),
+                ClaimKind::PackageInvariant { side } | ClaimKind::GameInvariant { side } => {
+                    match side {
+                        InvariantSide::Left => build_left_invariant_new_call(name),
+                        InvariantSide::Right => build_right_invariant_new_call(name),
+                    }
+                }
+            }
+        };
+
         let dep_calls: Vec<_> = claim
             .dependencies()
             .iter()
-            .map(|dep_name| {
-                let claim_type = ClaimType::guess_from_name(dep_name);
-                match claim_type {
-                    ClaimType::Lemma => build_lemma_call.clone()(dep_name),
-                    ClaimType::Relation => build_relation_call(dep_name),
-                    ClaimType::Invariant
-                    | ClaimType::LeftPackageInvariant
-                    | ClaimType::RightPackageInvariant
-                    | ClaimType::LeftGameInvariant
-                    | ClaimType::RightGameInvariant => unreachable!(),
-                }
-            })
+            .map(|dep: &ResolvedDependency| build_new_call(dep.name(), dep.kind()))
             .collect();
 
-        let postcond_call = match claim.ty {
-            ClaimType::Lemma => build_lemma_call.clone()(&claim.name),
-            ClaimType::Relation => build_relation_call(&claim.name),
-            ClaimType::Invariant => build_invariant_new_call(&claim.name),
-            ClaimType::LeftPackageInvariant => build_left_invariant_new_call(&claim.name),
-            ClaimType::RightPackageInvariant => build_right_invariant_new_call(&claim.name),
-            ClaimType::LeftGameInvariant => build_left_invariant_new_call(&claim.name),
-            ClaimType::RightGameInvariant => build_right_invariant_new_call(&claim.name),
-        };
+        let postcond_call = build_new_call(claim.name(), claim.kind());
 
         let mut dependencies_code: Vec<SmtExpr> = vec![
             RANDOMNESS_MAPPING_CONDITION_NAME.into(),
@@ -444,7 +430,7 @@ impl<'a> EquivalenceContext<'a> {
 
     /// The single-refutation claim assertion `prove` uses:
     /// `(assert (not (=> (and <deps>) <goal>)))`.
-    pub(crate) fn emit_oracle_claim_assert(&self, claim: &Claim, oracle_name: &str) -> SmtExpr {
+    pub(crate) fn emit_oracle_claim_assert(&self, claim: &ResolvedClaim, oracle_name: &str) -> SmtExpr {
         let (deps, goal) = self.claim_assumptions_and_goal(claim, oracle_name);
         crate::writers::smt::exprs::SmtAssert(SmtNot(SmtImplies(SmtAnd(deps), goal))).into()
     }
@@ -458,7 +444,7 @@ impl<'a> EquivalenceContext<'a> {
     /// [`emit_oracle_claim_assert`](Self::emit_oracle_claim_assert) produces.
     // Consumed by `domino debug` (story 06); no non-test caller on this branch yet.
     #[allow(dead_code)]
-    pub(crate) fn emit_claim_assumptions(&self, claim: &Claim, oracle_name: &str) -> Vec<SmtExpr> {
+    pub(crate) fn emit_claim_assumptions(&self, claim: &ResolvedClaim, oracle_name: &str) -> Vec<SmtExpr> {
         let (deps, _goal) = self.claim_assumptions_and_goal(claim, oracle_name);
         deps.into_iter()
             .map(|dep| crate::writers::smt::exprs::SmtAssert(dep).into())
@@ -469,9 +455,9 @@ impl<'a> EquivalenceContext<'a> {
     /// the randomness-mapping condition and the invariants on the old states.
     pub(crate) fn emit_shared_assumptions(&self, oracle_name: &str) -> Vec<SmtExpr> {
         // Any claim will do: the shared part does not depend on it.
-        let claim = Claim {
+        let claim = ResolvedClaim {
             name: "invariant".to_string(),
-            ty: ClaimType::Invariant,
+            kind: ClaimKind::StateRelation,
             dependencies: Vec::new(),
             admitted: false,
         };
@@ -486,7 +472,7 @@ impl<'a> EquivalenceContext<'a> {
     /// — what [`emit_claim_assumptions`](Self::emit_claim_assumptions) has beyond
     /// [`emit_shared_assumptions`](Self::emit_shared_assumptions). Story 19 asserts these at the
     /// terminal pair in an all-claim run.
-    pub(crate) fn emit_claim_own_assumptions(&self, claim: &Claim, oracle_name: &str) -> Vec<SmtExpr> {
+    pub(crate) fn emit_claim_own_assumptions(&self, claim: &ResolvedClaim, oracle_name: &str) -> Vec<SmtExpr> {
         let (_shared, own, _goal) = self.claim_assumption_parts(claim, oracle_name);
         own.into_iter()
             .map(|dep| crate::writers::smt::exprs::SmtAssert(dep).into())
@@ -498,7 +484,7 @@ impl<'a> EquivalenceContext<'a> {
     /// are already on the stack.
     // Consumed by `domino debug` (story 06); no non-test caller on this branch yet.
     #[allow(dead_code)]
-    pub(crate) fn emit_claim_goal_negated(&self, claim: &Claim, oracle_name: &str) -> SmtExpr {
+    pub(crate) fn emit_claim_goal_negated(&self, claim: &ResolvedClaim, oracle_name: &str) -> SmtExpr {
         let (_deps, goal) = self.claim_assumptions_and_goal(claim, oracle_name);
         crate::writers::smt::exprs::SmtAssert(SmtNot(goal)).into()
     }
@@ -509,36 +495,36 @@ impl<'a> EquivalenceContext<'a> {
     ///
     /// Lifted out of `EquivalenceSmtDriver` so `domino debug` (story 06) can enumerate the same
     /// claim set the prover checks without duplicating the logic.
-    pub(crate) fn generate_game_or_package_invariant_claims(&self) -> Vec<Claim> {
-        fn invariant_claims(stmts: &[crate::gamehops::equivalence::smtrewrite::SmtStmt], package: ClaimType, game: ClaimType) -> Vec<Claim> {
+    pub(crate) fn generate_game_or_package_invariant_claims(&self) -> Vec<ResolvedClaim> {
+        fn invariant_claims(
+            stmts: &[crate::gamehops::equivalence::smtrewrite::SmtStmt],
+            side: InvariantSide,
+        ) -> Vec<ResolvedClaim> {
             stmts
                 .iter()
                 .filter_map(|stmt| {
-                    let ty = match stmt.kind {
-                        SmtStatementKind::PackageInvariant { .. } => package,
-                        SmtStatementKind::GameInvariant { .. } => game,
+                    let kind = match stmt.kind {
+                        SmtStatementKind::PackageInvariant { .. } => {
+                            ClaimKind::PackageInvariant { side }
+                        }
+                        SmtStatementKind::GameInvariant { .. } => ClaimKind::GameInvariant { side },
                         _ => return None,
                     };
-                    Some(Claim {
+                    Some(ResolvedClaim {
                         admitted: false,
-                        dependencies: vec!["no-abort".to_string()],
-                        ty,
+                        dependencies: vec![ResolvedDependency {
+                            name: BuiltInFact::NoAbort.name().to_string(),
+                            kind: ClaimKind::BuiltIn(BuiltInFact::NoAbort),
+                        }],
+                        kind,
                         name: stmt.kind.name(),
                     })
                 })
                 .collect()
         }
 
-        let mut claims = invariant_claims(
-            &self.left_invariants,
-            ClaimType::LeftPackageInvariant,
-            ClaimType::LeftGameInvariant,
-        );
-        claims.extend(invariant_claims(
-            &self.right_invariants,
-            ClaimType::RightPackageInvariant,
-            ClaimType::RightGameInvariant,
-        ));
+        let mut claims = invariant_claims(&self.left_invariants, InvariantSide::Left);
+        claims.extend(invariant_claims(&self.right_invariants, InvariantSide::Right));
         claims
     }
 
@@ -553,12 +539,7 @@ impl<'a> EquivalenceContext<'a> {
             .old_global_const_name(gctx.game_inst_name());
         self.generate_game_or_package_invariant_claims()
             .into_iter()
-            .filter(|claim| {
-                matches!(
-                    claim.ty,
-                    ClaimType::LeftPackageInvariant | ClaimType::LeftGameInvariant
-                )
-            })
+            .filter(|claim| claim.kind().invariant_side() == Some(InvariantSide::Left))
             .map(|claim| SmtAssert::<SmtExpr>((claim.name.as_str(), &old_state).into()).into())
             .collect()
     }
@@ -1732,7 +1713,7 @@ mod story04_tests {
 
     use crate::gamehops::GameHop;
     use crate::project::Project as _;
-    use crate::theorem::{Claim, ClaimType};
+    use crate::theorem::{BuiltInFact, ClaimKind, ResolvedClaim, ResolvedDependency};
     use crate::transforms::{theorem_transforms::EquivalenceTransform, TheoremTransform};
     use crate::writers::smt::contexts::EquivalenceContext;
     use crate::writers::smt::exprs::{SmtAnd, SmtAssert, SmtExpr, SmtImplies, SmtNot};
@@ -1741,15 +1722,19 @@ mod story04_tests {
     const THEOREM: &str = "kem_dem_cca_ssp";
     const ORACLE: &str = "PKENC";
 
-    /// A claim that exercises every arm of `claim_assumptions_and_goal`: a `Lemma` goal, a
-    /// `Relation` dependency (name starts with `relation`) and a `Lemma` dependency.
-    fn mixed_claim() -> Claim {
-        Claim {
+    /// A claim that exercises the two-sided arms of `claim_assumptions_and_goal`: a built-in
+    /// goal, a state-relation dependency and a project-lemma dependency.
+    fn mixed_claim() -> ResolvedClaim {
+        let dep = |name: &str, kind| ResolvedDependency {
+            name: name.to_string(),
+            kind,
+        };
+        ResolvedClaim {
             name: "same-output".to_string(),
-            ty: ClaimType::Lemma,
+            kind: ClaimKind::BuiltIn(BuiltInFact::SameOutput),
             dependencies: vec![
-                "relation-no-abort".to_string(),
-                "lemma-kem-correctness".to_string(),
+                dep("relation-no-abort", ClaimKind::StateRelation),
+                dep("lemma-kem-correctness", ClaimKind::ProjectLemma),
             ],
             admitted: false,
         }

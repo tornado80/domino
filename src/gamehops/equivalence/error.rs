@@ -81,6 +81,27 @@ pub enum Error {
         #[related]
         failed_claims: Vec<Error>,
     },
+    #[error("{role} of oracle {oracle_name} in the equivalence of {left_game_inst_name} and {right_game_inst_name} is not declared{}", .nearest.as_ref().map(|near| format!("; did you mean {near}?")).unwrap_or_default())]
+    #[diagnostic(help(
+        "a proof can name a built-in fact (no-abort, left-no-abort, right-no-abort, equal-aborts, \
+         same-output), a define-state-relation or a define-lemma of the oracle"
+    ))]
+    UndeclaredClaimName {
+        /// for example `claim relaton-keys` or `dependency foo of claim bar`
+        role: String,
+        oracle_name: String,
+        left_game_inst_name: String,
+        right_game_inst_name: String,
+        /// the declared name with the smallest edit distance, when it is close
+        nearest: Option<String>,
+    },
+    #[error("{role} of oracle {oracle_name} in the equivalence of {left_game_inst_name} and {right_game_inst_name} names a helper function (define-fun), not a relation or a lemma")]
+    ClaimNamesHelper {
+        role: String,
+        oracle_name: String,
+        left_game_inst_name: String,
+        right_game_inst_name: String,
+    },
     #[error("found lemma named \"{lemma_name}\". Expected name ending in the name of the oracle. followed by a closing angle bracket")]
     IllegalLemmaName { lemma_name: String },
     #[error("found lemma named \"{lemma_name}\" for oracle \"{oracle_name}\" but couldn't find matching oracle")]

@@ -49,7 +49,8 @@ use crate::identifier::theorem_ident::{TheoremConstIdentifier, TheoremIdentifier
 use crate::identifier::Identifier;
 use crate::package::Composition;
 use crate::project::Project;
-use crate::theorem::{Claim, ClaimType, GameInstance, RandomnessType, Theorem};
+use crate::theorem::{
+    BuiltInFact, ClaimKind, GameInstance, InvariantSide, ResolvedClaim, ResolvedDependency, RandomnessType, Theorem};
 use crate::transforms::theorem_transforms::{
     DebugTransform, EasyCryptTransform, EquivalenceTransform,
 };
@@ -66,7 +67,7 @@ use crate::writers::smt::exprs::SmtExpr;
 pub const ONE_SIDED: &str = "one-sided";
 
 /// The dependency of every side-invariant claim: the side invariant holds under `!abort`.
-const NO_ABORT: &str = "left-no-abort";
+const NO_ABORT: BuiltInFact = BuiltInFact::LeftNoAbort;
 
 /// `<theorem_out>/!debug!/SideInv_<C>/<O>/`.
 pub fn side_debug_dir(theorem_out: &Path, composition: &str, oracle: &str) -> PathBuf {
@@ -263,13 +264,16 @@ fn fingerprint_of(
 
 /// The claims of a side tree: each package invariant of `C`, then its game invariant, on the
 /// new state, each under `left-no-abort`.
-fn side_claims(eqctx: &EquivalenceContext<'_>) -> Vec<Claim> {
+fn side_claims(eqctx: &EquivalenceContext<'_>) -> Vec<ResolvedClaim> {
     eqctx
         .generate_game_or_package_invariant_claims()
         .into_iter()
-        .filter(|c| matches!(c.ty, ClaimType::LeftPackageInvariant | ClaimType::LeftGameInvariant))
-        .map(|c| Claim {
-            dependencies: vec![NO_ABORT.to_string()],
+        .filter(|c| c.kind().invariant_side() == Some(InvariantSide::Left))
+        .map(|c| ResolvedClaim {
+            dependencies: vec![ResolvedDependency {
+                name: NO_ABORT.name().to_string(),
+                kind: ClaimKind::BuiltIn(NO_ABORT),
+            }],
             ..c
         })
         .collect()
@@ -375,7 +379,7 @@ where
             .iter()
             .map(|c| ClaimInfo {
                 name: c.name().to_string(),
-                dependencies: c.dependencies().to_vec(),
+                dependencies: c.dependency_names(),
                 admitted: false,
             })
             .collect(),

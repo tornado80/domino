@@ -11,6 +11,7 @@ use crate::{
 
 use error::{Error, ExportSignatureMismatch, Result};
 
+mod claims;
 pub mod error;
 pub mod smtrewrite;
 pub(crate) mod verify_fn;
@@ -68,14 +69,6 @@ impl Equivalence {
 
     pub fn invariants(&self) -> &[String] {
         &self.invariants
-    }
-
-    pub(crate) fn proof_tree_by_oracle_name(&self, oracle_name: &str) -> Vec<Claim> {
-        self.trees
-            .iter()
-            .find(|(name, _tree)| name == oracle_name)
-            .map(|(_oname, tree)| tree.clone())
-            .unwrap_or_else(|| panic!("can't find proof tree for {oracle_name}"))
     }
 
     /// Every oracle's declared randomness-mapping kind, `theorem.ssp`
@@ -230,6 +223,8 @@ impl<'a> EquivalenceContext<'a> {
         game_inst.game().exports.iter().collect()
     }
 
+    /// Parses the invariant files of the packages, the games and the equivalence, then resolves
+    /// the claim kinds of each proof tree (`resolve_claims`).
     pub(crate) fn load_invariants(&mut self, project: &impl Project) -> Result<()> {
         let left_gctx = self.left_game_inst_ctx();
         let right_gctx = self.right_game_inst_ctx();
@@ -295,7 +290,7 @@ impl<'a> EquivalenceContext<'a> {
             self.append_invariants(smtrewrite::rewrite(self, &file_contents)?);
         }
 
-        Ok(())
+        self.resolve_claims()
     }
 }
 

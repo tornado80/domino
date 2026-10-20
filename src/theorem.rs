@@ -208,33 +208,134 @@ impl GameInstance {
     }
 }
 
+/// A fact that Domino defines for each oracle itself. A proof names it, but no invariant file
+/// declares it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ClaimType {
-    Lemma,
-    Relation,
-    Invariant,
-    LeftPackageInvariant,
-    RightPackageInvariant,
-    LeftGameInvariant,
-    RightGameInvariant,
+pub enum BuiltInFact {
+    NoAbort,
+    LeftNoAbort,
+    RightNoAbort,
+    EqualAborts,
+    SameOutput,
 }
 
-impl ClaimType {
-    pub fn guess_from_name(name: &str) -> ClaimType {
-        if name.starts_with("relation") {
-            ClaimType::Relation
-        } else if name.starts_with("invariant") {
-            ClaimType::Invariant
-        } else {
-            ClaimType::Lemma
+impl BuiltInFact {
+    pub const ALL: [BuiltInFact; 5] = [
+        BuiltInFact::NoAbort,
+        BuiltInFact::LeftNoAbort,
+        BuiltInFact::RightNoAbort,
+        BuiltInFact::EqualAborts,
+        BuiltInFact::SameOutput,
+    ];
+
+    /// The name a proof uses for this fact.
+    pub fn name(self) -> &'static str {
+        match self {
+            BuiltInFact::NoAbort => "no-abort",
+            BuiltInFact::LeftNoAbort => "left-no-abort",
+            BuiltInFact::RightNoAbort => "right-no-abort",
+            BuiltInFact::EqualAborts => "equal-aborts",
+            BuiltInFact::SameOutput => "same-output",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<BuiltInFact> {
+        Self::ALL.into_iter().find(|fact| fact.name() == name)
+    }
+}
+
+/// The game instance of an equivalence that a one-sided invariant is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum InvariantSide {
+    Left,
+    Right,
+}
+
+/// What a claim or dependency name stands for. The kind comes from the declaration of the name
+/// (`EquivalenceContext::resolve_claims`), never from its spelling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ClaimKind {
+    BuiltIn(BuiltInFact),
+    /// A `define-state-relation`. The relation `invariant` is one of them.
+    StateRelation,
+    /// A `define-lemma` of the oracle.
+    ProjectLemma,
+    /// A generated claim for a `define-package-invariant`.
+    PackageInvariant {
+        side: InvariantSide,
+    },
+    /// A generated claim for a `define-game-invariant`.
+    GameInvariant {
+        side: InvariantSide,
+    },
+}
+
+impl ClaimKind {
+    /// The side of a package or game invariant; `None` for a two-sided kind.
+    pub fn invariant_side(self) -> Option<InvariantSide> {
+        match self {
+            ClaimKind::PackageInvariant { side } | ClaimKind::GameInvariant { side } => Some(side),
+            ClaimKind::BuiltIn(_) | ClaimKind::StateRelation | ClaimKind::ProjectLemma => None,
         }
     }
 }
 
+/// A dependency name of a claim, with the kind of its declaration.
+#[derive(Clone, Debug, PartialEq, PartialOrd, Ord, Eq)]
+pub struct ResolvedDependency {
+    pub(crate) name: String,
+    pub(crate) kind: ClaimKind,
+}
+
+impl ResolvedDependency {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn kind(&self) -> ClaimKind {
+        self.kind
+    }
+}
+
+/// A claim whose name and dependency names all resolve to a declaration.
+#[derive(Clone, Debug, PartialEq, PartialOrd, Ord, Eq)]
+pub struct ResolvedClaim {
+    pub(crate) name: String,
+    pub(crate) kind: ClaimKind,
+    pub(crate) dependencies: Vec<ResolvedDependency>,
+    pub(crate) admitted: bool,
+}
+
+impl ResolvedClaim {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn kind(&self) -> ClaimKind {
+        self.kind
+    }
+
+    pub fn dependencies(&self) -> &[ResolvedDependency] {
+        &self.dependencies
+    }
+
+    pub fn dependency_names(&self) -> Vec<String> {
+        self.dependencies
+            .iter()
+            .map(|dep| dep.name.clone())
+            .collect()
+    }
+
+    pub fn is_admitted(&self) -> bool {
+        self.admitted
+    }
+}
+
+/// A claim as the proof writes it. It has no kind: `EquivalenceContext::resolve_claims` makes a
+/// [`ResolvedClaim`] from it.
 #[derive(Clone, Debug, PartialEq, PartialOrd, Ord, Eq)]
 pub struct Claim {
     pub(crate) name: String,
-    pub(crate) ty: ClaimType,
     pub(crate) dependencies: Vec<String>,
     pub(crate) admitted: bool,
 }
@@ -242,11 +343,8 @@ pub struct Claim {
 impl Claim {
     pub fn from_tuple(data: (String, Vec<String>, bool)) -> Self {
         let (name, dependencies, admitted) = data;
-        let ty = ClaimType::guess_from_name(&name);
-
         Self {
             name,
-            ty,
             dependencies,
             admitted,
         }
@@ -254,10 +352,6 @@ impl Claim {
 
     pub fn name(&self) -> &str {
         &self.name
-    }
-
-    pub fn ty(&self) -> ClaimType {
-        self.ty
     }
 
     pub fn dependencies(&self) -> &[String] {

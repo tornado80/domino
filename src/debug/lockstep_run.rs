@@ -65,7 +65,7 @@ use crate::writers::easycrypt::invariant::state_relation_op_name;
 use crate::debug::render;
 use crate::debug::smtout::SmtOut;
 use crate::project::Project;
-use crate::theorem::ClaimType;
+use crate::theorem::{BuiltInFact, ClaimKind};
 use crate::transforms::theorem_transforms::{
     DebugTransform, EasyCryptTransform, EquivalenceTransform,
 };
@@ -408,12 +408,12 @@ pub(crate) fn rank(v: &Verdict) -> usize {
 /// `equal-output`, the conjunction of the `equal-aborts` and `same-output` goals, and
 /// `invariant`, both with no dependency.
 pub(crate) fn easycrypt_queries(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<ClaimQuery> {
-    let goal_of = |name: &str| {
-        eqctx
-            .claim_assumptions_and_goal(&no_dependency_claim(name, ClaimType::Lemma), oracle)
-            .1
+    let goal_of = |fact: BuiltInFact| {
+        let claim = no_dependency_claim(fact.name(), ClaimKind::BuiltIn(fact));
+        eqctx.claim_assumptions_and_goal(&claim, oracle).1
     };
-    let equal_output: SmtExpr = SmtAnd(vec![goal_of("equal-aborts"), goal_of("same-output")]).into();
+    let equal_output: SmtExpr =
+        SmtAnd(vec![goal_of(BuiltInFact::EqualAborts), goal_of(BuiltInFact::SameOutput)]).into();
     vec![
         ClaimQuery::without_dependencies(EQUAL_OUTPUT, SmtAssert(SmtNot(equal_output)).into()),
         easycrypt_invariant_query(eqctx, oracle),
@@ -448,7 +448,7 @@ fn lockstep_terms(
 /// prove them (ADR 0014). Its parts are the state relations but `invariant`.
 pub(crate) fn easycrypt_invariant_query(eqctx: &EquivalenceContext<'_>, oracle: &str) -> ClaimQuery {
     let goal = eqctx
-        .claim_assumptions_and_goal(&no_dependency_claim("invariant", ClaimType::Invariant), oracle)
+        .claim_assumptions_and_goal(&no_dependency_claim("invariant", ClaimKind::StateRelation), oracle)
         .1;
     ClaimQuery {
         parts: state_relation_parts(eqctx, oracle, state_relation_op_name),
@@ -748,7 +748,7 @@ where
         all: all_claims,
         label: claim_label,
         ..
-    } = claim_set.resolve(&eqctx, eq, oracle)?;
+    } = claim_set.resolve(&eqctx, oracle)?;
     let goal_blocks: Vec<GoalBlock> = claim_queries
         .iter()
         .map(|claim| GoalBlock {
@@ -1549,7 +1549,7 @@ mod tests {
             &eqctx,
             "StuckOrder",
             ClaimSet::NoDependencies
-                .resolve(&eqctx, eq, "StuckOrder")
+                .resolve(&eqctx, "StuckOrder")
                 .unwrap()
                 .queries,
         );
@@ -1872,7 +1872,11 @@ mod tests {
         let deps = {
             let th = project.get_theorem(theorem).unwrap();
             let eq = equivalence_of(th, 0).unwrap();
-            eq.proof_tree_by_oracle_name(oracle)
+            eq.trees()
+                .iter()
+                .find(|(name, _tree)| name == oracle)
+                .expect("the oracle has a proof tree")
+                .1
                 .iter()
                 .find(|c| c.name() == claim)
                 .map(|c| c.dependencies().len())
