@@ -663,6 +663,12 @@ struct StateLookup {
     fields: HashMap<String, (EcExpr, EcType)>,
     /// `{left|right}.<Inst>` -> that instance, for a whole-package equality.
     instances: HashMap<String, InstanceEntry>,
+    /// `{l|r}.<theorem constant>` -> the first parameter field of that side bound to the
+    /// constant, and its type. An invariant file may declare a constant with the name of a
+    /// theorem constant and pin it with `(assert (= (<theorem-consts-<T>-<X>> <<theorem-consts>>)
+    /// <X>))`; in a state relation the constant reads this field (`params_inv` makes every
+    /// field bound to the constant equal).
+    theorem_consts: HashMap<String, (EcExpr, EcType)>,
 }
 
 struct InstanceEntry {
@@ -787,6 +793,14 @@ fn build_side_record<'a>(
                 format!("{binder}.{}.{name}", inst.name()),
                 (projection.clone(), ec_ty.clone()),
             );
+            if let Some(ParamValue::TheoremConst(c)) =
+                param_assignment(inst, name).and_then(resolve_expr_value)
+            {
+                lookup
+                    .theorem_consts
+                    .entry(format!("{op_param}.{c}"))
+                    .or_insert_with(|| (projection.clone(), ec_ty.clone()));
+            }
             param_decls.push((field, ec_ty));
             param_fields.push(ParamField {
                 instance: inst.name().to_string(),
@@ -991,6 +1005,25 @@ fn eq_expr(lhs: EcExpr, rhs: EcExpr) -> EcExpr {
 /// for no conjuncts. Conjuncts keep their order.
 fn fold_and(exprs: Vec<EcExpr>) -> EcExpr {
     EcExpr::right_chain(EcBinop::And, exprs).unwrap_or(EcExpr::Bool(true))
+}
+
+/// Whether `s` is `(assert (= (<theorem-consts-<T>-<X>> <<theorem-consts>>) <X>))`, which pins
+/// a declared constant to the theorem constant of its name.
+fn is_const_pin(s: &Sexp) -> bool {
+    let Sexp::List(items) = s else { return false };
+    let [_, Sexp::List(eq)] = &items[..] else {
+        return false;
+    };
+    let [Sexp::Atom(op), Sexp::List(getter), Sexp::Atom(name)] = &eq[..] else {
+        return false;
+    };
+    let [Sexp::Atom(head), Sexp::Atom(arg)] = &getter[..] else {
+        return false;
+    };
+    op == "="
+        && arg == "<<theorem-consts>>"
+        && head.starts_with("<theorem-consts-")
+        && head.ends_with(&format!("-{name}>"))
 }
 
 // --- `params_inv` (§3.3) ----------------------------------------------
@@ -1596,7 +1629,45 @@ impl<'a> TCtx<'a> {
         if let Some(result) = translate_bits_literal_atom(a) {
             return Ok(result);
         }
+        if let Some(found) = self.theorem_const(a, locals) {
+            return Ok(found);
+        }
         Err(self.unrecognised(whole))
+    }
+
+    /// `(<theorem-consts-<T>-<X>> <<theorem-consts>>)`, theorem constant `<X>`, read as
+    /// [`Self::theorem_const`] reads it.
+    fn theorem_const_getter(
+        &self,
+        head: &str,
+        rest: &[Sexp],
+        locals: &Locals,
+    ) -> Option<(EcExpr, EcType)> {
+        if !head.starts_with("<theorem-consts-")
+            || !matches!(rest, [Sexp::Atom(arg)] if arg == "<<theorem-consts>>")
+        {
+            return None;
+        }
+        let name = self
+            .theorem_consts
+            .iter()
+            .map(|(n, _)| n)
+            .filter(|n| head.ends_with(&format!("-{n}>")))
+            .max_by_key(|n| n.len())?;
+        self.theorem_const(name, locals)
+    }
+
+    /// Theorem constant `a` in a state relation: the parameter field of the left state (or,
+    /// when only the right state is bound, of the right one) that is bound to it.
+    fn theorem_const(&self, a: &str, locals: &Locals) -> Option<(EcExpr, EcType)> {
+        if !self.theorem_consts.iter().any(|(n, _)| n == a) {
+            return None;
+        }
+        ["l", "r"]
+            .into_iter()
+            .filter(|side| locals.values().any(|(canonical, _)| canonical == side))
+            .find_map(|side| self.lookup.theorem_consts.get(&format!("{side}.{a}")))
+            .cloned()
     }
 
     fn translate_list(
@@ -1631,6 +1702,9 @@ impl<'a> TCtx<'a> {
             _ => {}
         }
 
+        if let Some(found) = self.theorem_const_getter(&head, rest, locals) {
+            return Ok(found);
+        }
         if let Some(fname) = head
             .strip_prefix("<<func-")
             .and_then(|s| s.strip_suffix(">>"))
@@ -2271,10 +2345,23 @@ impl SmtParser<InvariantError> for InvariantParserState<'_> {
         Ok(Sexp::List(content))
     }
 
-    fn handle_sexp(&mut self, _parsed: Sexp) -> Result<(), InvariantError> {
+    fn handle_sexp(&mut self, parsed: Sexp) -> Result<(), InvariantError> {
         // Every real form is handled (and self.items/self.ops updated)
-        // directly in the overrides below; a bare top-level s-expression
-        // (the trait's own catch-all) carries no meaning here.
+        // directly in the overrides below. A `declare-const` needs nothing: a
+        // constant with the name of a theorem constant reads a parameter field
+        // ([`StateLookup::theorem_consts`]). An `assert` that pins such a constant
+        // says nothing more; any other `assert` is an assumption that is not
+        // translated, and the export says so.
+        if let Sexp::List(items) = &parsed {
+            if matches!(items.first(), Some(Sexp::Atom(h)) if h == "assert")
+                && !is_const_pin(&parsed)
+            {
+                self.skipped.push(format!(
+                    "`{parsed}` in `{}` (an assumption, not translated)",
+                    self.file
+                ));
+            }
+        }
         Ok(())
     }
 

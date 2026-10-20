@@ -245,18 +245,23 @@ fn build_import_adapter(
         // and this file's own export-proc call site.
         let callee_proc = Names::new().mangle(NameKind::Proc, &edge.sig().name)?;
 
+        // the result's local: `r`, or `r<k>` when an argument is named `r` (yao's `EVAL`)
+        let result = std::iter::once("r".to_string())
+            .chain((0..).map(|k| format!("r{k}")))
+            .find(|r| !args.iter().any(|(a, _)| a == r))
+            .expect("an unbounded sequence has a free name");
         procs.push(EcProc {
             name: proc_name,
             args,
             ret: ret_option_ty.clone(),
-            locals: vec![("r".to_string(), ret_option_ty, None)],
+            locals: vec![(result.clone(), ret_option_ty, None)],
             body: EcBlock(vec![EcStmt::Call {
-                lhs: Some(EcLvalue::Var("r".to_string())),
+                lhs: Some(EcLvalue::Var(result.clone())),
                 module: inst_module_name[edge.to()].clone(),
                 proc: callee_proc,
                 args: arg_exprs,
             }]),
-            ret_expr: Some(EcExpr::Var("r".to_string())),
+            ret_expr: Some(EcExpr::Var(result)),
         });
     }
 

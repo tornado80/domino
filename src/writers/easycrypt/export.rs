@@ -849,6 +849,20 @@ mod tests {
         assert!(!report.is_empty(), "diagnostic should render");
     }
 
+    /// Yao's `HybridSecurity` declares the theorem constants `h`, `d` and `hplusone` in an
+    /// assertion file, pins them with `(assert (= (<theorem-consts-…-h> <<theorem-consts>>) h))`,
+    /// and reads them in its invariants. Each reads the parameter field bound to the constant.
+    /// An import of `Sim` has an argument `r`, so the adapter's result local is `r0`.
+    #[test]
+    fn yao_hybrid_security_reads_declared_theorem_constants_as_parameter_fields() {
+        let exported = export("example-projects/yao", "HybridSecurity").unwrap();
+        let inv = &exported.files[Path::new("Eq_HybridIdeal_HybridReal1_Invariants.ec")];
+        assert!(inv.contains("i < l.`l_pkg_LayeredLev_h"), "{inv}");
+        let comp = &exported.files[Path::new("Comp_HybridIdeal.ec")];
+        assert!(comp.contains("var r0 : unit option;"), "{comp}");
+        assert_tree_compiles(&exported, "yao-hybrid");
+    }
+
     fn export_observed(
         dir: &str,
         theorem_name: &str,
