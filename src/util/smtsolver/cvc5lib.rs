@@ -10,8 +10,8 @@
 //!
 //! ## `!Send` / `!Sync`
 //!
-//! `cvc5::Solver`, `cvc5::InputParser` and `cvc5::Command` are `!Send` and `!Sync` (they hold `Rc`
-//! and raw pointers). [`Cvc5LibSolver`] is therefore `!Send` / `!Sync` as well and cannot be used
+//! `cvc5::Solver`, `cvc5::InputParser` and `cvc5::Command` are `!Send` and `!Sync` (they hold raw
+//! pointers). [`Cvc5LibSolver`] is therefore `!Send` / `!Sync` as well and cannot be used
 //! under rayon. `domino prove` keeps the process backend; this backend is for the single-threaded
 //! `domino debug` driver.
 //!
@@ -30,6 +30,12 @@ use crate::util::smtparser::parse_model;
 use crate::writers::smt::exprs::SmtExpr;
 
 use super::{Error, Result, SmtSolver, SmtSolverBackend, SmtSolverResponse};
+
+impl From<cvc5::Error> for Error {
+    fn from(err: cvc5::Error) -> Self {
+        Error::SolverError(err.message().to_string())
+    }
+}
 
 /// Backend handing out [`Cvc5LibSolver`] instances.
 pub struct Cvc5LibBackend {
@@ -71,10 +77,10 @@ type Transcript = Box<dyn std::io::Write + Send + Sync + 'static>;
 
 /// An in-process cvc5 solver driven through the incremental-string parser.
 pub struct Cvc5LibSolver {
-    // `parser` borrows a `TermManager` that we `Box::leak` in `new`. There is exactly one solver
-    // per `debug` run (a handful per test), so the leak is bounded and keeps the lifetime out of
-    // the public type. `symbol_manager` is an `Rc` handle onto the same table the parser mutates.
-    parser: InputParser<'static>,
+    // An `InputParser` exclusively borrows both of these, so it cannot live in this struct; `feed`
+    // builds a short-lived one per call. Declared symbols and the logic live in `symbol_manager`
+    // and assertions in `solver`, so nothing is lost between parsers.
+    solver: Solver,
     symbol_manager: SymbolManager,
     transcript: Option<Transcript>,
     /// SMT-LIB text that has been written but does not yet form a whole top-level command.
@@ -92,31 +98,31 @@ impl Cvc5LibSolver {
         tlimit_per_ms: Option<u64>,
         transcript: Option<Transcript>,
     ) -> Result<Self> {
-        let tm: &'static TermManager = Box::leak(Box::new(TermManager::new()));
-        let mut solver = Solver::new(tm);
+        // cvc5 >= 1.4 reference counts its objects, so `solver` and `symbol_manager` keep the term
+        // manager alive after `tm` is dropped here.
+        let tm = TermManager::new();
+        let mut solver = Solver::new(&tm);
 
         // These are all legal before `(set-logic ...)`. We deliberately do *not* set the logic
         // here: the emitted SMT starts with `(set-logic ALL)` and cvc5 rejects setting it twice.
         solver.set_option(
             "produce-models",
             if produce_models { "true" } else { "false" },
-        );
-        solver.set_option("incremental", "true");
+        )?;
+        solver.set_option("incremental", "true")?;
         // Match the process backend's `--arrays-exp` (see `super::process::Communicator::new_cvc5`).
         // Games with tables/arrays emit constant arrays (`(as const (Array ...))`, kind STORE_ALL);
         // without this cvc5 rejects them with "Cannot handle assertion with term of kind STORE_ALL".
         // Must be set before `(set-logic ...)`, which is the first thing the emitted SMT does.
-        solver.set_option("arrays-exp", "true");
+        solver.set_option("arrays-exp", "true")?;
         if let Some(ms) = tlimit_per_ms {
-            solver.set_option("tlimit-per", &ms.to_string());
+            solver.set_option("tlimit-per", &ms.to_string())?;
         }
 
-        let sm = SymbolManager::new(tm);
-        let parser = InputParser::new(solver, Some(&sm));
-        let symbol_manager = parser.get_symbol_manager();
+        let symbol_manager = SymbolManager::new(&tm);
 
         Ok(Self {
-            parser,
+            solver,
             symbol_manager,
             transcript,
             pending: String::new(),
@@ -129,7 +135,7 @@ impl Cvc5LibSolver {
     ///
     /// ## Why this is not just `append_inc_str_input` + drain
     ///
-    /// In this cvc5 version the incremental parser is single-shot: once `next_command` has drained
+    /// In cvc5 1.3 the incremental parser was single-shot: once `next_command` has drained
     /// the appended input and returned `Ok(None)`, a further `append_inc_str_input` fails with
     /// *"Must call setIncrementalStringInput prior to using appendIncrementalStringInput"*. The
     /// working pattern is to call `set_inc_str_input` again before every append — but that also
@@ -148,26 +154,20 @@ impl Cvc5LibSolver {
         }
         let chunk: String = self.pending.drain(..complete).collect();
 
-        self.parser
-            .set_inc_str_input(InputLanguage::SmtLib26, "domino-debug");
-        self.parser.append_inc_str_input(&chunk);
+        let mut parser = InputParser::new(&mut self.solver, &mut self.symbol_manager);
+        parser.set_inc_str_input(InputLanguage::SmtLib26, "domino-debug")?;
+        parser.append_inc_str_input(&chunk)?;
 
-        loop {
-            match self.parser.next_command() {
-                Ok(Some(cmd)) => {
-                    let out = cmd.invoke(self.parser.get_solver(), &mut self.symbol_manager);
-                    let trimmed = out.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    if trimmed.starts_with("(error \"") {
-                        return Err(Error::SolverError(out));
-                    }
-                    self.last_output = out;
-                }
-                Ok(None) => break,
-                Err(msg) => return Err(Error::SolverError(msg)),
+        while let Some(cmd) = parser.next_command()? {
+            let out = parser.invoke(&cmd)?;
+            let trimmed = out.trim();
+            if trimmed.is_empty() {
+                continue;
             }
+            if trimmed.starts_with("(error \"") {
+                return Err(Error::SolverError(out));
+            }
+            self.last_output = out;
         }
 
         // Don't let inter-command whitespace pile up in the buffer forever.

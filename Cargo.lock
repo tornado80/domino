@@ -124,7 +124,7 @@ dependencies = [
  "bitflags 2.13.2",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools",
  "proc-macro2",
  "quote",
  "regex",
@@ -363,18 +363,18 @@ dependencies = [
 
 [[package]]
 name = "cvc5"
-version = "0.4.1"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f22c3a938d869888a5c8dddfe0a3a0fd363bd52856a3f247188406aafbece18a"
+checksum = "f8e648879be7ca252763a818c3e3027454c9fa39a28f2b4540e9276b959226de"
 dependencies = [
  "cvc5-sys",
 ]
 
 [[package]]
 name = "cvc5-sys"
-version = "0.4.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50657ca9a4b442cee3d233eb9b7df6cb60eb7d5a9145eb4d98a9ffd7e55995bd"
+checksum = "70e364f844a43ecc209f5ae0866ee5c0c335319900fc7c441adb178b0ce867bc"
 dependencies = [
  "bindgen",
  "cc",
@@ -867,15 +867,6 @@ name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
 dependencies = [
  "either",
 ]
@@ -1549,7 +1540,7 @@ dependencies = [
  "expectrl",
  "indicatif",
  "indicatif-log-bridge",
- "itertools 0.10.5",
+ "itertools",
  "libc",
  "log",
  "miette",
