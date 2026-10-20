@@ -35,6 +35,7 @@ use super::game::{compute_game_files_observed, GameFile};
 use super::interfaces::{build_interfaces_file, discover_compositions, InterfacesOutput};
 use super::invariant::{composition_items, has_side_invariants, SideCtx, StateOwners};
 use super::package::compute_package_variants_observed;
+use super::pkginv::{build_pkg_inv_files, PkgInvFiles};
 use super::progress::{ExportEvent, ExportObserver, ExportPhase, NopExportObserver, PhaseScope};
 use super::proof::{compute_equivalence_files_observed, state_files, EquivalenceFiles};
 use super::render::render_file;
@@ -83,6 +84,25 @@ pub struct SideInvReport {
     pub oracle_files: Vec<(String, String)>,
 }
 
+/// The package lemma files of one package variant (story 76): what a package-invariant job
+/// proves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PkgInvReport {
+    /// The package's name in Domino.
+    pub package: String,
+    /// The variant's module name.
+    pub variant: String,
+    /// `PkgInv_<V>.ec`, which joins the lemmas: a translation file.
+    pub join_file: String,
+    /// `(oracle, PkgInv_<V>_<O>.ec)` for each oracle of the package, in its order: the
+    /// package-invariant lemmas, walked along the package tree.
+    pub oracle_files: Vec<(String, String)>,
+    /// `(oracle, Frame_<V>_<O>.ec)` for each oracle, when the package has imports.
+    pub frame_files: Vec<(String, String)>,
+    /// `PkgInv_<V>_init.ec`, the start lemma.
+    pub start_file: String,
+}
+
 /// A game hop this exporter does not translate, named with its kind and the
 /// pair of game instances it connects (`GameHop::{left,right}_game_instance_name`)
 /// — `domino easycrypt`'s report lists these so a missing `Eq_*.ec` (stories
@@ -128,6 +148,9 @@ pub struct ExportedTheorem {
     pub equivalences: Vec<EquivalenceReport>,
     /// One entry per composition with side invariants, first-discovery order (story 69).
     pub side_invariants: Vec<SideInvReport>,
+    /// One entry per package variant whose package has package invariants, discovery order
+    /// (story 76).
+    pub package_invariants: Vec<PkgInvReport>,
 }
 
 /// The kind + reason for a hop this exporter skips, or `None` for
@@ -245,6 +268,7 @@ pub fn export_theorem_observed(
         &mut game_files,
     )?;
 
+    let pkg_files = build_pkg_inv_files(&theorem, project, &package_variants, &owners)?;
     let package_variant_names = package_variants.iter().map(|v| v.name.clone()).collect();
     let game_names = game_files.iter().map(|g| g.name.clone()).collect();
 
@@ -314,8 +338,31 @@ pub fn export_theorem_observed(
         })
         .collect();
 
+    let package_invariants = pkg_files
+        .iter()
+        .map(|f| {
+            let pairs = |files: &[super::pkginv::PkgInvLemmaFile]| {
+                files
+                    .iter()
+                    .map(|o| (o.oracle.clone(), o.file_name.clone()))
+                    .collect()
+            };
+            PkgInvReport {
+                package: f.package.clone(),
+                variant: f.variant.clone(),
+                join_file: f.join_file.clone(),
+                oracle_files: pairs(&f.oracles),
+                frame_files: pairs(&f.frames),
+                start_file: f.start.file_name.clone(),
+            }
+        })
+        .collect();
+
     // after every other file: a lemma file may collide with any of them
-    insert_lemma_files(&mut files, &lemma_files(&equivalence_files, &side_files))?;
+    insert_lemma_files(
+        &mut files,
+        &lemma_files(&equivalence_files, &side_files, &pkg_files),
+    )?;
 
     if let Some(file) = files
         .keys()
@@ -336,6 +383,7 @@ pub fn export_theorem_observed(
         randomness_mapping_oracles,
         equivalences,
         side_invariants,
+        package_invariants,
     })
 }
 
@@ -398,10 +446,12 @@ struct LemmaFile<'a> {
 }
 
 /// Every lemma file of the export, in order: the oracle lemmas of each equivalence, then the
-/// side-invariant lemmas of each composition and the file that joins them.
+/// side-invariant lemmas of each composition and the file that joins them, then the package
+/// lemmas of each package variant and the file that joins them.
 fn lemma_files<'a>(
     equivalence_files: &'a [EquivalenceFiles],
     side_files: &'a [SideInvFiles],
+    pkg_files: &'a [PkgInvFiles],
 ) -> Vec<LemmaFile<'a>> {
     let mut out = Vec::new();
     for ef in equivalence_files {
@@ -431,6 +481,33 @@ fn lemma_files<'a>(
                 "the side-invariant lemmas of composition `{}`",
                 f.composition
             ),
+            file: &f.join,
+        });
+    }
+    for f in pkg_files {
+        for (kind, lemmas) in [
+            ("package-invariant lemma", &f.oracles),
+            ("frame lemma", &f.frames),
+        ] {
+            for o in lemmas {
+                out.push(LemmaFile {
+                    name: &o.file_name,
+                    owner: format!(
+                        "the {kind} of oracle `{}` of package variant `{}`",
+                        o.oracle, f.variant
+                    ),
+                    file: &o.file,
+                });
+            }
+        }
+        out.push(LemmaFile {
+            name: &f.start.file_name,
+            owner: format!("the start lemma of package variant `{}`", f.variant),
+            file: &f.start.file,
+        });
+        out.push(LemmaFile {
+            name: &f.join_file,
+            owner: format!("the package lemmas of package variant `{}`", f.variant),
             file: &f.join,
         });
     }

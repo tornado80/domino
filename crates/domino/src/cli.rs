@@ -178,7 +178,7 @@ pub(crate) struct EcProve {
     /// `SideInv_<C>_<O>.ec` of one of its compositions are missing (a file with admits counts):
     /// prove them first with `--side-inv <C>`. Without `--proofstep` and `--side-inv`, the
     /// side-invariant jobs of the compositions run in parallel with the equivalences (story 69).
-    #[clap(long, conflicts_with = "side_inv")]
+    #[clap(long, conflicts_with_all = ["side_inv", "pkg_inv"])]
     pub(crate) proofstep: Option<usize>,
     /// Only the side-invariant job of this composition (story 69): the `hoare` lemma
     /// `SideInv_<C>_<O>.ec` of each of its oracles, proved along the side tree of one-sided
@@ -186,6 +186,13 @@ pub(crate) struct EcProve {
     /// `progress/SideInv_<C>/`.
     #[clap(long)]
     pub(crate) side_inv: Option<String>,
+    /// Only the package-invariant job of this package (story 76), for each variant of it that
+    /// the theorem uses: the package-invariant lemma `PkgInv_<V>_<O>.ec` of each oracle, proved
+    /// along the package tree with each import call an open call, then the frame lemmas
+    /// `Frame_<V>_<O>.ec` and the start lemma `PkgInv_<V>_init.ec`. Its records and pages are
+    /// under `session/PkgInv_<V>/` and `progress/PkgInv_<V>/`.
+    #[clap(long, conflicts_with = "side_inv")]
+    pub(crate) pkg_inv: Option<String>,
     /// Only this exported oracle; the rest keep what their session records hold, or
     /// `+ proc; inline. admit.`. Each oracle has its own lock, so jobs on different oracles of
     /// one equivalence can run at once.

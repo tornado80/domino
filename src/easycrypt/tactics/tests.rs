@@ -264,6 +264,8 @@ fn oracle_with(admits: Vec<Admit>) -> OracleTactics {
 fn equivalence_with(oracles: Vec<OracleTactics>) -> EquivalenceTactics {
     EquivalenceTactics {
         composition: None,
+        package: None,
+        fixed: vec![],
         proofstep: 0,
         proof_file: "Eq_A_B.ec".into(),
         left: "A".into(),
@@ -457,6 +459,7 @@ fn an_interrupted_report_names_what_was_sealed() {
         theorem: "T".into(),
         equivalences: vec![eq],
         side_invariants: vec![],
+        package_invariants: vec![],
         unproved_side_invariants: vec![],
         elapsed: Duration::from_secs(4),
         swallowed_interrupt: None,
@@ -802,6 +805,7 @@ fn a_swallowed_interrupt_is_warned_about_once_per_run() {
         theorem: "T".into(),
         equivalences: vec![],
         side_invariants: vec![],
+        package_invariants: vec![],
         unproved_side_invariants: vec![],
         elapsed: Duration::ZERO,
         swallowed_interrupt: watch.warning(),
@@ -866,6 +870,7 @@ fn an_unanswered_interrupt_is_its_own_line_in_the_report() {
         theorem: "T".into(),
         equivalences: vec![eq],
         side_invariants: vec![],
+        package_invariants: vec![],
         unproved_side_invariants: vec![],
         elapsed: Duration::ZERO,
         swallowed_interrupt: None,
@@ -2340,7 +2345,7 @@ wait $ec
     }
 
     /// An EasyCrypt that logs `start` and `end` lines to `log` around the real one.
-    fn logging_easycrypt(dir: &Path, log: &Path) -> PathBuf {
+    pub(super) fn logging_easycrypt(dir: &Path, log: &Path) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let real = crate::easycrypt::session::locate_binary();
         let script = dir.join("logging-easycrypt");
@@ -4183,7 +4188,7 @@ fn seven_key_pairs_give_no_split() {
 
 /// Story 69: the side-invariant jobs, and what `--proofstep`, `--side-inv` and a whole-theorem
 /// run start.
-mod side_invariant_jobs {
+pub(super) mod side_invariant_jobs {
     use std::path::PathBuf;
 
     use super::*;
@@ -4520,7 +4525,7 @@ mod side_invariant_jobs {
     }
 
     /// An EasyCrypt that logs `start` and `end` lines to `log` around the real one.
-    fn logging_easycrypt(dir: &Path, log: &Path) -> PathBuf {
+    pub(super) fn logging_easycrypt(dir: &Path, log: &Path) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let script = dir.join("logging-easycrypt");
         std::fs::write(
@@ -4582,5 +4587,211 @@ mod side_invariant_jobs {
         assert_eq!(most, 2, "the two jobs at the same time");
         assert_eq!(result.equivalences.len(), 1, "{}", result.render());
         assert_eq!(result.side_invariants.len(), 1, "{}", result.render());
+    }
+}
+
+/// Story 76: the package-invariant job.
+mod package_invariant_jobs {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::easycrypt::job::is_oracle_file;
+    use crate::easycrypt::session::{json_binary_configured, locate_binary};
+    use crate::project::{DirectoryFiles, DirectoryProject};
+    use crate::writers::easycrypt::export::{export_theorem, write_files, ExportedTheorem};
+
+    /// Package `Ctr` with three oracles; `Step` and `Get` call the import `Get` of `Src`.
+    const IMPORTS: &str = "test-projects/test-package-invariant-imports";
+
+    fn project() -> DirectoryProject<'static> {
+        let dir = PathBuf::from(IMPORTS);
+        let files = Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
+        DirectoryProject::load(dir, files).unwrap()
+    }
+
+    fn exported(project: &DirectoryProject<'static>) -> ExportedTheorem {
+        export_theorem(project.get_theorem("Proof").unwrap(), project).unwrap()
+    }
+
+    #[test]
+    fn pkg_inv_plans_one_job_for_each_variant_of_the_package_and_nothing_else() {
+        let exported = exported(&project());
+        let out = tempfile::tempdir().unwrap();
+        let options = TacticsOptions {
+            pkg_inv: Some("Ctr".into()),
+            ..TacticsOptions::default()
+        };
+        let plan = plan_run(&exported, out.path(), &options).unwrap();
+        assert!(plan.equivalences.is_empty() && plan.side.is_empty());
+        let [(report, package)] = plan.packages.as_slice() else {
+            panic!("one package-invariant job");
+        };
+        assert_eq!(package, "Ctr");
+        // its records, trees and locks are under `PkgInv_<V>`
+        assert_eq!(report.proof_file, "PkgInv_Ctr.ec");
+        let oracles: Vec<&str> = report
+            .oracle_files
+            .iter()
+            .map(|(o, _)| o.as_str())
+            .collect();
+        assert_eq!(oracles, ["Step", "Peek", "Get"]);
+        // a package without invariants, and one the theorem does not use
+        for package in ["Src", "Nothing"] {
+            let options = TacticsOptions {
+                pkg_inv: Some(package.into()),
+                ..TacticsOptions::default()
+            };
+            assert!(matches!(
+                plan_run(&exported, out.path(), &options),
+                Err(TacticsError::NoPackageInvariants { package: p }) if p == package
+            ));
+        }
+    }
+
+    #[test]
+    fn the_package_lemma_files_belong_to_the_package_invariant_job() {
+        let exported = exported(&project());
+        for owned in [
+            "PkgInv_Ctr_Step.ec",
+            "Frame_Ctr_Step.ec",
+            "PkgInv_Ctr_init.ec",
+        ] {
+            assert!(is_oracle_file(&exported, Path::new(owned)), "{owned}");
+        }
+        assert!(!is_oracle_file(&exported, Path::new("PkgInv_Ctr.ec")));
+    }
+
+    fn compiles(dir: &Path, file: &str) -> Result<(), String> {
+        let output = std::process::Command::new(locate_binary())
+            .args(["compile", "-no-eco", "-I"])
+            .arg(dir)
+            .arg(file)
+            .current_dir(dir)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).into_owned())
+        }
+    }
+
+    /// `prove --pkg-inv Ctr`: each oracle's lemma along its package tree, each import call an
+    /// open call, then the frame lemmas and the start lemma; no admit, and the join compiles.
+    #[test]
+    fn pkg_inv_proves_the_package_lemmas_and_the_join_compiles() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let project = project();
+        let exported = exported(&project);
+        let out = tempfile::tempdir().unwrap();
+        write_files(out.path(), &exported.files).unwrap();
+        // translation alone, every proof admitted, compiles
+        compiles(out.path(), "PkgInv_Ctr.ec").unwrap();
+        let options = TacticsOptions {
+            pkg_inv: Some("Ctr".into()),
+            ..TacticsOptions::default()
+        };
+        let theorem = project.get_theorem("Proof").unwrap();
+        let result = run_tactics(
+            theorem,
+            &project,
+            &exported,
+            out.path(),
+            &crate::util::smtsolver::process::IncrementalCvc5Backend,
+            &options,
+        )
+        .unwrap();
+        let [job] = result.package_invariants.as_slice() else {
+            panic!("one package-invariant job: {}", result.render());
+        };
+        assert_eq!(job.package.as_deref(), Some("Ctr"));
+        assert_eq!(job.oracles.len(), 3, "{}", result.render());
+        assert_eq!(result.admit_count(), 0, "{}", result.render());
+        let fixed: Vec<&str> = job.fixed.iter().map(|f| f.file.as_str()).collect();
+        assert_eq!(
+            fixed,
+            [
+                "Frame_Ctr_Step.ec",
+                "Frame_Ctr_Peek.ec",
+                "Frame_Ctr_Get.ec",
+                "PkgInv_Ctr_init.ec"
+            ]
+        );
+        assert!(result
+            .render()
+            .contains("tactics for PkgInv_Ctr.ec (package invariants of Ctr)"));
+        let step = std::fs::read_to_string(out.path().join("PkgInv_Ctr_Step.ec")).unwrap();
+        assert!(step.contains(driver::OPEN_CALL), "{step}");
+        assert!(!step.contains("admit"), "{step}");
+        for f in [
+            "session/PkgInv_Ctr/Step.record.json",
+            "session/PkgInv_Ctr/Step.tree.json",
+            "!debug!/PkgInv_Ctr/Step/index.html",
+        ] {
+            assert!(out.path().join(f).is_file(), "{f}");
+        }
+        compiles(out.path(), "PkgInv_Ctr.ec").unwrap();
+    }
+
+    /// Two oracles of one package are proved at the same time with `--jobs 2`, each in an
+    /// EasyCrypt of its own.
+    #[test]
+    fn two_oracles_of_one_package_are_proved_in_parallel_with_two_jobs() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let project = project();
+        let exported = exported(&project);
+        let out = tempfile::tempdir().unwrap();
+        write_files(out.path(), &exported.files).unwrap();
+        let fake = tempfile::tempdir().unwrap();
+        let log = fake.path().join("log");
+        TEST_EASYCRYPT.with(|t| {
+            *t.borrow_mut() = Some(FakeEasyCrypt {
+                binary: super::side_invariant_jobs::logging_easycrypt(fake.path(), &log),
+                grace: Duration::from_millis(1_500),
+                resend: Duration::from_millis(250),
+            })
+        });
+        let options = TacticsOptions {
+            pkg_inv: Some("Ctr".into()),
+            jobs: 2,
+            // the walk of each oracle takes long enough for the two to overlap
+            quick_close: false,
+            ..TacticsOptions::default()
+        };
+        let theorem = project.get_theorem("Proof").unwrap();
+        let result = run_tactics(
+            theorem,
+            &project,
+            &exported,
+            out.path(),
+            &crate::util::smtsolver::process::IncrementalCvc5Backend,
+            &options,
+        )
+        .unwrap();
+        TEST_EASYCRYPT.with(|t| t.borrow_mut().take());
+        let began = Instant::now();
+        while began.elapsed() < Duration::from_secs(10) {
+            let text = std::fs::read_to_string(&log).unwrap();
+            if text.matches("start").count() == text.matches("end").count() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let (mut running, mut most) = (0i32, 0i32);
+        for line in std::fs::read_to_string(&log).unwrap().lines() {
+            running += if line == "start" { 1 } else { -1 };
+            most = most.max(running);
+        }
+        assert_eq!(most, 2, "two oracles at the same time");
+        let [job] = result.package_invariants.as_slice() else {
+            panic!("one package-invariant job: {}", result.render());
+        };
+        assert_eq!(job.oracles.len(), 3, "{}", result.render());
     }
 }

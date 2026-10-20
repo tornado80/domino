@@ -144,16 +144,7 @@ where
     let inlined = listing_of(&open, oracle)?;
     let claims = ctx.invariant_claims();
     let queries = ctx.tree_claim_queries(oracle);
-    let names: Vec<String> = claims.iter().map(|c| c.name().to_string()).collect();
-    let fingerprint = Fingerprint::of_side(
-        &theorem_dbg.instances[0],
-        format!(
-            "{package} {:?} -> {:?}\n{}",
-            inlined.args, inlined.return_type, inlined.listing.text
-        ),
-        &ctx.emit_invariant(),
-        &names,
-    );
+    let fingerprint = fingerprint_of(&ctx, package, &theorem_dbg, &inlined);
 
     execute_one_sided(
         OneSidedInputs {
@@ -181,6 +172,44 @@ where
         observer,
         stop,
         started,
+    )
+}
+
+/// The fingerprint of the package tree of `oracle` of package `package` (ADR 0008), as
+/// [`run_pkg_command`] saves it in `trace.json`, without running one-sided execution: a job that
+/// resumes an oracle from its saved package tree compares the two (story 76).
+pub fn pkg_fingerprint<P: Project>(
+    project: &P,
+    package: &str,
+    oracle: &str,
+) -> Result<Fingerprint, DebugError> {
+    let pkg = package_of(project, package)?;
+    let ctx = PackageInvariantContext::new(pkg, project).map_err(Box::new)?;
+    let open = ctx.open_theorem();
+    let (theorem_dbg, _) = DebugTransform.transform_theorem(&open)?;
+    let inlined = listing_of(&open, oracle)?;
+    Ok(fingerprint_of(&ctx, package, &theorem_dbg, &inlined))
+}
+
+fn fingerprint_of(
+    ctx: &PackageInvariantContext<'_>,
+    package: &str,
+    theorem_dbg: &Theorem<'_>,
+    inlined: &InlinedOracle,
+) -> Fingerprint {
+    let names: Vec<String> = ctx
+        .invariant_claims()
+        .iter()
+        .map(|c| c.name().to_string())
+        .collect();
+    Fingerprint::of_side(
+        &theorem_dbg.instances[0],
+        format!(
+            "{package} {:?} -> {:?}\n{}",
+            inlined.args, inlined.return_type, inlined.listing.text
+        ),
+        &ctx.emit_invariant(),
+        &names,
     )
 }
 

@@ -601,6 +601,12 @@ impl StateOwners {
             .expect("every package of the theorem has a variant")
     }
 
+    /// The first instance of `package` in the theorem: every instance has the same invariants
+    /// and state.
+    pub(crate) fn instance_of(&self, package: &str) -> &PackageInstance {
+        &self.owner(package).inst
+    }
+
     /// The file that declares `package`'s state type, without `.ec`: `Pkg_<variant>`.
     pub(crate) fn file_of(&self, package: &str) -> String {
         format!("Pkg_{}", self.owner(package).variant)
@@ -922,11 +928,13 @@ fn expr_references_var(e: &EcExpr, name: &str) -> bool {
         }
         // `={glob M}` names a module, never one of this translator's own
         // local variables.
-        EcExpr::GlobEq(_) => false,
+        EcExpr::GlobEq(_) | EcExpr::Glob(_) => false,
         EcExpr::OracleEquiv { inv, assumed, .. } => {
             expr_references_var(inv, name) || assumed.iter().any(|a| expr_references_var(a, name))
         }
-        EcExpr::OracleHoare { inv, .. } => expr_references_var(inv, name),
+        EcExpr::OracleHoare { pre, post, .. } => {
+            expr_references_var(pre, name) || expr_references_var(post, name)
+        }
     }
 }
 
@@ -1298,6 +1306,27 @@ pub fn side_invariant_ops(
         });
     }
     Ok(ops)
+}
+
+/// The template operators `PkgInv_<N>_of_<P>` of the package invariants of `inst`'s package
+/// `P` (story 76), in file order, each standing for the claim `package-invariant!<N>!<P>!` that
+/// the package tree checks (symbolic-execution story 29). Empty for a package without
+/// invariants. Reads the invariant files for the names.
+pub fn package_invariant_ops(
+    project: &impl Project,
+    inst: &PackageInstance,
+) -> Result<Vec<InvariantOp>, InvariantError> {
+    if inst.pkg.invariants.is_empty() {
+        return Ok(Vec::new());
+    }
+    let package = inst.pkg.name.as_str();
+    Ok(side::package_invariant_names(project, inst)?
+        .into_iter()
+        .map(|invariant| InvariantOp {
+            claim: Some(package_invariant_claim_name(&invariant, None, package)),
+            ..InvariantOp::plain(pkg_inv_template_name(&invariant, package))
+        })
+        .collect())
 }
 
 /// Mangles an SMT-LIB definition name into a legal (partial) EasyCrypt

@@ -389,6 +389,16 @@ fn render_section(s: &EcSection) -> String {
     for d in &s.declares {
         lines.push(render_declare_module(d));
     }
+    for a in &s.assumptions {
+        lines.push(match a {
+            SectionAssumption::Op { name, ty } => {
+                format!("declare op {name} : {}.", render_type(ty))
+            }
+            SectionAssumption::Axiom { name, formula } => {
+                format!("declare axiom {name} : {}.", render_expr(formula))
+            }
+        });
+    }
     for item in &s.items {
         lines.push(render_item(item));
     }
@@ -440,6 +450,16 @@ fn render_lemma_binder(b: &LemmaBinder) -> String {
         LemmaBinder::Memory(name) => format!("&{name}"),
         LemmaBinder::Typed { name, ty } => format!("({name} : {})", render_type(ty)),
     }
+}
+
+/// The lines of a proof, one under another.
+#[cfg(test)]
+pub(super) fn render_proof_lines(lines: &[ProofLine]) -> String {
+    lines
+        .iter()
+        .map(render_proof_line)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn render_proof_line(line: &ProofLine) -> String {
@@ -542,13 +562,13 @@ fn render_oracle_equiv(left: &str, right: &str, inv: &EcExpr, assumed: &[EcExpr]
 ///       ==> side_inv_C
 ///         …]
 /// ```
-fn render_oracle_hoare(proc: &str, inv: &EcExpr) -> String {
+fn render_oracle_hoare(proc: &str, pre: &EcExpr, post: &EcExpr) -> String {
     const PAD: &str = "      ";
     const POST: &str = "==> ";
     format!(
         "hoare[{proc} :\n{PAD}{}\n{PAD}{POST}{}]",
-        render_invariant_block(inv, PAD.len()),
-        render_invariant_block(inv, PAD.len() + POST.len()),
+        render_invariant_block(pre, PAD.len()),
+        render_invariant_block(post, PAD.len() + POST.len()),
     )
 }
 
@@ -588,6 +608,7 @@ pub fn render_type(t: &EcType) -> String {
         EcType::Fmap(k, v) => format!("({}, {}) fmap", render_type_atom(k), render_type_atom(v)),
         EcType::Distr(inner) => format!("{} distr", render_type_atom(inner)),
         EcType::Fun(a, b) => format!("{} -> {}", render_type_atom(a), render_type(b)),
+        EcType::Glob(module) => format!("(glob {module})"),
     }
 }
 
@@ -746,6 +767,7 @@ fn prec(e: &EcExpr) -> i8 {
         | EcExpr::MapEmpty
         | EcExpr::Pr { .. }
         | EcExpr::GlobEq(_)
+        | EcExpr::Glob(_)
         | EcExpr::OracleEquiv { .. }
         | EcExpr::OracleHoare { .. } => ATOM_PREC,
         EcExpr::App { args, .. } if args.is_empty() => ATOM_PREC,
@@ -944,12 +966,13 @@ fn render_expr_inner(e: &EcExpr) -> String {
             )
         }
         EcExpr::GlobEq(module) => format!("={{glob {module}}}"),
+        EcExpr::Glob(module) => format!("(glob {module})"),
         EcExpr::OracleEquiv {
             left,
             right,
             inv,
             assumed,
         } => render_oracle_equiv(left, right, inv, assumed),
-        EcExpr::OracleHoare { proc, inv } => render_oracle_hoare(proc, inv),
+        EcExpr::OracleHoare { proc, pre, post } => render_oracle_hoare(proc, pre, post),
     }
 }

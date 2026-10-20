@@ -267,6 +267,9 @@ pub struct OracleStats {
     pub time: TimeByRole,
 }
 
+/// The open call at the head of a package procedure's program ([`Prover::open_calls`]).
+pub(super) const OPEN_CALL: &str = "seq 1 : (#pre); 1: by call (_: true); auto.";
+
 /// What the walked lemma is a judgement about (story 69).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Judgement {
@@ -275,6 +278,10 @@ pub(super) enum Judgement {
     /// A side-invariant lemma, `hoare[…]`, walked along the side tree of one-sided execution
     /// (symbolic-execution story 25). Its tactics name no side, and its leaf has one memory.
     Hoare,
+    /// A package-invariant lemma (story 76), `hoare[…]` about one oracle of a package over any
+    /// imports, walked along the package tree (symbolic-execution story 29). As [`Self::Hoare`],
+    /// but its program has no router, and each import call is an open call (ADR 0017).
+    Package,
 }
 
 impl Judgement {
@@ -283,8 +290,13 @@ impl Judgement {
     fn side(self, side: u8) -> String {
         match self {
             Judgement::Equiv => format!("{{{side}}}"),
-            Judgement::Hoare => String::new(),
+            Judgement::Hoare | Judgement::Package => String::new(),
         }
+    }
+
+    /// Whether the judgement is about one program: a `hoare` judgement.
+    fn one_program(self) -> bool {
+        self != Judgement::Equiv
     }
 }
 
@@ -543,7 +555,7 @@ fn part_view(
 
 /// The lemmas every `smt(…)` of the last fallbacks is given (§3.5 step 5); the project's own come
 /// from `ssp.toml`.
-const BASE_SMT_LEMMAS: [&str; 5] = ["get_setE", "mem_set", "remE", "mem_rem", "emptyE"];
+pub(super) const BASE_SMT_LEMMAS: [&str; 5] = ["get_setE", "mem_set", "remE", "mem_rem", "emptyE"];
 
 /// The length of the fallback sequence: `smt()` and `smt(hints)`, each also with the premise
 /// unfolded.
@@ -1256,6 +1268,7 @@ impl Prover<'_> {
         match self.judgement {
             Judgement::Equiv => "equal-output+invariant",
             Judgement::Hoare => "side-invariant",
+            Judgement::Package => "package-invariant",
         }
     }
 
@@ -1457,7 +1470,7 @@ impl Prover<'_> {
                         && pair_view(p, &Part::Invariant) == DominoView::Fails
                 }
                 // a side tree's terminal: every package and game invariant claim fails
-                Judgement::Hoare => {
+                Judgement::Hoare | Judgement::Package => {
                     !p.claims.is_empty()
                         && p.claims
                             .iter()
@@ -1477,6 +1490,9 @@ impl Prover<'_> {
             .resume
             .as_ref()
             .is_some_and(|r| r.skip_quick_close.contains(&idx));
+        if self.judgement == Judgement::Package {
+            self.open_calls()?;
+        }
         if node.kind != NodeKind::TerminalPair && !resumed_past && self.quick_close_program()? {
             return Ok(());
         }
@@ -1524,7 +1540,7 @@ impl Prover<'_> {
     /// `sp k l.` for the assignments at the head of the front goal's programs, `k`/`l` counted
     /// from EasyCrypt's JSON. `false` if the front goal is not a program goal or `sp` failed.
     fn sp_front(&mut self) -> R<bool> {
-        if self.judgement == Judgement::Hoare {
+        if self.judgement.one_program() {
             let Some(k) = self
                 .front()
                 .and_then(goals::program)
@@ -1568,7 +1584,7 @@ impl Prover<'_> {
         if !self.sp_front()? {
             return Ok(false);
         }
-        if self.judgement == Judgement::Hoare {
+        if self.judgement.one_program() {
             return match kind {
                 NodeKind::Split => self.split_hoare(idx),
                 NodeKind::SamplingIndependent => self.sampling_hoare(idx),
@@ -1774,6 +1790,29 @@ impl Prover<'_> {
         Ok(false)
     }
 
+    /// The import calls at the head of a package procedure's program, each after the
+    /// assignments before it: open calls (ADR 0017). Each is `sp k.` and then
+    /// `seq 1 : (#pre); 1: by call (_: true); auto.`: nothing is known about the import, so the
+    /// call keeps the precondition (the import cannot write the package's state) and tells
+    /// nothing about its result, which the guard after it splits on. Stops at the first head that
+    /// is not a call, or when EasyCrypt refuses; the node's step then fails as it would.
+    fn open_calls(&mut self) -> R<()> {
+        loop {
+            let Some((k, call)) = self.front().and_then(goals::program).map(|p| {
+                let (k, head) = goals::head_after_assignments(&p.stmt);
+                (k, head.is_some_and(|i| i.kind == "call"))
+            }) else {
+                return Ok(());
+            };
+            if !call || (k > 0 && !self.send(&format!("sp {k}."), Want::Full)?) {
+                return Ok(());
+            }
+            if !self.send(OPEN_CALL, Want::Full)? {
+                return Ok(());
+            }
+        }
+    }
+
     /// After a tactic that turned one goal (count `before`) into two program goals.
     fn two_programs_in_front(&self, before: usize) -> bool {
         self.count() == before + 1
@@ -1955,7 +1994,7 @@ impl Prover<'_> {
         let before = self.count();
         let sentence = match self.judgement {
             Judgement::Equiv => format!("auto => &1 &2 {premise}."),
-            Judgement::Hoare => format!("auto => &hr {premise} /=."),
+            Judgement::Hoare | Judgement::Package => format!("auto => &hr {premise} /=."),
         };
         let reduced = self.attempt(&[&sentence], Want::Head, |p| {
             p.count() < before || (p.count() == before && p.front().is_some_and(goals::is_ambient))
@@ -2219,8 +2258,11 @@ impl Prover<'_> {
             return Ok(());
         }
         self.mismatches = self.front().map(align).unwrap_or_default();
-        if self.judgement == Judgement::Hoare {
-            return self.hoare_prelude();
+        match self.judgement {
+            Judgement::Hoare => return self.hoare_prelude(),
+            // a package procedure has no router: the package tree begins at its first statement
+            Judgement::Package => return self.prove_node(0),
+            Judgement::Equiv => {}
         }
         // the router prelude, by construction: `sp`, `if`, then the condition, the guarded body
         // (where lockstep begins) and the case where both sides already aborted
@@ -2301,7 +2343,7 @@ impl Prover<'_> {
         if !self.sp_front()? {
             return admit_mismatch(self);
         }
-        if self.judgement == Judgement::Hoare {
+        if self.judgement.one_program() {
             // no trial procedure for one program: its leaf, or an admit
             let empty = self
                 .front()

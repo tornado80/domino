@@ -284,6 +284,37 @@ pub(crate) fn side_setup<'t>(
     setup_of(inst, inst)
 }
 
+/// What the package-invariant job of package `package` needs (story 76): the oracles of the
+/// package, with their EasyCrypt names, and as both instances a game instance of the theorem
+/// with the package in it, from which the job reads only the package.
+pub(crate) fn pkg_setup<'t>(
+    theorem_ec: &'t Theorem<'_>,
+    package: &str,
+) -> Result<EquivalenceSetup<'t>, CheckError> {
+    let inst = theorem_ec
+        .instances
+        .iter()
+        .find(|i| i.game().pkgs.iter().any(|p| p.pkg.name == package))
+        .expect("an exported package variant has a game instance in its theorem");
+    let pkg = &inst
+        .game()
+        .pkgs
+        .iter()
+        .find(|p| p.pkg.name == package)
+        .expect("checked above")
+        .pkg;
+    let mut setup = setup_of(inst, inst)?;
+    setup.oracles = pkg
+        .oracles
+        .iter()
+        .map(|o| {
+            let name = &o.sig.name;
+            Ok((name.clone(), Names::new().mangle(NameKind::Proc, name)?))
+        })
+        .collect::<Result<_, CheckError>>()?;
+    Ok(setup)
+}
+
 fn setup_of<'t>(
     left_inst: &'t crate::theorem::GameInstance,
     right_inst: &'t crate::theorem::GameInstance,

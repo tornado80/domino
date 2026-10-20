@@ -262,6 +262,8 @@ pub enum EcExpr {
         memory: String,
         event: Box<EcExpr>,
     },
+    /// `glob M`: the state of module `M`, as an argument of an operator (story 76).
+    Glob(String),
     /// `={glob M}` — the two runs' own copies of `M`'s glob state are equal.
     /// Only produced inside this epic's own `byequiv` induction-start
     /// precondition (story 13, [`ProofLine::ByequivPrecondition`]); a
@@ -278,12 +280,14 @@ pub enum EcExpr {
         inv: Box<EcExpr>,
         assumed: Vec<EcExpr>,
     },
-    /// `hoare[proc : inv ==> inv]`: the statement of a side-invariant lemma (story 69), `proc`
-    /// the procedure's qualified path. Renders over several lines, `inv` laid out as in the
-    /// `call`.
+    /// `hoare[proc : pre ==> post]`: the statement of a side-invariant lemma (story 69, `pre`
+    /// and `post` the same invariant) or of a package lemma (story 76). `proc` is the
+    /// procedure's qualified path. Renders over several lines, `pre` and `post` laid out as in
+    /// the `call`.
     OracleHoare {
         proc: String,
-        inv: Box<EcExpr>,
+        pre: Box<EcExpr>,
+        post: Box<EcExpr>,
     },
 }
 
@@ -366,13 +370,26 @@ pub enum EcType {
     Fmap(Box<EcType>, Box<EcType>),
     Distr(Box<EcType>),
     Fun(Box<EcType>, Box<EcType>),
+    /// `glob M`: the type of the state of module `M` (story 76).
+    Glob(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EcSection {
     pub declares: Vec<DeclareModule>,
+    /// `declare op` and `declare axiom` after the modules (story 76).
+    pub assumptions: Vec<SectionAssumption>,
     pub items: Vec<EcItem>,
     pub lemmas: Vec<EcLemma>,
+}
+
+/// What a section assumes about its declared modules (story 76).
+#[derive(Debug, Clone, PartialEq)]
+pub enum SectionAssumption {
+    /// `declare op J : (glob I) -> bool.`
+    Op { name: String, ty: EcType },
+    /// `declare axiom I_f : <formula>.`
+    Axiom { name: String, formula: EcExpr },
 }
 
 /// `declare module A <: Adv { -Game_H.G, -Game_H.Pkg_Inst_KX }.`

@@ -883,6 +883,7 @@ fn easycrypt_prove<P: project::Project + Sync>(
             announce_stages: p.progress != ProgressMode::None,
             jobs: p.jobs,
             side_inv: p.side_inv.clone(),
+            pkg_inv: p.pkg_inv.clone(),
             resume: match p.resume {
                 ResumeArg::Trust => ResumeMode::Trust,
                 ResumeArg::Replay => ResumeMode::Replay,

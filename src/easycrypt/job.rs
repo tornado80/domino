@@ -68,8 +68,10 @@ pub fn create_if_absent(path: &Path, text: &str) -> std::io::Result<bool> {
 
 /// Whether `rel` is a lemma file of `exported` that a job owns: an oracle lemma file (story 68),
 /// which the proof job of the oracle owns, or a side-invariant lemma file `SideInv_<C>_<O>.ec`
-/// (story 69), which the side-invariant job of the composition owns. Every other file, the
-/// equivalence's glue `Eq_<L>_<R>.ec`, its `Eq_<L>_<R>_Invariants.ec` and `SideInv_<C>.ec`
+/// (story 69), which the side-invariant job of the composition owns, or a package lemma file
+/// `PkgInv_<V>_<O>.ec`, `Frame_<V>_<O>.ec` or `PkgInv_<V>_init.ec` (story 76), which the
+/// package-invariant job of the package owns. Every other file, the equivalence's glue
+/// `Eq_<L>_<R>.ec`, its `Eq_<L>_<R>_Invariants.ec`, `SideInv_<C>.ec` and `PkgInv_<V>.ec`
 /// included, is a translation file, created when missing.
 pub fn is_oracle_file(exported: &ExportedTheorem, rel: &Path) -> bool {
     exported
@@ -82,7 +84,17 @@ pub fn is_oracle_file(exported: &ExportedTheorem, rel: &Path) -> bool {
                 .iter()
                 .flat_map(|s| s.oracle_files.iter()),
         )
+        .chain(
+            exported
+                .package_invariants
+                .iter()
+                .flat_map(|p| p.oracle_files.iter().chain(&p.frame_files)),
+        )
         .any(|(_, file)| Path::new(file) == rel)
+        || exported
+            .package_invariants
+            .iter()
+            .any(|p| Path::new(&p.start_file) == rel)
 }
 
 /// Creates, in `theorem_out`, every file of `exported` that translation owns (all but the

@@ -101,7 +101,8 @@ fn composition_files(
                     "{}.Game_{}.{proc_name}",
                     layout.comp_theory, layout.comp_mangled
                 ),
-                inv: Box::new(inv.clone()),
+                pre: Box::new(inv.clone()),
+                post: Box::new(inv.clone()),
             },
             proof: vec![
                 tactic(None, format!("(* {proc_name} *)")),

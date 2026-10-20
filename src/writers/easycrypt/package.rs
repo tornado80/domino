@@ -181,6 +181,8 @@ pub(super) fn assign_names(
 #[derive(Debug, Clone)]
 pub struct PackageVariant {
     pub name: String,
+    /// The Domino package the variant specialises.
+    pub package: String,
     pub file: EcFile,
 }
 
@@ -215,7 +217,11 @@ pub fn compute_package_variants_observed(
             .clone();
         scope.item(&format!("Pkg_{name}"));
         let file = render_variant(comp, *idx, &name, key)?;
-        out.push(PackageVariant { name, file });
+        out.push(PackageVariant {
+            name,
+            package: key.pkg_name.clone(),
+            file,
+        });
     }
     scope.finish();
     Ok(out)

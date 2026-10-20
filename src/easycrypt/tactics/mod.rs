@@ -51,9 +51,17 @@
 //! `--proofstep` stops when the side-invariant files of its compositions are missing, and a
 //! whole-theorem run proves the compositions in parallel with the equivalences.
 //!
+//! **Package-invariant jobs** (story 76, ADR 0016): `prove --pkg-inv P` proves the package
+//! lemmas of each variant `<V>` of package `P`. The package-invariant lemma of each oracle,
+//! `PkgInv_<V>_<O>.ec`, is walked as a side-invariant lemma is, along the package tree
+//! (symbolic-execution story 29), with no router and each import call an open call
+//! (`call (_: true)`, ADR 0017). Its records, saved trees and locks are under `PkgInv_<V>`.
+//! Then the frame lemmas and the start lemma are checked ([`fixed`]).
+//!
 //! `domino easycrypt export` never gets here.
 
 mod driver;
+mod fixed;
 mod goals;
 mod live;
 mod oracles;
@@ -71,6 +79,7 @@ use thiserror::Error;
 use crate::debug::lockstep::LockstepOutcome;
 use crate::debug::lockstep_fingerprint::{describe_part, Fingerprint};
 use crate::debug::lockstep_run::{run_lockstep_command, LockstepDebugOptions, LockstepSummary};
+use crate::debug::pkg_run::{pkg_debug_dir, pkg_fingerprint, run_pkg_command};
 use crate::debug::progress::eprintln_above_bars;
 use crate::debug::side_run::{run_side_command, side_debug_dir, side_fingerprint};
 use crate::gamehops::equivalence::smtrewrite::without_custom_smt_warning;
@@ -79,8 +88,12 @@ use crate::theorem::Theorem;
 use crate::transforms::theorem_transforms::EasyCryptTransform;
 use crate::transforms::TheoremTransform;
 use crate::util::smtsolver::SmtSolverBackend;
-use crate::writers::easycrypt::export::{EquivalenceReport, ExportedTheorem, SideInvReport};
-use crate::writers::easycrypt::invariant::{invariant_ops, leaf_part_ops, side_invariant_ops};
+use crate::writers::easycrypt::export::{
+    EquivalenceReport, ExportedTheorem, PkgInvReport, SideInvReport,
+};
+use crate::writers::easycrypt::invariant::{
+    invariant_ops, leaf_part_ops, package_invariant_ops, side_invariant_ops,
+};
 use crate::writers::easycrypt::lower::inline_oracle_ec;
 use crate::writers::easycrypt::progress::{ExportObserver, NopExportObserver};
 use crate::writers::easycrypt::EcExportError;
@@ -122,6 +135,9 @@ pub enum TacticsError {
     Io(#[from] std::io::Error),
     #[error("invalid `ssp.toml`: {0}")]
     Config(String),
+    /// `prove --pkg-inv P` for a package without package invariants, or none of the theorem.
+    #[error("package `{package}` has no package lemmas in this theorem: the theorem does not use it, or it has no package invariant")]
+    NoPackageInvariants { package: String },
     /// `prove --side-inv C` for a composition without side invariants, or none of the theorem.
     #[error("composition `{composition}` has no side invariants in this theorem: no package of it has a package invariant, and it has no game invariant")]
     NoSideInvariants { composition: String },
@@ -165,6 +181,9 @@ pub struct TacticsOptions {
     /// `prove --side-inv C` (story 69): only the side-invariant job of composition `C` (its
     /// Domino name), and no equivalence.
     pub side_inv: Option<String>,
+    /// `prove --pkg-inv P` (story 76): only the package-invariant job of package `P` (its Domino
+    /// name), for each of its variants, and nothing else.
+    pub pkg_inv: Option<String>,
 }
 
 /// How a proof job resumes an oracle the session record holds as `interrupted` (`--resume`,
@@ -340,6 +359,7 @@ impl Default for TacticsOptions {
             announce_stages: false,
             jobs: 1,
             side_inv: None,
+            pkg_inv: None,
         }
     }
 }
@@ -394,14 +414,25 @@ pub(super) enum JobKind<'a> {
     /// The side-invariant lemmas of a composition (its Domino name), along side trees of
     /// one-sided execution.
     SideInvariants(&'a str),
+    /// The package lemmas of one variant of a package (its Domino name, story 76): the
+    /// package-invariant lemmas along package trees, then the frame lemmas and the start lemma.
+    PackageInvariants(&'a str),
 }
 
 impl JobKind<'_> {
     /// The composition of a side-invariant job.
     fn composition(self) -> Option<String> {
         match self {
-            JobKind::Equivalence => None,
             JobKind::SideInvariants(c) => Some(c.to_string()),
+            JobKind::Equivalence | JobKind::PackageInvariants(_) => None,
+        }
+    }
+
+    /// The package of a package-invariant job.
+    fn package(self) -> Option<String> {
+        match self {
+            JobKind::PackageInvariants(p) => Some(p.to_string()),
+            JobKind::Equivalence | JobKind::SideInvariants(_) => None,
         }
     }
 
@@ -410,6 +441,7 @@ impl JobKind<'_> {
         match self {
             JobKind::Equivalence => debug_dir(out_dir, &eq.left_name, &eq.right_name, oracle),
             JobKind::SideInvariants(c) => side_debug_dir(out_dir, c, oracle),
+            JobKind::PackageInvariants(p) => pkg_debug_dir(out_dir, p, oracle),
         }
     }
 
@@ -424,6 +456,7 @@ impl JobKind<'_> {
         match self {
             JobKind::Equivalence => Fingerprint::of(project, theorem, eq.proofstep, oracle),
             JobKind::SideInvariants(c) => side_fingerprint(project, &theorem.name, c, oracle),
+            JobKind::PackageInvariants(p) => pkg_fingerprint(project, p, oracle),
         }
     }
 }
@@ -581,6 +614,10 @@ pub struct EquivalenceTactics {
     /// The side-invariant job of this composition (story 69), by its Domino name; `None` for
     /// the proof job of an equivalence.
     pub composition: Option<String>,
+    /// The package-invariant job of this package (story 76), by its Domino name.
+    pub package: Option<String>,
+    /// The frame lemmas and the start lemma a package-invariant job checked, in file order.
+    pub fixed: Vec<FixedLemma>,
     pub proofstep: usize,
     pub proof_file: String,
     pub left: String,
@@ -605,12 +642,25 @@ pub struct EquivalenceTactics {
     pub writes: usize,
 }
 
+/// A lemma whose proof a package-invariant job does not walk (story 76): a frame lemma, which
+/// translation proves, or the start lemma.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixedLemma {
+    /// The lemma file.
+    pub file: String,
+    /// `None`: EasyCrypt accepted the proof. Otherwise the proof is `admit.`, and this says
+    /// why, with the claims the lemma stands for.
+    pub admitted: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TheoremTactics {
     pub theorem: String,
     pub equivalences: Vec<EquivalenceTactics>,
     /// The side-invariant jobs (story 69), in the order of the export.
     pub side_invariants: Vec<EquivalenceTactics>,
+    /// The package-invariant jobs (story 76), one for each variant, in the order of the export.
+    pub package_invariants: Vec<EquivalenceTactics>,
     /// The compositions whose side-invariant files a `--proofstep` job did not find on disk;
     /// their equivalences were not started (story 69 §3.3).
     pub unproved_side_invariants: Vec<String>,
@@ -621,19 +671,28 @@ pub struct TheoremTactics {
 
 impl TheoremTactics {
     /// Every oracle of the theorem, in the order of the report: the equivalences', then the
-    /// side-invariant jobs'.
+    /// side-invariant jobs', then the package-invariant jobs'.
     pub fn oracles(&self) -> impl Iterator<Item = &OracleTactics> {
         self.jobs().flat_map(|e| e.oracles.iter())
     }
 
-    /// Every job of the run: the equivalences, then the side-invariant jobs.
+    /// Every job of the run: the equivalences, the side-invariant jobs, then the
+    /// package-invariant jobs.
     pub fn jobs(&self) -> impl Iterator<Item = &EquivalenceTactics> {
-        self.equivalences.iter().chain(&self.side_invariants)
+        self.equivalences
+            .iter()
+            .chain(&self.side_invariants)
+            .chain(&self.package_invariants)
     }
 
-    /// The `admit` count over all translated oracles.
+    /// The `admit` count over all translated oracles, and the admitted frame and start lemmas.
     pub fn admit_count(&self) -> usize {
-        self.oracles().map(|o| o.stats.admits.len()).sum()
+        let fixed = self
+            .jobs()
+            .flat_map(|e| &e.fixed)
+            .filter(|f| f.admitted.is_some())
+            .count();
+        self.oracles().map(|o| o.stats.admits.len()).sum::<usize>() + fixed
     }
 
     /// Where Ctrl-C stopped the run, if it did (story 34): the run ended there.
@@ -727,7 +786,16 @@ where
             .iter()
             .map(|(eq, c)| (eq, JobKind::SideInvariants(c.as_str())))
     };
-    let (equivalences, side_invariants) = if plan.equivalences.is_empty() {
+    let packages = || {
+        plan.packages
+            .iter()
+            .map(|(eq, p)| (eq, JobKind::PackageInvariants(p.as_str())))
+    };
+    // `--pkg-inv`: the jobs of the package's variants, and nothing else
+    let package_invariants = run_jobs(&ctx, packages(), progress)?;
+    let (equivalences, side_invariants) = if !plan.packages.is_empty() {
+        (Vec::new(), Vec::new())
+    } else if plan.equivalences.is_empty() {
         (Vec::new(), run_jobs(&ctx, sides(), progress)?)
     } else if plan.side.is_empty() {
         (run_jobs(&ctx, eqs(), progress)?, Vec::new())
@@ -743,6 +811,7 @@ where
         theorem: theorem.name.clone(),
         equivalences,
         side_invariants,
+        package_invariants,
         unproved_side_invariants: plan.unproved,
         elapsed: started.elapsed(),
         swallowed_interrupt: swallow.warning(),
@@ -758,8 +827,12 @@ struct RunPlan {
     side: Vec<(EquivalenceReport, String)>,
     /// The compositions whose side-invariant files a `--proofstep` run did not find.
     unproved: Vec<String>,
+    /// The package-invariant jobs that run (`--pkg-inv` only): the job's report
+    /// ([`pkg_job_report`]) and the package's Domino name.
+    packages: Vec<(EquivalenceReport, String)>,
 }
 
+/// - `--pkg-inv P`: the package-invariant job of each variant of `P` only.
 /// - `--side-inv C`: the side-invariant job of `C` only.
 /// - `--proofstep P`: the proof job of `P`, if the side-invariant files of its compositions are
 ///   on disk (a file with admits counts); else a warning, and nothing runs.
@@ -771,6 +844,25 @@ fn plan_run(
     options: &TacticsOptions,
 ) -> Result<RunPlan, TacticsError> {
     let side_job = |s: &SideInvReport| (side_job_report(s), s.composition.clone());
+    if let Some(package) = &options.pkg_inv {
+        let packages: Vec<(EquivalenceReport, String)> = exported
+            .package_invariants
+            .iter()
+            .filter(|p| &p.package == package)
+            .map(|p| (pkg_job_report(p), p.package.clone()))
+            .collect();
+        if packages.is_empty() {
+            return Err(TacticsError::NoPackageInvariants {
+                package: package.clone(),
+            });
+        }
+        return Ok(RunPlan {
+            equivalences: Vec::new(),
+            side: Vec::new(),
+            unproved: Vec::new(),
+            packages,
+        });
+    }
     if let Some(composition) = &options.side_inv {
         let side = exported
             .side_invariants
@@ -783,6 +875,7 @@ fn plan_run(
             equivalences: Vec::new(),
             side: vec![side_job(side)],
             unproved: Vec::new(),
+            packages: Vec::new(),
         });
     }
     let Some(proofstep) = options.proofstep else {
@@ -790,12 +883,14 @@ fn plan_run(
             equivalences: exported.equivalences.clone(),
             side: exported.side_invariants.iter().map(side_job).collect(),
             unproved: Vec::new(),
+            packages: Vec::new(),
         });
     };
     let mut plan = RunPlan {
         equivalences: Vec::new(),
         side: Vec::new(),
         unproved: Vec::new(),
+        packages: Vec::new(),
     };
     for eq in exported
         .equivalences
@@ -855,6 +950,27 @@ fn side_job_report(side: &SideInvReport) -> EquivalenceReport {
         oracle_files: side.oracle_files.clone(),
         oracle_count: side.oracle_files.len(),
         admit_count: side.oracle_files.len(),
+        oracle_set_mismatch: None,
+        state_relations: Vec::new(),
+        helpers: Vec::new(),
+        side_compositions: Vec::new(),
+    }
+}
+
+/// The report the package-invariant job of a package variant works from: its "proof file" is
+/// `PkgInv_<V>.ec`, so its records, trees, locks and pages are under `PkgInv_<V>`, and its
+/// oracle files are the package-invariant lemma files. The frame and start lemma files are in
+/// the export's [`PkgInvReport`].
+fn pkg_job_report(pkg: &PkgInvReport) -> EquivalenceReport {
+    EquivalenceReport {
+        proofstep: 0,
+        left_name: pkg.variant.clone(),
+        right_name: String::new(),
+        invariants_file: String::new(),
+        proof_file: pkg.join_file.clone(),
+        oracle_files: pkg.oracle_files.clone(),
+        oracle_count: pkg.oracle_files.len(),
+        admit_count: pkg.oracle_files.len(),
         oracle_set_mismatch: None,
         state_relations: Vec::new(),
         helpers: Vec::new(),
@@ -1470,6 +1586,17 @@ where
             lockstep_observer.as_mut(),
             options.stop.as_deref(),
         ),
+        JobKind::PackageInvariants(p) => run_pkg_command(
+            project,
+            &theorem.name,
+            p,
+            oracle,
+            &opts,
+            backend,
+            dir,
+            lockstep_observer.as_mut(),
+            options.stop.as_deref(),
+        ),
     };
     // its bars go before the summary line is printed
     drop(lockstep_observer);
@@ -1618,10 +1745,27 @@ where
             let ops = side_invariant_ops(project, left.game()).map_err(EcExportError::from)?;
             (ops.clone(), ops, Judgement::Hoare)
         }
+        // the templates `PkgInv_<N>_of_<P>`, each standing for its package claim
+        JobKind::PackageInvariants(p) => {
+            let inst = left
+                .game()
+                .pkgs
+                .iter()
+                .find(|i| i.pkg.name == p)
+                .expect("the setup's instance has the package");
+            let ops = package_invariant_ops(project, inst).map_err(EcExportError::from)?;
+            (ops.clone(), ops, Judgement::Package)
+        }
     };
     let unfold_ops: Vec<String> = unfold.into_iter().map(|op| op.name).collect();
-    let left_ir = inline_oracle_ec(setup.left_inst, oracle)?;
-    let right_ir = inline_oracle_ec(setup.right_inst, oracle)?;
+    // the listings the alignment check compares with: only an equivalence has a router to align
+    let listings = match kind {
+        JobKind::Equivalence => Some((
+            inline_oracle_ec(setup.left_inst, oracle)?,
+            inline_oracle_ec(setup.right_inst, oracle)?,
+        )),
+        JobKind::SideInvariants(_) | JobKind::PackageInvariants(_) => None,
+    };
     let began = Instant::now();
     let resumed_at = |kept: usize| {
         resume_from.as_ref().map(|from| ResumedAt {
@@ -1692,14 +1836,14 @@ where
         admit_smt: None,
     };
     let proved = prover.oracle(|goal: &Goal| {
-        if judgement == Judgement::Hoare {
-            // the side tree comes from the listing of the composition itself
+        // a side tree or package tree comes from the listing of the lemma's own program
+        let Some((left_ir, right_ir)) = &listings else {
             return Vec::new();
-        }
+        };
         match super::check::align_goal(
             goal,
-            (&left_ir, &setup.left_flag),
-            (&right_ir, &setup.right_flag),
+            (left_ir, &setup.left_flag),
+            (right_ir, &setup.right_flag),
         ) {
             None => vec!["`proc; inline.` did not give an equivS goal".to_string()],
             Some(sides) => sides
@@ -1779,15 +1923,22 @@ impl EquivalenceTactics {
     /// The report: `progress/Eq_<L>_<R>/report.txt`, and the same text on stdout.
     pub fn render(&self) -> String {
         let mut out = String::new();
-        match &self.composition {
-            Some(c) => {
+        match (&self.composition, &self.package) {
+            (Some(c), _) => {
                 let _ = writeln!(
                     out,
                     "tactics for {} (side invariants of {c})",
                     self.proof_file
                 );
             }
-            None => {
+            (None, Some(p)) => {
+                let _ = writeln!(
+                    out,
+                    "tactics for {} (package invariants of {p})",
+                    self.proof_file
+                );
+            }
+            (None, None) => {
                 let _ = writeln!(
                     out,
                     "tactics for {} (proofstep {}: {} ~ {})",
@@ -1881,8 +2032,23 @@ impl EquivalenceTactics {
             }
             (None, _) => {}
         }
+        for f in &self.fixed {
+            match &f.admitted {
+                None => {
+                    let _ = writeln!(out, "  {}: proved", f.file);
+                }
+                Some(why) => {
+                    let _ = writeln!(out, "  {}: admitted ({why})", f.file);
+                }
+            }
+        }
         let closed: usize = self.oracles.iter().map(|o| o.stats.closed).sum();
-        let admits: usize = self.oracles.iter().map(|o| o.stats.admits.len()).sum();
+        let admits: usize = self
+            .oracles
+            .iter()
+            .map(|o| o.stats.admits.len())
+            .sum::<usize>()
+            + self.fixed.iter().filter(|f| f.admitted.is_some()).count();
         let _ = writeln!(
             out,
             "{} oracles, {closed} goals closed, {admits} admits, {}",

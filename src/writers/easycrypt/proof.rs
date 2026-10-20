@@ -774,6 +774,7 @@ fn build_equivalence_file(
     }
     items.push(EcItem::Section(EcSection {
         declares: vec![declare],
+        assumptions: vec![],
         items: vec![],
         lemmas: vec![EcLemma {
             name: lemma_name,

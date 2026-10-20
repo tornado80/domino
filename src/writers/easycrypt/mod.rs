@@ -16,6 +16,7 @@ pub mod lower;
 pub mod names;
 pub mod overwrite;
 pub mod package;
+pub mod pkginv;
 pub mod progress;
 pub mod proof;
 pub mod render;

@@ -35,7 +35,7 @@ use crate::writers::easycrypt::progress::{
     ExportEvent, ExportObserver, ExportPhase, NopExportObserver,
 };
 
-use super::super::check::{equivalence_setup, side_setup, CheckError, EquivalenceSetup};
+use super::super::check::{equivalence_setup, pkg_setup, side_setup, CheckError, EquivalenceSetup};
 use super::super::job::{
     create_if_absent, ensure_translation_files, oracle_lock_path, oracle_record_path, progress_dir,
     LiveJob, LockError, OracleStatus, ProofLock, SessionRecord,
@@ -85,7 +85,11 @@ impl<P, B> EquivalenceJob<'_, P, B> {
 
     /// The exported text of `oracle`'s lemma file.
     fn oracle_source(&self, oracle: &str) -> Result<&str, CheckError> {
-        let file = self.oracle_file(oracle);
+        self.exported_file(self.oracle_file(oracle))
+    }
+
+    /// The exported text of `file`.
+    pub(super) fn exported_file(&self, file: &str) -> Result<&str, CheckError> {
         self.exported
             .files
             .get(Path::new(file))
@@ -112,6 +116,7 @@ where
     let setup = match job.kind {
         JobKind::Equivalence => equivalence_setup(job.theorem_ec, eq)?,
         JobKind::SideInvariants(c) => side_setup(job.theorem_ec, c)?,
+        JobKind::PackageInvariants(p) => pkg_setup(job.theorem_ec, p)?,
     };
     if let Some(wanted) = &options.oracle {
         if !setup.oracles.iter().any(|(name, _)| name == wanted) {
@@ -161,6 +166,7 @@ where
         ended_early: None,
         error: None,
         writes: 0,
+        fixed: Vec::new(),
         page: options.oracle.is_none().then(|| dir.join("index.html")),
         report: (options.oracle.is_none()).then(|| dir.join("report.txt")),
         started,
@@ -206,6 +212,18 @@ where
         board.interrupted = Some(Interrupted::NoOracleInFlight);
     }
     board.running_done();
+    // a package-invariant job: the lemmas no tree is walked for, once every oracle is done
+    if let Some(pkg) = job
+        .exported
+        .package_invariants
+        .iter()
+        .find(|p| p.join_file == eq.proof_file)
+        .filter(|_| matches!(job.kind, JobKind::PackageInvariants(_)))
+    {
+        if board.interrupted.is_none() {
+            board.fixed = super::fixed::prove_fixed_lemmas(job, pkg, &dir)?;
+        }
+    }
     let tactics = board.tactics(job);
     board.write(job, &dir);
     Ok(Some(tactics))
@@ -335,6 +353,8 @@ where
         started: Instant::now(),
         tactics: EquivalenceTactics {
             composition: job.kind.composition(),
+            package: job.kind.package(),
+            fixed: Vec::new(),
             proofstep: job.eq.proofstep,
             proof_file: file.to_string(),
             left: job.eq.left_name.clone(),
@@ -468,6 +488,8 @@ struct Board {
     /// The first error of a worker: no oracle is started after it, and the job returns it.
     error: Option<TacticsError>,
     writes: usize,
+    /// The frame and start lemmas of a package-invariant job, once checked (story 76).
+    fixed: Vec<super::FixedLemma>,
     /// The equivalence's page and report; `None` with `--oracle`, whose job writes only the
     /// oracle's own files.
     page: Option<PathBuf>,
@@ -582,6 +604,8 @@ impl Board {
         };
         EquivalenceTactics {
             composition: job.kind.composition(),
+            package: job.kind.package(),
+            fixed: self.fixed.clone(),
             proofstep: job.eq.proofstep,
             proof_file: job.eq.proof_file.clone(),
             left: job.eq.left_name.clone(),

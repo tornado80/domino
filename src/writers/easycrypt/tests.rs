@@ -1044,6 +1044,7 @@ fn kitchen_sink() -> EcFile {
                     module_type: "Proto".to_string(),
                     restrictions: vec!["Impl".to_string()],
                 }],
+                assumptions: vec![],
                 items: vec![EcItem::Axiom {
                     name: "section_axiom".to_string(),
                     formula: binop(EcBinop::Eq, int(1), int(1)),
