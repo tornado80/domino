@@ -1,0 +1,45 @@
+theorem Proof {
+    const n: Integer;
+    const g: fn Integer -> Integer;
+
+    instance left = C {
+        params {
+            n: n,
+            f: g,
+        }
+    }
+
+    instance right = C {
+        params {
+            n: n,
+            f: g,
+        }
+    }
+
+    gamehops {
+        equivalence left right {
+            invariant: [
+                ./theorem/invariant.smt2
+            ]
+
+            Inc: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    same-output:  [no-abort]
+                    invariant:    [no-abort]
+                }
+            }
+            Get: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    same-output:  [no-abort]
+                    invariant:    [no-abort]
+                }
+            }
+        }
+    }
+}

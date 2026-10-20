@@ -1,0 +1,19 @@
+package P {
+    params {
+        b: Integer,
+        f: fn Integer -> Integer,
+    }
+
+    state {
+        ctr: Integer,
+    }
+
+    oracle Inc() -> Integer {
+        ctr <- (ctr + b);
+        return ctr;
+    }
+
+    oracle Get() -> Integer {
+        return ctr;
+    }
+}

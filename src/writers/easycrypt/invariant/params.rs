@@ -9,8 +9,15 @@
 //! place that applies a template builds the params literal with [`pkg_params_lit`]: a value field
 //! reads a module variable, a function field is the operator of the theorem constant that the
 //! instance binds, so one template serves every variant.
+//!
+//! A game invariant reads the parameters too (story 79, ADR 0019 point 2): an instance of a
+//! composition with a game invariant gets the field `<C>_params_<I>` in `<C>_side` when its
+//! package has such a parameter, also without a package invariant ([`has_side_params`]). Then
+//! the package declares `<P>_pkgparams` too ([`params_record_packages`]).
 
-use crate::package::{Package, PackageInstance};
+use crate::expressions::{Expression, ExpressionKind};
+use crate::package::{Composition, Package, PackageInstance};
+use crate::theorem::Theorem;
 use crate::types::{Type, TypeKind};
 
 use super::super::ast::{EcExpr, EcType};
@@ -41,14 +48,38 @@ pub(crate) struct PkgParamField {
     pub var: Option<String>,
 }
 
-/// Whether `pkg` has the record `<P>_pkgparams`: it has a package invariant and a parameter
-/// that [`pkg_param_fields`] keeps.
+/// Whether the templates of `pkg` take `<P>_pkgparams`: it has a package invariant and a
+/// parameter that [`pkg_param_fields`] keeps.
 pub(crate) fn has_pkg_params(pkg: &Package) -> bool {
-    !pkg.invariants.is_empty()
-        && pkg
-            .params
-            .iter()
-            .any(|(name, ty, _)| is_field(pkg, name, ty))
+    !pkg.invariants.is_empty() && has_param_fields(pkg)
+}
+
+fn has_param_fields(pkg: &Package) -> bool {
+    pkg.params
+        .iter()
+        .any(|(name, ty, _)| is_field(pkg, name, ty))
+}
+
+/// Whether `<C>_side` of `comp` has the field `<C>_params_<I>` for `inst`: the templates of its
+/// package take the parameters ([`has_pkg_params`]), or `comp` has a game invariant and the
+/// package a parameter that [`param_fields`] keeps (story 79).
+pub(crate) fn has_side_params(comp: &Composition, inst: &PackageInstance) -> bool {
+    has_pkg_params(&inst.pkg) || (!comp.invariants.is_empty() && has_param_fields(&inst.pkg))
+}
+
+/// The packages of `theorem` that declare `<P>_pkgparams`: each package with an instance that
+/// [`has_side_params`] in a composition of the theorem.
+pub(crate) fn params_record_packages(theorem: &Theorem<'_>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for game in &theorem.instances {
+        let comp = game.game();
+        for inst in comp.pkgs.iter().filter(|i| has_side_params(comp, i)) {
+            if !out.contains(&inst.pkg.name) {
+                out.push(inst.pkg.name.clone());
+            }
+        }
+    }
+    out
 }
 
 /// Whether parameter `name` of `pkg` is a field of `<P>_pkgparams`: a function, or a value
@@ -57,16 +88,22 @@ fn is_field(pkg: &Package, name: &str, ty: &Type) -> bool {
     matches!(ty.kind(), TypeKind::Fn(..)) || package::param_needs_var(pkg, name, ty)
 }
 
-/// The fields of `<P>_pkgparams` for `inst`'s package, in declaration order. Empty when the
-/// package has no package invariant or no such parameter: then it has no record. The names
-/// are mangled after the state fields, as in the package's module.
+/// The fields of `<P>_pkgparams` that the templates of `inst`'s package take, in declaration
+/// order. Empty when the package has no package invariant or no such parameter.
 pub(crate) fn pkg_param_fields(
     inst: &PackageInstance,
 ) -> Result<Vec<PkgParamField>, EcExportError> {
-    let pkg = &inst.pkg;
-    if !has_pkg_params(pkg) {
+    if !has_pkg_params(&inst.pkg) {
         return Ok(Vec::new());
     }
+    param_fields(inst)
+}
+
+/// The fields of `<P>_pkgparams` for `inst`'s package, in declaration order: empty when the
+/// package has no such parameter. The names are mangled after the state fields, as in the
+/// package's module.
+pub(crate) fn param_fields(inst: &PackageInstance) -> Result<Vec<PkgParamField>, EcExportError> {
+    let pkg = &inst.pkg;
     let mut names = Names::new();
     for (name, _, _) in &pkg.state {
         names.mangle(NameKind::Var, name)?;
@@ -88,15 +125,40 @@ pub(crate) fn pkg_param_fields(
     Ok(fields)
 }
 
-/// The `<P>_pkgparams` literal of `inst`, or `None` when its package has no record. A value
-/// field is `read_var(<module variable>)`; a function field is `func_<c>` for the theorem
-/// constant `c` that `inst` binds the parameter to. Panics when a function parameter is not
-/// bound to a theorem constant: the only expressions of function type are identifiers.
+/// The `<P>_pkgparams` literal that the templates of `inst`'s package take, or `None` when
+/// they take none ([`has_pkg_params`]). See [`params_lit`].
 pub(crate) fn pkg_params_lit(
     inst: &PackageInstance,
     read_var: impl Fn(&str) -> EcExpr,
 ) -> Result<Option<EcExpr>, EcExportError> {
-    let fields = pkg_param_fields(inst)?;
+    if !has_pkg_params(&inst.pkg) {
+        return Ok(None);
+    }
+    params_lit(inst, read_var)
+}
+
+/// The `<P>_pkgparams` literal of `inst` for the field `<C>_params_<I>` of `comp`'s side
+/// record, or `None` when the record has no such field ([`has_side_params`]).
+pub(crate) fn side_params_lit(
+    comp: &Composition,
+    inst: &PackageInstance,
+    read_var: impl Fn(&str) -> EcExpr,
+) -> Result<Option<EcExpr>, EcExportError> {
+    if !has_side_params(comp, inst) {
+        return Ok(None);
+    }
+    params_lit(inst, read_var)
+}
+
+/// The `<P>_pkgparams` literal of `inst`, or `None` when its package has no such parameter.
+/// A value field is `read_var(<module variable>)`; a function field is `func_<c>` for the
+/// theorem constant `c` that `inst` binds the parameter to. Panics when a function parameter
+/// is not bound to a theorem constant: the only expressions of function type are identifiers.
+fn params_lit(
+    inst: &PackageInstance,
+    read_var: impl Fn(&str) -> EcExpr,
+) -> Result<Option<EcExpr>, EcExportError> {
+    let fields = param_fields(inst)?;
     if fields.is_empty() {
         return Ok(None);
     }
@@ -120,17 +182,21 @@ fn bound_theorem_const(inst: &PackageInstance, param: &str) -> String {
     inst.params
         .iter()
         .find(|(id, _)| id.name == param)
-        .and_then(|(_, expr)| match expr.kind() {
-            crate::expressions::ExpressionKind::Identifier(id) => id.as_theorem_identifier(),
-            _ => None,
-        })
-        .map(|id| id.ident())
+        .and_then(|(_, expr)| theorem_const_of(expr))
         .unwrap_or_else(|| {
             panic!(
                 "function parameter `{param}` of `{}` is not bound to a theorem constant",
                 inst.name
             )
         })
+}
+
+/// The theorem constant that `expr` names, or `None` when it names none.
+pub(crate) fn theorem_const_of(expr: &Expression) -> Option<String> {
+    match expr.kind() {
+        ExpressionKind::Identifier(id) => id.as_theorem_identifier().map(|id| id.ident()),
+        _ => None,
+    }
 }
 
 /// `template` applied to the params literal (when the package has a params record) and to

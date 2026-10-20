@@ -44,7 +44,8 @@ use super::EcExportError;
 mod params;
 mod side;
 pub(crate) use params::{
-    has_pkg_params, params_field_name, pkg_param_fields, pkg_params_lit, template_app,
+    has_side_params, params_field_name, params_record_packages, pkg_param_fields, pkg_params_lit,
+    side_params_lit, template_app,
 };
 pub use side::SideInvariantError;
 pub(crate) use side::{
@@ -641,6 +642,7 @@ impl StateOwners {
         let ctx = side::SideCtx {
             theorem_consts: &theorem.consts,
             project,
+            params_records: params_record_packages(theorem),
         };
         let mut out = Vec::new();
         for owner in &self.owners {

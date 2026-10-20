@@ -1,0 +1,20 @@
+composition C {
+    const n: Integer;
+    const f: fn Integer -> Integer;
+
+    invariant: [ ./games/C.smt2 ]
+
+    instance P = P {
+        params {
+            b: n,
+            f: f,
+        }
+    }
+
+    compose {
+        adversary: {
+            Inc: P,
+            Get: P,
+        },
+    }
+}

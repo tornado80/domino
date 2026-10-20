@@ -22,15 +22,18 @@ use thiserror::Error;
 
 use crate::package::{Composition, PackageInstance};
 use crate::project::Project;
-use crate::types::Type;
+use crate::theorem::GameInstance;
+use crate::types::{Type, TypeKind};
 use crate::util::smtparser::SmtParser;
 use crate::writers::easycrypt::ast::{EcBinop, EcExpr, EcItem, EcType, EcUnop};
+use crate::writers::easycrypt::interfaces::composition_span;
 use crate::writers::easycrypt::names::Names;
+use crate::writers::easycrypt::types::{func_op_name, translate_type};
 use crate::writers::easycrypt::EcExportError;
 
 use super::params::{
-    has_pkg_params, params_field_name, pkg_param_fields, pkg_params_type_name, template_app,
-    PkgParamField,
+    has_pkg_params, has_side_params, param_fields, params_field_name, pkg_param_fields,
+    pkg_params_type_name, template_app, theorem_const_of, PkgParamField,
 };
 use super::{
     abort_field_name, field_expr, fold_and, game_inv_op_name, instance_field_name, pkg_inv_op_name,
@@ -297,6 +300,8 @@ fn check_form(file: &str, owner: &str, want: Kind, got: Kind) -> Result<(), Side
 pub(crate) struct SideCtx<'a, P: Project> {
     pub theorem_consts: &'a [(String, Type)],
     pub project: &'a P,
+    /// The packages that declare `<P>_pkgparams` ([`super::params::params_record_packages`]).
+    pub params_records: Vec<String>,
 }
 
 /// What the file of a package declares for the side invariants (story 69, ADR 0014): the
@@ -322,7 +327,11 @@ pub(crate) fn package_items<P: Project>(
                 .collect(),
         });
     }
-    let params = pkg_param_fields(inst)?;
+    let params = if ctx.params_records.contains(&inst.pkg.name) {
+        param_fields(inst)?
+    } else {
+        Vec::new()
+    };
     if let Some(dup) = params
         .iter()
         .find(|p| fields.iter().any(|(_, f, _)| *f == p.field))
@@ -350,13 +359,14 @@ pub(crate) fn has_side_invariants(comp: &Composition) -> bool {
     !comp.invariants.is_empty() || !invariant_instances(comp).is_empty()
 }
 
-/// What the file of composition `comp` declares for its side invariants (story 69, ADR 0014),
-/// or `None` when it has none ([`has_side_invariants`]). `name` is the composition's name in
+/// What the file of the composition of `game` declares for its side invariants (story 69,
+/// ADR 0014), or `None` when it has none ([`has_side_invariants`]). `game` is the first game
+/// instance of the composition: its function constants are the ones that `Comp_<C>` uses. `name` is the composition's name in
 /// EasyCrypt (`Comp_<name>.ec`). In order:
 ///
 /// - the side record `<name>_side`: a field `<name>_pkg_<Inst> : <Pkg>_pkgstate` for each
 ///   instance with state, then a field `<name>_params_<Inst> : <Pkg>_pkgparams` for each
-///   instance whose package has a params record (story 78), both in `ordered_pkgs_idx()`
+///   instance that [`has_side_params`] (stories 78, 79), both in `ordered_pkgs_idx()`
 ///   order, then `<name>_abort_flag : bool`;
 /// - `PkgInv_<N>_of_<Inst>_in_<name> (s : <name>_side)` for each package invariant `<N>` of
 ///   each instance: one Domino claim each;
@@ -370,10 +380,11 @@ pub(crate) fn has_side_invariants(comp: &Composition) -> bool {
 /// with the name of a template is [`SideInvariantError::OpNameCollision`]; a field of the side
 /// record with the name of a package state field is [`InvariantError::FieldCollision`].
 pub(crate) fn composition_items<P: Project>(
-    comp: &Composition,
+    game: &GameInstance,
     name: &str,
     ctx: &SideCtx<'_, P>,
 ) -> Result<Option<Vec<EcItem>>, EcExportError> {
+    let comp = game.game();
     if !has_side_invariants(comp) {
         return Ok(None);
     }
@@ -409,7 +420,7 @@ pub(crate) fn composition_items<P: Project>(
     let mut game_conjuncts = Vec::new();
     if !comp.invariants.is_empty() {
         let owner = format!("composition `{}`", comp.name);
-        let lookup = game_lookup(comp, &prefix)?;
+        let lookup = game_lookup(game, &prefix)?;
         for invariant in named_invariants(ctx.project, &comp.invariants, &owner, Kind::Game)? {
             let op = game_inv_op_name(&invariant.name, name);
             ops.define_named(
@@ -474,8 +485,8 @@ fn side_record_fields(
     }
     for &idx in &comp.ordered_pkgs_idx() {
         let inst = &comp.pkgs[idx];
-        if has_pkg_params(&inst.pkg) {
-            seen_fields.extend(pkg_param_fields(inst)?.into_iter().map(|p| p.field));
+        if has_side_params(comp, inst) {
+            seen_fields.extend(param_fields(inst)?.into_iter().map(|p| p.field));
             fields.push((
                 params_field_name(prefix, inst.name()),
                 EcType::Named(pkg_params_type_name(&inst.pkg.name)),
@@ -605,8 +616,48 @@ fn template_args(
     p.into_iter().chain(s).collect()
 }
 
+/// The atoms of a game invariant of the composition of `game`:
+///
+/// - `game.<Inst>.<field>` -> ``g.`<prefix>pkg_<Inst>.`<Pkg>_<field>``, for every state field;
+/// - `game.<Inst>.<param>` -> ``g.`<prefix>params_<Inst>.`<Pkg>_param_<param>``, for every
+///   field of `<Pkg>_pkgparams` (story 79);
+/// - `game.<f>` -> `func_<c>`, for every function constant `f` that `game` binds to the theorem
+///   constant `c` (story 79). A value constant is not here.
+fn game_lookup(game: &GameInstance, prefix: &str) -> Result<StateLookup, EcExportError> {
+    let comp = game.game();
+    let mut lookup = state_lookup(comp, prefix)?;
+    for inst in comp.pkgs.iter().filter(|i| has_side_params(comp, i)) {
+        let params = field_expr("g", &params_field_name(prefix, inst.name()));
+        for PkgParamField { raw, field, ty, .. } in param_fields(inst)? {
+            let projection = EcExpr::Field {
+                expr: Box::new(params.clone()),
+                field,
+            };
+            lookup
+                .fields
+                .insert(format!("game.{}.{raw}", inst.name()), (projection, ty));
+        }
+    }
+    for (ident, expr) in &game.consts {
+        if !matches!(ident.ty.kind(), TypeKind::Fn(..)) {
+            continue;
+        }
+        let constant =
+            theorem_const_of(expr).expect("the only expressions of function type are identifiers");
+        let op = EcExpr::App {
+            head: func_op_name(&constant),
+            args: Vec::new(),
+        };
+        let ty = translate_type(&ident.ty, composition_span(comp))?;
+        lookup
+            .fields
+            .insert(format!("game.{}", ident.name), (op, ty));
+    }
+    Ok(lookup)
+}
+
 /// `game.<Inst>.<field>` -> ``g.`<prefix>pkg_<Inst>.`<Pkg>_<field>``, for every state field.
-fn game_lookup(comp: &Composition, prefix: &str) -> Result<StateLookup, EcExportError> {
+fn state_lookup(comp: &Composition, prefix: &str) -> Result<StateLookup, EcExportError> {
     let mut lookup = StateLookup::default();
     for inst in &comp.pkgs {
         let inst_field = instance_field_name(prefix, inst.name());
@@ -667,6 +718,7 @@ mod tests {
     const STORY58: &str = "testdata/easycrypt/story58";
     const STORY69: &str = "testdata/easycrypt/story69";
     const PARAMS: &str = "test-projects/test-package-invariant-params";
+    const GAME_PARAMS: &str = "test-projects/test-game-invariant-params";
 
     fn export(dir: &str, theorem: &str) -> Result<ExportedTheorem, EcExportError> {
         let files = DirectoryFiles::load(Path::new(dir)).unwrap();
@@ -745,8 +797,9 @@ mod tests {
         ] {
             assert_eq!(count(comp, item), 1, "{item} in:\n{comp}");
         }
+        // story 79: the game invariant can read the parameters of `Prot` too
         assert!(
-            comp.contains("\nrequire import Pkg_PRF Pkg_KX_NoPrf.\n"),
+            comp.contains("\nrequire import Pkg_PRF Pkg_Prot_NoPrf Pkg_KX_NoPrf.\n"),
             "{comp}"
         );
         assert_eq!(
@@ -1144,6 +1197,53 @@ mod tests {
     #[test]
     fn the_tree_of_the_params_project_compiles() {
         let exported = export(PARAMS, "Proof").unwrap();
+        let out = tempfile::tempdir().unwrap();
+        crate::writers::easycrypt::export::write_files(out.path(), &exported.files).unwrap();
+        let base = out.path().to_str().unwrap().to_string();
+        for side in &exported.side_invariants {
+            crate::writers::easycrypt::test_support::assert_compiles(
+                &base,
+                &format!("{base}/{}", side.join_file),
+            );
+        }
+        crate::writers::easycrypt::test_support::assert_compiles(
+            &base,
+            &format!("{base}/Eq_left_right.ec"),
+        );
+    }
+
+    /// Story 79: `P` has no package invariant, but the game invariant of `C` reads its
+    /// parameters. `P_pkgparams` is declared, `C_side` holds it, and the game invariant reads
+    /// `game.P.b`, `(game.P.f …)` and `(game.f …)`, the operator of the bound constant `g`.
+    #[test]
+    fn a_game_invariant_reads_package_parameters_and_function_constants() {
+        let exported = export(GAME_PARAMS, "Proof").unwrap();
+        assert!(
+            item_text(file(&exported, "Pkg_P.ec"), "type P_pkgparams")
+                .contains("P_param_f : int -> int"),
+            "{}",
+            file(&exported, "Pkg_P.ec")
+        );
+        let comp = file(&exported, "Comp_C.ec");
+        assert!(
+            item_text(comp, "type C_side").contains("C_params_P : P_pkgparams;"),
+            "{comp}"
+        );
+        let inv = item_text(comp, "op GameInv_main_of_C");
+        for read in [
+            "g.`C_params_P.`P_param_b",
+            "g.`C_params_P.`P_param_f g.`C_pkg_P.`P_ctr",
+            "func_g g.`C_pkg_P.`P_ctr",
+        ] {
+            assert!(inv.contains(read), "{read} in:\n{inv}");
+        }
+        assert!(file(&exported, "SideInv_C_Inc.ec").contains("Comp_C.Pkg_Inst_P.b"));
+    }
+
+    /// Story 79: the tree of the game-invariant project compiles (skips without `easycrypt`).
+    #[test]
+    fn the_tree_of_the_game_params_project_compiles() {
+        let exported = export(GAME_PARAMS, "Proof").unwrap();
         let out = tempfile::tempdir().unwrap();
         crate::writers::easycrypt::export::write_files(out.path(), &exported.files).unwrap();
         let base = out.path().to_str().unwrap().to_string();

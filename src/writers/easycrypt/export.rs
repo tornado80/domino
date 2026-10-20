@@ -33,7 +33,9 @@ use crate::types::Type;
 use super::ast::{EcFile, Require};
 use super::game::{compute_game_files_observed, GameFile};
 use super::interfaces::{build_interfaces_file, discover_compositions, InterfacesOutput};
-use super::invariant::{composition_items, has_side_invariants, SideCtx, StateOwners};
+use super::invariant::{
+    composition_items, has_side_invariants, params_record_packages, SideCtx, StateOwners,
+};
 use super::package::compute_package_variants_observed;
 use super::pkginv::{build_pkg_inv_files, PkgInvFiles};
 use super::progress::{ExportEvent, ExportObserver, ExportPhase, NopExportObserver, PhaseScope};
@@ -433,10 +435,17 @@ fn add_side_invariants(
     let ctx = SideCtx {
         theorem_consts: &theorem.consts,
         project,
+        params_records: params_record_packages(theorem),
     };
     for comp in discover_compositions(theorem) {
         let name = &interfaces.comp_mangled[&comp.name];
-        let Some(items) = composition_items(&comp, name, &ctx)? else {
+        // the first game instance of the composition, as in `discover_compositions`
+        let game = theorem
+            .instances
+            .iter()
+            .find(|g| g.game().name == comp.name)
+            .expect("every composition comes from a game instance");
+        let Some(items) = composition_items(game, name, &ctx)? else {
             continue;
         };
         let game = game_files

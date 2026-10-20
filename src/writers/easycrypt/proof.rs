@@ -343,11 +343,11 @@ pub(super) fn side_inv_app(
             fields.push((format!("{theory}.{field}"), state));
         }
     }
-    // story 78: the parameters of each instance whose package has a params record
+    // stories 78, 79: the parameters of each instance with a params field
     for &idx in &comp.ordered_pkgs_idx() {
         let inst = &comp.pkgs[idx];
         let read = |var: &str| module_var(layout, idx, var.to_string(), mem);
-        if let Some(params) = invariant::pkg_params_lit(inst, read)? {
+        if let Some(params) = invariant::side_params_lit(comp, inst, read)? {
             let field = invariant::params_field_name(&prefix, inst.name());
             fields.push((format!("{theory}.{field}"), params));
         }
@@ -893,7 +893,7 @@ pub(super) fn state_files<'c>(
     let mut files: Vec<String> = Vec::new();
     for comp in comps {
         let declares = |i: &&crate::package::PackageInstance| {
-            !i.pkg.state.is_empty() || invariant::has_pkg_params(&i.pkg)
+            !i.pkg.state.is_empty() || invariant::has_side_params(comp, i)
         };
         for inst in comp.pkgs.iter().filter(declares) {
             let file = owners.file_of(&inst.pkg.name);

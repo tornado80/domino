@@ -5091,3 +5091,45 @@ mod package_parameters_in_package_invariants {
         assert_eq!(result.admit_count(), 0, "{}", result.render());
     }
 }
+
+/// Story 79 (ADR 0019): a game invariant that reads package parameters and a function constant.
+mod package_parameters_in_game_invariants {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::easycrypt::session::json_binary_configured;
+    use crate::project::{DirectoryFiles, DirectoryProject};
+    use crate::writers::easycrypt::export::{export_theorem, write_files};
+
+    /// `C` passes its constants `n` and `f` to `P`'s `b` and `f`; `P` has no package invariant.
+    const PROJECT: &str = "test-projects/test-game-invariant-params";
+
+    #[test]
+    fn the_side_invariant_job_of_c_has_no_admit() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let dir = PathBuf::from(PROJECT);
+        let files = DirectoryFiles::load(&dir).unwrap();
+        let project = DirectoryProject::load(dir, &files).unwrap();
+        let theorem = project.get_theorem("Proof").unwrap();
+        let exported = export_theorem(theorem, &project).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        write_files(out.path(), &exported.files).unwrap();
+        let result = run_tactics(
+            project.get_theorem("Proof").unwrap(),
+            &project,
+            &exported,
+            out.path(),
+            &crate::util::smtsolver::process::IncrementalCvc5Backend,
+            &TacticsOptions {
+                side_inv: Some("C".into()),
+                ..TacticsOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result.side_invariants.len(), 1, "{}", result.render());
+        assert_eq!(result.admit_count(), 0, "{}", result.render());
+    }
+}
