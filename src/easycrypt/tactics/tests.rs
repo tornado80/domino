@@ -548,7 +548,7 @@ fn oracle_option(name: &str, force: bool) -> TacticsOptions {
 fn prior(plan: JobPlan) -> Option<SessionRecord> {
     match plan {
         JobPlan::Prove { prior } => prior,
-        JobPlan::Skip => panic!("expected a job that proves"),
+        JobPlan::Skip { .. } => panic!("expected a job that proves"),
     }
 }
 
@@ -617,7 +617,7 @@ fn a_partial_record_is_resumed_with_its_entries() {
 fn a_complete_record_skips_and_force_proves_from_scratch_and_deletes_it() {
     let all = vec![done("A"), done("B"), done("C")];
     let (skipped, _out) = plan_of(all.clone(), &TacticsOptions::default());
-    assert!(matches!(skipped, JobPlan::Skip));
+    assert!(matches!(skipped, JobPlan::Skip { .. }));
     let forced = TacticsOptions {
         force: true,
         ..TacticsOptions::default()
@@ -642,14 +642,14 @@ fn force_discards_a_partial_record_too() {
 #[test]
 fn an_oracle_that_is_done_is_skipped_and_one_that_is_not_is_proved() {
     let (skipped, _out) = plan_of(partial(), &oracle_option("A", false));
-    assert!(matches!(skipped, JobPlan::Skip));
+    assert!(matches!(skipped, JobPlan::Skip { .. }));
     let (plan, _out) = plan_of(partial(), &oracle_option("B", false));
     let record = prior(plan).expect("the others keep their entries");
     assert!(record.oracle("A").unwrap().is_resumable());
     // a complete record with `--oracle O` skips as well
     let all = vec![done("A"), done("B"), done("C")];
     let (skipped, _out) = plan_of(all, &oracle_option("C", false));
-    assert!(matches!(skipped, JobPlan::Skip));
+    assert!(matches!(skipped, JobPlan::Skip { .. }));
 }
 
 #[test]
@@ -4733,6 +4733,38 @@ mod package_invariant_jobs {
         ] {
             assert!(out.path().join(f).is_file(), "{f}");
         }
+        compiles(out.path(), "PkgInv_Ctr.ec").unwrap();
+        let rerun = || {
+            run_tactics(
+                theorem,
+                &project,
+                &exported,
+                out.path(),
+                &crate::util::smtsolver::process::IncrementalCvc5Backend,
+                &options,
+            )
+            .unwrap()
+        };
+        // every oracle and every fixed lemma is proved: the job skips the package
+        assert!(rerun().package_invariants.is_empty());
+        // a frame file as translation wrote it (for example after runs with `--oracle`):
+        // the records say every oracle is done, and the job still checks that file
+        std::fs::write(
+            out.path().join("Frame_Ctr_Peek.ec"),
+            &exported.files[Path::new("Frame_Ctr_Peek.ec")],
+        )
+        .unwrap();
+        let result = rerun();
+        let [job] = result.package_invariants.as_slice() else {
+            panic!("the job checks the frame lemma: {}", result.render());
+        };
+        assert_eq!(job.fixed.len(), 4, "{}", result.render());
+        assert_eq!(result.admit_count(), 0, "{}", result.render());
+        let peek = std::fs::read_to_string(out.path().join("Frame_Ctr_Peek.ec")).unwrap();
+        assert!(
+            peek.ends_with("(* EasyCrypt accepted this file. *)\n"),
+            "{peek}"
+        );
         compiles(out.path(), "PkgInv_Ctr.ec").unwrap();
     }
 

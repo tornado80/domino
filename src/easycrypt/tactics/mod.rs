@@ -1078,8 +1078,10 @@ const NAMED_FILES_LIMIT: usize = 6;
 /// What a proof job does with an equivalence.
 #[derive(Debug)]
 enum JobPlan {
-    /// Nothing: the records say it is proved (the reason is on stderr).
-    Skip,
+    /// Nothing: the records say it is proved (the reason is on stderr). `record` is the
+    /// oracles' records joined: a package-invariant job still checks its frame and start
+    /// lemmas from it when their files are not proved yet.
+    Skip { record: SessionRecord },
     /// Prove what is not done. `prior` is the oracles' records joined
     /// ([`SessionRecord::join`]): its done oracles are resumed (`None`: from scratch).
     Prove { prior: Option<SessionRecord> },
@@ -1146,7 +1148,7 @@ fn plan_job(
     });
     if record.complete && asked_done.unwrap_or(true) {
         eprintln!("{}", record.skip_line(file));
-        return Ok(JobPlan::Skip);
+        return Ok(JobPlan::Skip { record });
     }
     if let Some(oracle) = &options.oracle {
         if record
@@ -1157,7 +1159,7 @@ fn plan_job(
                 "skipping {oracle} of {}: already proved; --force re-proves it",
                 file.trim_end_matches(".ec")
             );
-            return Ok(JobPlan::Skip);
+            return Ok(JobPlan::Skip { record });
         }
     }
     if record.done_without_script() > 0 {

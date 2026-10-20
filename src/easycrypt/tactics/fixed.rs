@@ -13,8 +13,10 @@
 //!   it stands for: the package invariants on the state after `init`, which is the start check
 //!   of the package (story 75).
 //!
-//! The job writes each file it checked, atomically. Nothing is recorded: a check is cheap, and
-//! the next job checks again.
+//! The job writes each file it checked, atomically. A file EasyCrypt accepted ends with
+//! [`CHECKED`], and the next job does not check it again; any other file (missing, as
+//! translation wrote it, or admitted) it checks again, also when the records say every oracle
+//! is done.
 
 use std::path::Path;
 
@@ -41,45 +43,95 @@ fn start_proofs(hints: &[String]) -> [String; 2] {
     ]
 }
 
+/// The last line of a lemma file that EasyCrypt accepted.
+const CHECKED: &str = "(* EasyCrypt accepted this file. *)\n";
+
+/// Whether `file` is a lemma file that EasyCrypt accepted in an earlier job.
+fn is_proved<P, B>(job: &EquivalenceJob<'_, P, B>, file: &str) -> bool {
+    std::fs::read_to_string(job.out_dir.join(file)).is_ok_and(|text| text.ends_with(CHECKED))
+}
+
+/// The frame files of the oracles the job proves, then, when it proves every oracle, the start
+/// file of `pkg`.
+fn selected_files<'a, P, B>(job: &EquivalenceJob<'_, P, B>, pkg: &'a PkgInvReport) -> Vec<&'a str> {
+    let selected = |oracle: &str| job.options.oracle.as_deref().is_none_or(|o| o == oracle);
+    let frames = pkg.frame_files.iter().filter(|(o, _)| selected(o));
+    let start = job.options.oracle.is_none().then_some(&pkg.start_file);
+    frames
+        .map(|(_, f)| f.as_str())
+        .chain(start.map(String::as_str))
+        .collect()
+}
+
+/// Whether a frame or start lemma that the job checks is not proved yet.
+pub(super) fn any_unproved<P, B>(job: &EquivalenceJob<'_, P, B>, pkg: &PkgInvReport) -> bool {
+    selected_files(job, pkg).iter().any(|f| !is_proved(job, f))
+}
+
 /// Checks the frame lemmas of the oracles the job proves, then, when it proves every oracle,
-/// the start lemma of `pkg`. Stops, with what it has, when the run is asked to stop.
+/// the start lemma of `pkg`. A file that is proved already is not checked again. Stops, with
+/// what it has, when the run is asked to stop.
 pub(super) fn prove_fixed_lemmas<P: Project, B>(
     job: &EquivalenceJob<'_, P, B>,
     pkg: &PkgInvReport,
     tmp_dir: &Path,
 ) -> Result<Vec<FixedLemma>, TacticsError> {
-    let selected = |oracle: &str| job.options.oracle.as_deref().is_none_or(|o| o == oracle);
     let mut out = Vec::new();
-    for (_, file) in pkg.frame_files.iter().filter(|(o, _)| selected(o)) {
+    for file in selected_files(job, pkg) {
         if job.options.stop_requested() {
             return Ok(out);
         }
-        let source = job.exported_file(file)?;
-        let admitted = match first_accepted(job, std::iter::once(source.to_string()))? {
+        let admitted = if is_proved(job, file) {
+            None
+        } else if file == pkg.start_file {
+            check_start(job, pkg, tmp_dir)?
+        } else {
+            check_frame(job, file, tmp_dir)?
+        };
+        out.push(FixedLemma {
+            file: file.to_string(),
+            admitted,
+        });
+    }
+    Ok(out)
+}
+
+/// Checks the frame lemma in `file` as translation wrote it; when EasyCrypt refuses it, its
+/// proof becomes `admit.`, and the result says why.
+fn check_frame<P: Project, B>(
+    job: &EquivalenceJob<'_, P, B>,
+    file: &str,
+    tmp_dir: &Path,
+) -> Result<Option<String>, TacticsError> {
+    let source = job.exported_file(file)?;
+    Ok(
+        match first_accepted(job, std::iter::once(source.to_string()))? {
             Ok(text) => {
-                write_atomically(&job.out_dir.join(file), tmp_dir, &text)?;
+                write_atomically(&job.out_dir.join(file), tmp_dir, &(text + CHECKED))?;
                 None
             }
             Err(refused) => {
                 write_atomically(&job.out_dir.join(file), tmp_dir, &admitted_proof(source))?;
                 Some(format!("the frame proof was refused: {refused}"))
             }
-        };
-        out.push(FixedLemma {
-            file: file.clone(),
-            admitted,
-        });
-    }
-    if job.options.oracle.is_some() || job.options.stop_requested() {
-        return Ok(out);
-    }
+        },
+    )
+}
+
+/// Checks the start lemma of `pkg` with each of [`start_proofs`]; when none is accepted, it
+/// keeps its admitted proof, and the result names the claims it stands for.
+fn check_start<P: Project, B>(
+    job: &EquivalenceJob<'_, P, B>,
+    pkg: &PkgInvReport,
+    tmp_dir: &Path,
+) -> Result<Option<String>, TacticsError> {
     let file = &pkg.start_file;
     let source = job.exported_file(file)?;
     let candidates =
         start_proofs(&job.options.smt_hints).map(|proof| with_script(source, INIT, &proof));
-    let admitted = match first_accepted(job, candidates.into_iter())? {
+    Ok(match first_accepted(job, candidates.into_iter())? {
         Ok(text) => {
-            write_atomically(&job.out_dir.join(file), tmp_dir, &text)?;
+            write_atomically(&job.out_dir.join(file), tmp_dir, &(text + CHECKED))?;
             None
         }
         Err(refused) => {
@@ -90,12 +142,7 @@ pub(super) fn prove_fixed_lemmas<P: Project, B>(
                 pkg.package
             ))
         }
-    };
-    out.push(FixedLemma {
-        file: file.clone(),
-        admitted,
-    });
-    Ok(out)
+    })
 }
 
 /// The first of `candidates`, whole lemma files, that a fresh EasyCrypt accepts sentence by

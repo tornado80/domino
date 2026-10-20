@@ -129,9 +129,24 @@ where
     }
     let names: Vec<String> = setup.oracles.iter().map(|(n, _)| n.clone()).collect();
     // story 35: the records decide before anything is created or truncated
+    // a package-invariant job: the lemmas no tree is walked for
+    let pkg = job
+        .exported
+        .package_invariants
+        .iter()
+        .find(|p| p.join_file == eq.proof_file)
+        .filter(|_| matches!(job.kind, JobKind::PackageInvariants(_)));
     let prior = match plan_job(eq, job.out_dir, options, &names)? {
         JobPlan::Prove { prior } => prior,
-        JobPlan::Skip => return Ok(None),
+        // every oracle is done, but a frame or start lemma may not be: the job checks it
+        JobPlan::Skip { record } if pkg.is_some_and(|p| super::fixed::any_unproved(job, p)) => {
+            eprintln!(
+                "{}: its frame or start lemmas are not proved yet; checking them",
+                job.stem()
+            );
+            Some(record)
+        }
+        JobPlan::Skip { .. } => return Ok(None),
     };
     let dir = progress_dir(job.out_dir, job.stem());
     std::fs::create_dir_all(&dir)?;
@@ -212,14 +227,8 @@ where
         board.interrupted = Some(Interrupted::NoOracleInFlight);
     }
     board.running_done();
-    // a package-invariant job: the lemmas no tree is walked for, once every oracle is done
-    if let Some(pkg) = job
-        .exported
-        .package_invariants
-        .iter()
-        .find(|p| p.join_file == eq.proof_file)
-        .filter(|_| matches!(job.kind, JobKind::PackageInvariants(_)))
-    {
+    // the frame and start lemmas, once every oracle is done
+    if let Some(pkg) = pkg {
         if board.interrupted.is_none() {
             board.fixed = super::fixed::prove_fixed_lemmas(job, pkg, &dir)?;
         }
