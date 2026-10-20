@@ -33,7 +33,6 @@ use super::ResumeMode;
 use super::script::{Mark, Script};
 use crate::easycrypt::job::{AdmitRecord, ClosedNode};
 use crate::writers::easycrypt::invariant::{state_relation_op_name, InvariantOp};
-use crate::writers::smt::contexts::InvariantClaims;
 
 type R<T> = Result<T, SessionError>;
 
@@ -363,9 +362,10 @@ pub(super) enum Part {
     Invariant,
     /// A state relation, by the name of its `define-state-relation`.
     Relation(String),
-    /// A side invariant of a side-invariant lemma (story 69): a `PkgInv_<C>_<Inst>` wrapper
-    /// or `GameInv_<C>`, by its EasyCrypt name, with the Domino claims it stands for.
-    SideInvariant { op: String, claim: InvariantClaims },
+    /// A side invariant of a side-invariant lemma (story 73): a `PkgInv_<N>_of_<Inst>_in_<C>`
+    /// wrapper or a `GameInv_<N>_of_<C>`, by its EasyCrypt name, with the one Domino claim it
+    /// stands for.
+    SideInvariant { op: String, claim: String },
 }
 
 impl Part {
@@ -495,19 +495,15 @@ pub(super) fn pair_view(pair: &PairRecord, part: &Part) -> DominoView {
 }
 
 /// What Domino says about `part` on a terminal of a side tree (story 69), whose claims are the
-/// package and game invariants of the composition: a side invariant part has the worst view of
-/// its own claims (`Inconclusive` when the side tree has no verdict for any of them), and every
+/// package and game invariants of the composition: a side invariant part has the view of its
+/// own claim (`Inconclusive` when the side tree has no verdict for it), and every
 /// other part the worst view of all the claims. One-sided execution checks no claim at a terminal that
 /// aborts (its verdicts are `unreachable`).
 fn side_pair_view(pair: &PairRecord, part: &Part) -> DominoView {
     match part {
         Part::SideInvariant { claim, .. } => pair
-            .claims
-            .iter()
-            .filter(|c| claim.contains(&c.claim))
-            .map(|c| view_of_verdict(&c.verdict))
-            .reduce(DominoView::worst)
-            .unwrap_or(DominoView::Inconclusive),
+            .verdict_of(claim)
+            .map_or(DominoView::Inconclusive, view_of_verdict),
         _ => pair
             .claims
             .iter()
@@ -654,7 +650,7 @@ pub(super) struct Prover<'a> {
     /// The operators unfolded inside a leaf part ([`leaf_part_ops`] for an oracle lemma, the
     /// side invariant operators for a side-invariant lemma), matched by the last component of
     /// their name: a `StateRelation_` operator starts a [`Part::Relation`], an operator with a
-    /// claim (a wrapper or `GameInv_<C>`) a [`Part::SideInvariant`]; any other is unfolded in
+    /// claim (a wrapper or a `GameInv_<N>_of_<C>`) a [`Part::SideInvariant`]; any other is unfolded in
     /// the part it is in, and is never a part of its own.
     ///
     /// [`leaf_part_ops`]: crate::writers::easycrypt::invariant::leaf_part_ops

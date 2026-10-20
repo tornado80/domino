@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 mod emit;
 
-pub(crate) use emit::{game_invariant_claim_name, package_invariant_claim_name, InvariantClaims};
+pub(crate) use emit::{game_invariant_claim_name, package_invariant_claim_name};
 
 use crate::{
     gamehops::equivalence::{smtrewrite::SmtStmt, Equivalence},

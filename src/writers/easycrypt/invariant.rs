@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
 
-use crate::writers::smt::contexts::InvariantClaims;
+use crate::writers::smt::contexts::{game_invariant_claim_name, package_invariant_claim_name};
 
 use crate::expressions::{Expression, ExpressionKind};
 use crate::gamehops::equivalence::Equivalence;
@@ -472,20 +472,42 @@ pub(super) fn pkg_state_type_name(package: &str) -> String {
     format!("{package}_pkgstate")
 }
 
-/// The template operator of a package invariant: `PkgInv_<Pkg>`, over `<Pkg>_pkgstate`.
-pub(crate) fn pkg_inv_template_name(package: &str) -> String {
-    format!("PkgInv_{package}")
+/// One part of a side-invariant operator name (ADR 0018): every `_` of `part` written `__`.
+/// Then every run of `_` in a part has an even length, and the separators `_of_` and `_in_`
+/// are the only odd runs, so a name reads back to its parts. The one escape of these names:
+/// only the three name functions below call it.
+fn name_part(part: &str) -> String {
+    part.replace('_', "__")
 }
 
-/// The operator of one instance's package invariant in composition `comp` (its EasyCrypt
-/// name): `PkgInv_<C>_<Inst>`, over the composition's side record.
-pub(crate) fn pkg_inv_op_name(comp: &str, instance: &str) -> String {
-    format!("PkgInv_{comp}_{instance}")
+/// The invariant name `<N>` of an operator name: the Domino name of a named invariant, mapped
+/// by [`mangle_smt_def_name`], then escaped.
+fn invariant_part(invariant: &str) -> String {
+    name_part(&mangle_smt_def_name(invariant))
 }
 
-/// The operator of a composition's game invariant: `GameInv_<C>`, over its side record.
-pub(crate) fn game_inv_op_name(comp: &str) -> String {
-    format!("GameInv_{comp}")
+/// The template operator of the package invariant `invariant` of `package`:
+/// `PkgInv_<N>_of_<P>`, over `<P>_pkgstate` (ADR 0018).
+pub(crate) fn pkg_inv_template_name(invariant: &str, package: &str) -> String {
+    format!("PkgInv_{}_of_{}", invariant_part(invariant), name_part(package))
+}
+
+/// The operator of the package invariant `invariant` of one instance in composition `comp`
+/// (their EasyCrypt names): `PkgInv_<N>_of_<I>_in_<C>`, over the composition's side record
+/// (ADR 0018).
+pub(crate) fn pkg_inv_op_name(invariant: &str, comp: &str, instance: &str) -> String {
+    format!(
+        "PkgInv_{}_of_{}_in_{}",
+        invariant_part(invariant),
+        name_part(instance),
+        name_part(comp)
+    )
+}
+
+/// The operator of the game invariant `invariant` of a composition: `GameInv_<N>_of_<C>`, over
+/// its side record (ADR 0018).
+pub(crate) fn game_inv_op_name(invariant: &str, comp: &str) -> String {
+    format!("GameInv_{}_of_{}", invariant_part(invariant), name_part(comp))
 }
 
 /// The side invariant of a composition: `side_inv_<C>`, over its side record (story 69).
@@ -1140,13 +1162,13 @@ pub(crate) fn helper_op_name(raw: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvariantOp {
     /// The EasyCrypt operator, qualified with its theory when the files that use it do not
-    /// import it, e.g. `Comp_Hybrid2.PkgInv_Hybrid2_Prf`.
+    /// import it, e.g. `Comp_Hybrid2.PkgInv_main_of_Prf_in_Hybrid2`.
     pub name: String,
-    /// The Domino claims it stands for in a side-invariant job (story 69): the package
-    /// invariants of `Hybrid2`'s instance `Prf` for a wrapper, the game invariants of
-    /// `Hybrid2` for a `GameInv_` operator. `None` for every other operator, and in an oracle
-    /// lemma, which only assumes the side invariants.
-    pub claim: Option<InvariantClaims>,
+    /// The Domino claim it stands for in a side-invariant job (story 73): for a wrapper the
+    /// package invariant of its name on its instance (`package-invariant!main!Hybrid2-Prf!`),
+    /// for a `GameInv_` operator the game invariant of its name. `None` for every other
+    /// operator, and in an oracle lemma, which only assumes the side invariants.
+    pub claim: Option<String>,
     /// The raw SMT name of the state relation, for a `StateRelation_` operator only.
     pub relation: Option<String>,
 }
@@ -1169,20 +1191,21 @@ impl InvariantOp {
 }
 
 /// The operators of the invariant file of `left ~ right`, in the order `rewrite /… in` unfolds
-/// them: `inv`, `params_inv`, then [`leaf_part_ops`]. Reads no file. `relations` and `helpers`
-/// must be in call order ([`InvariantFile::state_relations`]): `rewrite /a /b in h` does not
-/// unfold `b` when only the body of a later operator uses it (story 62).
+/// them: `inv`, `params_inv`, then [`leaf_part_ops`]. `relations` and `helpers` must be in call
+/// order ([`InvariantFile::state_relations`]): `rewrite /a /b in h` does not unfold `b` when
+/// only the body of a later operator uses it (story 62).
 pub fn invariant_ops(
+    project: &impl Project,
     left: &GameInstance,
     right: &GameInstance,
     relations: &[String],
     helpers: &[String],
-) -> Vec<InvariantOp> {
-    ["inv".to_string(), "params_inv".to_string()]
+) -> Result<Vec<InvariantOp>, InvariantError> {
+    Ok(["inv".to_string(), "params_inv".to_string()]
         .into_iter()
         .map(InvariantOp::plain)
-        .chain(leaf_part_ops(left, right, relations, helpers))
-        .collect()
+        .chain(leaf_part_ops(project, left, right, relations, helpers)?)
+        .collect())
 }
 
 /// The operators that the tactics run unfolds inside a leaf part of an oracle lemma:
@@ -1192,69 +1215,70 @@ pub fn invariant_ops(
 /// the same). The oracle lemma assumes the side invariants (story 69), so their operators are
 /// unfolded in its premise only, and none of them stands for a claim of its own there.
 pub fn leaf_part_ops(
+    project: &impl Project,
     left: &GameInstance,
     right: &GameInstance,
     relations: &[String],
     helpers: &[String],
-) -> Vec<InvariantOp> {
+) -> Result<Vec<InvariantOp>, InvariantError> {
     let mut comps = vec![left.game()];
     if right.game().name != left.game().name {
         comps.push(right.game());
     }
-    relations
+    let mut ops: Vec<InvariantOp> = relations
         .iter()
         .map(|r| InvariantOp::state_relation(r))
-        .chain(
-            helpers
-                .iter()
-                .map(|h| InvariantOp::plain(helper_op_name(h))),
-        )
-        .chain(
-            comps
+        .chain(helpers.iter().map(|h| InvariantOp::plain(helper_op_name(h))))
+        .collect();
+    for comp in comps {
+        ops.extend(
+            side_invariant_ops(project, comp)?
                 .into_iter()
-                .flat_map(side_invariant_ops)
                 .map(|op| InvariantOp::plain(op.name)),
-        )
-        .collect()
+        );
+    }
+    Ok(ops)
 }
 
-/// The side invariant operators of composition `comp` (story 69), in the order
+/// The side invariant operators of composition `comp` (story 69, story 73), in the order
 /// `rewrite /… in` unfolds them: `Comp_<C>.side_inv_<C>`, the wrappers
-/// `Comp_<C>.PkgInv_<C>_<Inst>`, the templates `PkgInv_<Pkg>` (the files that use them import
-/// the package files), then `Comp_<C>.GameInv_<C>`. A wrapper and `GameInv_<C>` stand for the
-/// claims that one-sided execution of `C` checks (symbolic-execution story 25). Empty for a
-/// composition without side invariants.
-pub fn side_invariant_ops(comp: &crate::package::Composition) -> Vec<InvariantOp> {
+/// `Comp_<C>.PkgInv_<N>_of_<Inst>_in_<C>` (each package invariant of each instance), the
+/// templates `PkgInv_<N>_of_<Pkg>` (the files that use them import the package files), then
+/// `Comp_<C>.GameInv_<N>_of_<C>` (each game invariant). Each wrapper and game invariant stands
+/// for the claim of its name that one-sided execution of `C` checks (symbolic-execution story
+/// 25). Empty for a composition without side invariants. Reads the invariant files for the
+/// names.
+pub fn side_invariant_ops(
+    project: &impl Project,
+    comp: &crate::package::Composition,
+) -> Result<Vec<InvariantOp>, InvariantError> {
     if !side::has_side_invariants(comp) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let name = super::names::mangle_name(NameKind::Module, &comp.name);
     let qualified = |op: String| format!("Comp_{name}.{op}");
     let mut ops = vec![InvariantOp::plain(qualified(side_inv_op_name(&name)))];
     let mut templates: Vec<InvariantOp> = Vec::new();
     for inst in side::invariant_instances(comp) {
-        ops.push(InvariantOp {
-            claim: Some(InvariantClaims::Package {
-                owner: comp.name.clone(),
-                pkg_inst: inst.name().to_string(),
-            }),
-            ..InvariantOp::plain(qualified(pkg_inv_op_name(&name, inst.name())))
-        });
-        let template = pkg_inv_template_name(&inst.pkg.name);
-        if !templates.iter().any(|t| t.name == template) {
-            templates.push(InvariantOp::plain(template));
+        for invariant in side::package_invariant_names(project, inst)? {
+            ops.push(InvariantOp {
+                claim: Some(package_invariant_claim_name(&invariant, &comp.name, inst.name())),
+                ..InvariantOp::plain(qualified(pkg_inv_op_name(&invariant, &name, inst.name())))
+            });
+            let template = pkg_inv_template_name(&invariant, &inst.pkg.name);
+            if !templates.iter().any(|t| t.name == template) {
+                templates.push(InvariantOp::plain(template));
+            }
         }
     }
     ops.extend(templates);
-    if !comp.invariants.is_empty() {
+    for invariant in side::game_invariant_names(project, comp)? {
         ops.push(InvariantOp {
-            claim: Some(InvariantClaims::Game {
-                owner: comp.name.clone(),
-            }),
-            ..InvariantOp::plain(qualified(game_inv_op_name(&name)))
+            claim: Some(game_invariant_claim_name(&invariant, &comp.name)),
+            ..InvariantOp::plain(qualified(game_inv_op_name(&invariant, &name)))
         });
     }
-    ops
+    Ok(ops)
 }
 
 /// Mangles an SMT-LIB definition name into a legal (partial) EasyCrypt
@@ -2635,6 +2659,65 @@ mod tests {
         assert!(matches!(err, InvariantError::Unrecognised { .. }));
     }
 
+    /// Reads a side-invariant operator name back to its parts (ADR 0018): an odd run of `_`
+    /// ends a part with its last `_`, and the keyword (`of`, `in`) and one `_` follow.
+    fn read_back(name: &str) -> Vec<String> {
+        let rest = name
+            .strip_prefix("PkgInv_")
+            .or_else(|| name.strip_prefix("GameInv_"))
+            .expect("a side-invariant operator");
+        let b = rest.as_bytes();
+        let mut parts = vec![String::new()];
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] != b'_' {
+                parts.last_mut().unwrap().push(b[i] as char);
+                i += 1;
+                continue;
+            }
+            let mut j = i;
+            while j < b.len() && b[j] == b'_' {
+                j += 1;
+            }
+            let run = j - i;
+            parts.last_mut().unwrap().push_str(&"_".repeat(run / 2));
+            i = j;
+            if run % 2 == 1 {
+                assert!(matches!(&rest[j..j + 3], "of_" | "in_"), "{name}");
+                parts.push(String::new());
+                i = j + 3;
+            }
+        }
+        parts
+    }
+
+    /// Story 73: every name of the three name functions reads back to its parts, also parts
+    /// with `_`, `__` and a trailing `_`.
+    #[test]
+    fn every_side_invariant_operator_name_reads_back_to_its_parts() {
+        let parts = ["P", "A_B", "a__b", "x_", "_y", "of", "x_of_y", "z_in_", "_"];
+        let invariants = ["main", "key_table", "my-inv", "of_in", "B_c"];
+        for n in invariants {
+            let mn = mangle_smt_def_name(n);
+            for p in parts {
+                assert_eq!(read_back(&pkg_inv_template_name(n, p)), [mn.as_str(), p]);
+                assert_eq!(read_back(&game_inv_op_name(n, p)), [mn.as_str(), p]);
+                for c in parts {
+                    assert_eq!(read_back(&pkg_inv_op_name(n, c, p)), [mn.as_str(), p, c]);
+                }
+            }
+        }
+        assert_eq!(pkg_inv_template_name("main", "Prf"), "PkgInv_main_of_Prf");
+        assert_eq!(game_inv_op_name("main", "Hybrid2"), "GameInv_main_of_Hybrid2");
+        assert_eq!(
+            pkg_inv_template_name("key_table", "Key_Store"),
+            "PkgInv_key__table_of_Key__Store"
+        );
+        // a template never equals a wrapper
+        assert_ne!(pkg_inv_template_name("c", "A_in_B"), pkg_inv_op_name("c", "B", "A"));
+        assert_ne!(pkg_inv_template_name("c", "A_B"), pkg_inv_template_name("B_c", "A"));
+    }
+
     #[test]
     fn mangle_smt_def_name_examples() {
         assert_eq!(mangle_smt_def_name("state="), "state_eq");
@@ -3513,7 +3596,8 @@ mod tests {
         let left = theorem.find_game_instance("L").unwrap();
         let right = theorem.find_game_instance("R").unwrap();
         let names: Vec<String> =
-            invariant_ops(left, right, &result.state_relations, &result.helpers)
+            invariant_ops(project, left, right, &result.state_relations, &result.helpers)
+                .unwrap()
                 .into_iter()
                 .map(|op| op.name)
                 .collect();

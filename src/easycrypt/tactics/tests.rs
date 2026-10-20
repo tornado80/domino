@@ -5,7 +5,6 @@ use super::*;
 use crate::debug::driver::{ClaimVerdict, PartVerdict, TerminalView, Verdict};
 use crate::debug::lockstep::{PairRecord, PairSide, EQUAL_OUTPUT};
 use crate::easycrypt::job::{session_dir, AdmitRecord};
-use crate::writers::smt::contexts::InvariantClaims;
 use crate::easycrypt::session::split_sentences;
 
 fn pair_view_for_tests(p: &PairRecord, part: &Part) -> &'static str {
@@ -3150,10 +3149,7 @@ done
 fn a_one_sided_invariant_part_has_the_view_of_its_own_part_verdict() {
     let part = |op: &str, owner: &str| Part::SideInvariant {
         op: op.into(),
-        claim: InvariantClaims::Package {
-            owner: owner.into(),
-            pkg_inst: "Prf".into(),
-        },
+        claim: format!("package-invariant!main!{owner}-Prf!"),
     };
     let left = part("PkgInv_l_Prf", "Real_Hybrid3");
     let right = part("PkgInv_r_Prf", "Ideal_Hybrid3");
@@ -3183,7 +3179,7 @@ fn a_part_on_a_pair_with_invariant_verified_is_verified() {
     assert_eq!(pair_view_for_tests(&p, &Part::Relation("a".into())), "verified");
     let side = Part::SideInvariant {
         op: "GameInv_G".into(),
-        claim: InvariantClaims::Game { owner: "G".into() },
+        claim: "game-invariant!main!G!".into(),
     };
     assert_eq!(pair_view_for_tests(&p, &side), "verified");
     let unreachable = pair(Verdict::Verified, Verdict::pair_infeasible(), &[], false);
@@ -4000,7 +3996,43 @@ mod side_invariant_jobs {
         assert!(!o.stats.admits.is_empty(), "{}", result.render());
         for a in &o.stats.admits {
             assert_eq!(a.reason, AdmitReason::DominoFails, "{}", result.render());
-            assert_eq!(a.claim, "invariant/PkgInv_S_p", "{}", result.render());
+            assert_eq!(a.claim, "invariant/PkgInv_main_of_p_in_S", "{}", result.render());
+        }
+        compiles(out.path(), "SideInv_S_O.ec").unwrap();
+    }
+
+    /// Story 73: a package with two named invariants, where a path breaks only `nonneg`: only
+    /// the leaf parts of `nonneg` are admitted, with Domino's verdict.
+    #[test]
+    fn a_path_that_breaks_one_named_invariant_admits_only_its_leaf_part() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let dir = PathBuf::from("testdata/debug/ec73");
+        let files = Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
+        let project = DirectoryProject::load(dir, files).unwrap();
+        let theorem = project.get_theorem("T").unwrap();
+        let exported = export_theorem(theorem, &project).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        write_files(out.path(), &exported.files).unwrap();
+        let options = TacticsOptions {
+            side_inv: Some("S".into()),
+            quick_close: false,
+            ..TacticsOptions::default()
+        };
+        let result = run_tactics(theorem, &project, &exported, out.path(), &backend(), &options)
+            .unwrap();
+        let [job] = result.side_invariants.as_slice() else {
+            panic!("one side-invariant job: {}", result.render());
+        };
+        let [o] = job.oracles.as_slice() else {
+            panic!("one oracle: {}", result.render());
+        };
+        assert!(!o.stats.admits.is_empty(), "{}", result.render());
+        for a in &o.stats.admits {
+            assert_eq!(a.reason, AdmitReason::DominoFails, "{}", result.render());
+            assert_eq!(a.claim, "invariant/PkgInv_nonneg_of_p_in_S", "{}", result.render());
         }
         compiles(out.path(), "SideInv_S_O.ec").unwrap();
     }
@@ -4038,7 +4070,7 @@ mod side_invariant_jobs {
         let lemma = std::fs::read_to_string(out.path().join("SideInv_Game_Inc.ec")).unwrap();
         assert!(!lemma.contains("proc; inline. admit."), "{lemma}");
         // the router prelude, then the leaf of the one terminal, opened by claim
-        for step in ["sp 1.", "if.", "auto => &hr hpre /=.", "rewrite /Comp_Game.PkgInv_Game_C /=."] {
+        for step in ["sp 1.", "if.", "auto => &hr hpre /=.", "rewrite /Comp_Game.PkgInv_main_of_C_in_Game /=."] {
             assert!(lemma.contains(step), "{step} in:\n{lemma}");
         }
         for f in ["session/SideInv_Game/Inc.record.json", "session/SideInv_Game/Inc.tree.json"] {

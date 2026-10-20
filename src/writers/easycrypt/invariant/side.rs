@@ -3,15 +3,18 @@
 //! Side invariants (story 69, ADR 0014; before it story 58, ADR 0010): the package invariants
 //! and the game invariant of a composition, stated one time for each composition.
 //!
-//! - A package invariant becomes the template `PkgInv_<Pkg> (s : <Pkg>_pkgstate)`, in the file of
-//!   the package, next to the record type of the package's state ([`package_items`]).
-//! - A composition with a side invariant gets, in its own file, its side record `<C>_side`, a
-//!   wrapper `PkgInv_<C>_<Inst>` for each instance with a package invariant, its game invariant
-//!   `GameInv_<C>`, and `side_inv_<C>`, which joins them under `!abort`
-//!   ([`composition_items`]). Each wrapper and `GameInv_<C>` stands for one Domino claim.
+//! Each named invariant gets its own operator (story 73), with the names of ADR 0018:
 //!
-//! A one-sided invariant file holds only invariant forms of the right kind. An owner with
-//! several named invariants gets one operator, their conjunction (story 71; story 73 splits it).
+//! - A package invariant `<N>` becomes the template `PkgInv_<N>_of_<Pkg> (s : <Pkg>_pkgstate)`,
+//!   in the file of the package, next to the record type of the package's state
+//!   ([`package_items`]).
+//! - A composition with a side invariant gets, in its own file, its side record `<C>_side`, a
+//!   wrapper `PkgInv_<N>_of_<Inst>_in_<C>` for each package invariant of each instance, a
+//!   `GameInv_<N>_of_<C>` for each game invariant, and `side_inv_<C>`, which joins them under
+//!   `!abort` ([`composition_items`]). Each wrapper and game invariant stands for one Domino
+//!   claim.
+//!
+//! A one-sided invariant file holds only invariant forms of the right kind.
 
 use miette::Diagnostic;
 use thiserror::Error;
@@ -108,7 +111,7 @@ struct SideFileParser {
     file: String,
     owner: String,
     expected: Kind,
-    forms: Vec<(Kind, Sexp)>,
+    forms: Vec<(Kind, String, Sexp)>,
 }
 
 impl SideFileParser {
@@ -144,19 +147,19 @@ impl SmtParser<InvariantError> for SideFileParser {
 
     fn handle_define_package_invariant(
         &mut self,
-        _invname: &str,
+        invname: &str,
         body: Sexp,
     ) -> Result<SideStmt, InvariantError> {
-        self.forms.push((Kind::Package, body));
+        self.forms.push((Kind::Package, invname.to_string(), body));
         Ok(SideStmt::Form)
     }
 
     fn handle_define_game_invariant(
         &mut self,
-        _invname: &str,
+        invname: &str,
         body: Sexp,
     ) -> Result<SideStmt, InvariantError> {
-        self.forms.push((Kind::Game, body));
+        self.forms.push((Kind::Game, invname.to_string(), body));
         Ok(SideStmt::Form)
     }
 
@@ -190,18 +193,23 @@ impl SmtParser<InvariantError> for SideFileParser {
     }
 }
 
-/// The invariant of kind `kind` across `files`, with the first file that has a form. An owner
-/// may declare several named invariants; until each name gets its own operator (story 73, ADR
-/// 0018) the result is their conjunction, `(and <body1> <body2> …)`, in file and source order.
-/// One form gives its body unchanged.
-fn the_invariant(
+/// One named invariant of an owner: its Domino name, the file that declares it, and its body.
+pub(super) struct NamedInvariant {
+    pub name: String,
+    pub file: String,
+    pub body: Sexp,
+}
+
+/// The named invariants of kind `kind` across `files`, in file and source order (story 71).
+/// Each gets its own operator (story 73, ADR 0018). No invariant is
+/// [`SideInvariantError::NoInvariant`].
+pub(super) fn named_invariants(
     project: &impl Project,
     files: &[String],
     owner: &str,
     kind: Kind,
-) -> Result<(String, Sexp), InvariantError> {
-    let mut first_file: Option<String> = None;
-    let mut bodies = Vec::new();
+) -> Result<Vec<NamedInvariant>, InvariantError> {
+    let mut found = Vec::new();
     for file in files {
         let contents = project
             .read_input_file(file)
@@ -216,26 +224,51 @@ fn the_invariant(
             forms: Vec::new(),
         };
         parser.parse_stmts(&contents)?;
-        for (form_kind, body) in parser.forms {
+        for (form_kind, name, body) in parser.forms {
             check_form(file, owner, kind, form_kind)?;
-            first_file.get_or_insert_with(|| file.clone());
-            bodies.push(body);
+            found.push(NamedInvariant {
+                name,
+                file: file.clone(),
+                body,
+            });
         }
     }
-    let Some(file) = first_file else {
+    if found.is_empty() {
         return Err(SideInvariantError::NoInvariant {
             files: files.to_vec(),
             owner: owner.to_string(),
             form: kind.form(),
         }
         .into());
-    };
-    let body = if bodies.len() == 1 {
-        bodies.remove(0)
-    } else {
-        Sexp::List(std::iter::once(Sexp::Atom("and".to_string())).chain(bodies).collect())
-    };
-    Ok((file, body))
+    }
+    Ok(found)
+}
+
+/// The names of the package invariants of `inst`'s package.
+pub(super) fn package_invariant_names(
+    project: &impl Project,
+    inst: &PackageInstance,
+) -> Result<Vec<String>, InvariantError> {
+    let owner = format!("package `{}`", inst.pkg.name);
+    Ok(named_invariants(project, &inst.pkg.invariants, &owner, Kind::Package)?
+        .into_iter()
+        .map(|i| i.name)
+        .collect())
+}
+
+/// The names of the game invariants of `comp`, empty when it has none.
+pub(super) fn game_invariant_names(
+    project: &impl Project,
+    comp: &Composition,
+) -> Result<Vec<String>, InvariantError> {
+    if comp.invariants.is_empty() {
+        return Ok(Vec::new());
+    }
+    let owner = format!("composition `{}`", comp.name);
+    Ok(named_invariants(project, &comp.invariants, &owner, Kind::Game)?
+        .into_iter()
+        .map(|i| i.name)
+        .collect())
 }
 
 fn check_form(file: &str, owner: &str, want: Kind, got: Kind) -> Result<(), SideInvariantError> {
@@ -258,7 +291,7 @@ pub(crate) struct SideCtx<'a, P: Project> {
 
 /// What the file of a package declares for the side invariants (story 69, ADR 0014): the
 /// record type of the package's state, `<Pkg>_pkgstate`, when it has state, then the template
-/// of its package invariant, `PkgInv_<Pkg>`, when it has one. `inst` is any instance of the
+/// of each of its package invariants, `PkgInv_<N>_of_<Pkg>`. `inst` is any instance of the
 /// package. A package invariant of a package without state is
 /// [`SideInvariantError::StatelessPackageInvariant`].
 pub(crate) fn package_items<P: Project>(
@@ -275,7 +308,7 @@ pub(crate) fn package_items<P: Project>(
         });
     }
     if !inst.pkg.invariants.is_empty() {
-        items.push(package_template(inst, ctx)?);
+        items.extend(package_templates(inst, ctx)?);
     }
     Ok(items)
 }
@@ -292,12 +325,12 @@ pub(crate) fn has_side_invariants(comp: &Composition) -> bool {
 ///
 /// - the side record `<name>_side`: a field `<name>_pkg_<Inst> : <Pkg>_pkgstate` for each
 ///   instance with state, in `ordered_pkgs_idx()` order, then `<name>_abort_flag : bool`;
-/// - `PkgInv_<name>_<Inst> (s : <name>_side)` for each instance with a package invariant: one
-///   Domino claim each;
-/// - `GameInv_<name> (g : <name>_side)`, when the composition has a game invariant;
+/// - `PkgInv_<N>_of_<Inst>_in_<name> (s : <name>_side)` for each package invariant `<N>` of
+///   each instance: one Domino claim each;
+/// - `GameInv_<N>_of_<name> (g : <name>_side)` for each game invariant `<N>`;
 /// - `side_inv_<name> s = !s.<abort> => PkgInv_… s /\ … /\ GameInv_<name> s`.
 ///
-/// The `<Pkg>_pkgstate` types and `PkgInv_<Pkg>` templates come from the package files
+/// The `<Pkg>_pkgstate` types and `PkgInv_<N>_of_<Pkg>` templates come from the package files
 /// ([`package_items`]), which the composition file imports. An operator of the composition
 /// with the name of a template is [`SideInvariantError::OpNameCollision`]; a field of the side
 /// record with the name of a package state field is [`InvariantError::FieldCollision`].
@@ -344,26 +377,38 @@ pub(crate) fn composition_items<P: Project>(
     }];
     let mut conjuncts = Vec::new();
     for inst in invariant_instances(comp) {
-        let template = pkg_inv_template_name(&inst.pkg.name);
-        ops.define_named(&template, &format!("the package invariant of `{}`", inst.pkg.name))?;
-        let op = pkg_inv_op_name(name, inst.name());
-        ops.define_named(&op, &format!("the package invariant of instance `{}`", inst.name()))?;
-        let body = EcExpr::App {
-            head: template,
-            args: vec![field_expr("s", &instance_field_name(&prefix, inst.name()))],
-        };
-        items.push(op_def(&op, "s", record_ty.clone(), body));
-        conjuncts.push(apply(&op, "s"));
+        for invariant in package_invariant_names(ctx.project, inst)? {
+            let template = pkg_inv_template_name(&invariant, &inst.pkg.name);
+            ops.define_named(
+                &template,
+                &format!("the package invariant `{invariant}` of `{}`", inst.pkg.name),
+            )?;
+            let op = pkg_inv_op_name(&invariant, name, inst.name());
+            ops.define_named(
+                &op,
+                &format!("the package invariant `{invariant}` of instance `{}`", inst.name()),
+            )?;
+            let body = EcExpr::App {
+                head: template,
+                args: vec![field_expr("s", &instance_field_name(&prefix, inst.name()))],
+            };
+            items.push(op_def(&op, "s", record_ty.clone(), body));
+            conjuncts.push(apply(&op, "s"));
+        }
     }
     if !comp.invariants.is_empty() {
-        let op = game_inv_op_name(name);
-        ops.define_named(&op, &format!("the game invariant of `{}`", comp.name))?;
         let owner = format!("composition `{}`", comp.name);
-        let (file, body) = the_invariant(ctx.project, &comp.invariants, &owner, Kind::Game)?;
         let lookup = game_lookup(comp, &prefix)?;
-        let body = translate(ctx, &file, &lookup, &body)?;
-        items.push(op_def(&op, "g", record_ty.clone(), body));
-        conjuncts.push(apply(&op, "s"));
+        for invariant in named_invariants(ctx.project, &comp.invariants, &owner, Kind::Game)? {
+            let op = game_inv_op_name(&invariant.name, name);
+            ops.define_named(
+                &op,
+                &format!("the game invariant `{}` of `{}`", invariant.name, comp.name),
+            )?;
+            let body = translate(ctx, &invariant.file, &lookup, &invariant.body)?;
+            items.push(op_def(&op, "g", record_ty.clone(), body));
+            conjuncts.push(apply(&op, "s"));
+        }
     }
     let op = side_inv_op_name(name);
     ops.define_named(&op, &format!("the side invariant of `{}`", comp.name))?;
@@ -396,18 +441,20 @@ fn apply(op: &str, arg: &str) -> EcExpr {
     }
 }
 
-/// `op PkgInv_<Pkg> (s : <Pkg>_pkgstate) : bool = <body>.`
-fn package_template<P: Project>(
+/// `op PkgInv_<N>_of_<Pkg> (s : <Pkg>_pkgstate) : bool = <body>.`, one for each named
+/// package invariant `<N>` of the package. Two names that become one operator are
+/// [`SideInvariantError::OpNameCollision`].
+fn package_templates<P: Project>(
     inst: &PackageInstance,
     ctx: &SideCtx<'_, P>,
-) -> Result<EcItem, EcExportError> {
+) -> Result<Vec<EcItem>, EcExportError> {
     let package = inst.pkg.name.as_str();
     let owner = format!("package `{package}`");
-    let (file, body) = the_invariant(ctx.project, &inst.pkg.invariants, &owner, Kind::Package)?;
+    let invariants = named_invariants(ctx.project, &inst.pkg.invariants, &owner, Kind::Package)?;
     let fields = pkg_state_fields(inst, &mut Names::new())?;
     if fields.is_empty() {
         return Err(InvariantError::from(SideInvariantError::StatelessPackageInvariant {
-            file,
+            file: invariants[0].file.clone(),
             package: package.to_string(),
         })
         .into());
@@ -417,13 +464,15 @@ fn package_template<P: Project>(
         let projection = field_expr("s", &field);
         lookup.fields.insert(format!("pkg.{raw}"), (projection, ty));
     }
-    let body = translate(ctx, &file, &lookup, &body)?;
-    Ok(op_def(
-        &pkg_inv_template_name(package),
-        "s",
-        EcType::Named(pkg_state_type_name(package)),
-        body,
-    ))
+    let mut ops = OpRegistry::default();
+    let mut items = Vec::new();
+    for invariant in invariants {
+        let op = pkg_inv_template_name(&invariant.name, package);
+        ops.define_named(&op, &format!("the package invariant `{}` of `{package}`", invariant.name))?;
+        let body = translate(ctx, &invariant.file, &lookup, &invariant.body)?;
+        items.push(op_def(&op, "s", EcType::Named(pkg_state_type_name(package)), body));
+    }
+    Ok(items)
 }
 
 /// `game.<Inst>.<field>` -> ``g.`<prefix>pkg_<Inst>.`<Pkg>_<field>``, for every state field.
@@ -479,7 +528,6 @@ mod tests {
 
     use super::super::tests::{find_equivalence, item_text, load_project};
     use super::super::{build_invariant_file, invariant_ops, leaf_part_ops, side_invariant_ops, OpRegistry};
-    use crate::writers::smt::contexts::InvariantClaims;
     use super::*;
     use crate::project::{DirectoryFiles, DirectoryProject};
     use crate::writers::easycrypt::export::{export_theorem, ExportedTheorem};
@@ -529,7 +577,8 @@ mod tests {
         assert!(file.state_relations.iter().any(|r| r == "invariant"), "{:?}", file.state_relations);
         let left = theorem.find_game_instance("Hybrid1").unwrap();
         let right = theorem.find_game_instance("Hybrid2").unwrap();
-        let ops: Vec<String> = invariant_ops(left, right, &file.state_relations, &file.helpers)
+        let ops: Vec<String> = invariant_ops(project, left, right, &file.state_relations, &file.helpers)
+            .unwrap()
             .into_iter()
             .map(|op| op.name)
             .collect();
@@ -546,14 +595,14 @@ mod tests {
     fn hybrid1_hybrid2_side_invariants_are_in_the_package_and_composition_files() {
         let exported = export("example-projects/4WHS", "Simple4WHS").unwrap();
         let pkg = file(&exported, "Pkg_PRF.ec");
-        for item in ["type PRF_pkgstate = {", "op PkgInv_PRF "] {
+        for item in ["type PRF_pkgstate = {", "op PkgInv_main_of_PRF "] {
             assert_eq!(count(pkg, item), 1, "{item} in:\n{pkg}");
         }
         let comp = file(&exported, "Comp_Hybrid2.ec");
         for item in [
             "type Hybrid2_side = {",
-            "op PkgInv_Hybrid2_Prf ",
-            "op GameInv_Hybrid2 ",
+            "op PkgInv_main_of_Prf_in_Hybrid2 ",
+            "op GameInv_main_of_Hybrid2 ",
             "op side_inv_Hybrid2 ",
         ] {
             assert_eq!(count(comp, item), 1, "{item} in:\n{comp}");
@@ -564,8 +613,8 @@ mod tests {
             concat!(
                 "op side_inv_Hybrid2 (s : Hybrid2_side) : bool =\n",
                 "     !s.`Hybrid2_abort_flag\n",
-                "  =>    PkgInv_Hybrid2_Prf s\n",
-                "     /\\ GameInv_Hybrid2 s."
+                "  =>    PkgInv_main_of_Prf_in_Hybrid2 s\n",
+                "     /\\ GameInv_main_of_Hybrid2 s."
             )
         );
         // Hybrid1 has no side invariant
@@ -625,20 +674,63 @@ mod tests {
         assert!(e.contains("`./packages/Helper.smt2`") && e.contains("define-fun nonneg"), "{e}");
     }
 
-    /// Story 71: an owner with several named invariants has one operator, their conjunction.
+    /// Story 73: each named invariant of an owner has its own template and wrapper, and
+    /// `side_inv` joins both wrappers.
     #[test]
-    fn two_named_invariants_of_a_package_are_one_conjoined_operator() {
+    fn two_named_invariants_of_a_package_are_two_templates_and_two_wrappers() {
         let exported = export(STORY58, "TwoForms").unwrap();
-        let text = exported
-            .files
-            .iter()
-            .find(|(_, text)| text.contains("op PkgInv_Two "))
-            .map(|(_, text)| text.as_str())
-            .expect("a file defines PkgInv_Two");
-        assert_eq!(count(text, "op PkgInv_Two "), 1, "{text}");
-        let def = &text[text.find("op PkgInv_Two ").unwrap()..];
-        let def = &def[..def.find(".\n").unwrap_or(def.len())];
-        assert!(def.contains("/\\"), "{def}");
+        let pkg = file(&exported, "Pkg_Two.ec");
+        for op in ["op PkgInv_main_of_Two ", "op PkgInv_nonneg_of_Two "] {
+            assert_eq!(count(pkg, op), 1, "{op} in:\n{pkg}");
+        }
+        let comp = file(&exported, "Comp_TwoGame.ec");
+        for op in ["op PkgInv_main_of_T_in_TwoGame ", "op PkgInv_nonneg_of_T_in_TwoGame "] {
+            assert_eq!(count(comp, op), 1, "{op} in:\n{comp}");
+        }
+        let side = item_text(comp, "op side_inv_TwoGame");
+        assert!(
+            side.contains("PkgInv_main_of_T_in_TwoGame s")
+                && side.contains("PkgInv_nonneg_of_T_in_TwoGame s"),
+            "{side}"
+        );
+    }
+
+    /// Story 73: each wrapper stands for the claim of its own name.
+    #[test]
+    fn each_wrapper_stands_for_the_claim_of_its_name() {
+        let (theorem, project) = load_project(STORY58, "TwoForms");
+        let comp = theorem.find_game_instance("L").unwrap().game();
+        let claims: Vec<(String, String)> = side_invariant_ops(project, comp)
+            .unwrap()
+            .into_iter()
+            .filter_map(|o| Some((o.name, o.claim?)))
+            .collect();
+        assert_eq!(
+            claims,
+            [
+                (
+                    "Comp_TwoGame.PkgInv_main_of_T_in_TwoGame".to_string(),
+                    "package-invariant!main!TwoGame-T!".to_string()
+                ),
+                (
+                    "Comp_TwoGame.PkgInv_nonneg_of_T_in_TwoGame".to_string(),
+                    "package-invariant!nonneg!TwoGame-T!".to_string()
+                ),
+            ]
+        );
+    }
+
+    /// Story 73, ADR 0018: package `A_B` with invariant `c` and package `A` with invariant
+    /// `B_c` give two templates and two wrappers, and translation succeeds.
+    #[test]
+    fn a_b_with_c_and_a_with_b_c_give_different_operators() {
+        let exported = export(STORY58, "Clash").unwrap();
+        assert_eq!(count(file(&exported, "Pkg_A_B.ec"), "op PkgInv_c_of_A__B "), 1);
+        assert_eq!(count(file(&exported, "Pkg_A.ec"), "op PkgInv_B__c_of_A "), 1);
+        let comp = file(&exported, "Comp_ClashGame.ec");
+        for op in ["op PkgInv_c_of_A__B_in_ClashGame ", "op PkgInv_B__c_of_A_in_ClashGame "] {
+            assert_eq!(count(comp, op), 1, "{op} in:\n{comp}");
+        }
     }
 
     #[test]
@@ -706,18 +798,20 @@ mod tests {
     /// one composition of both sides follow, once, as premises only (no claim).
     #[test]
     fn invariant_ops_name_the_operators_in_unfold_order() {
-        let (theorem, _) = load_project("example-projects/4WHS", "Simple4WHS");
+        let (theorem, project) = load_project("example-projects/4WHS", "Simple4WHS");
         let left = theorem.find_game_instance("Real_Hybrid3").unwrap();
         let right = theorem.find_game_instance("Ideal_Hybrid3").unwrap();
         let ops = invariant_ops(
+            project,
             left,
             right,
             &["invariant".to_string(), "relation-a-b".to_string(), "state=".to_string()],
             &["eq-prf".to_string()],
-        );
-        let rows: Vec<(&str, Option<&InvariantClaims>, Option<&str>)> = ops
+        )
+        .unwrap();
+        let rows: Vec<(&str, Option<&str>, Option<&str>)> = ops
             .iter()
-            .map(|o| (o.name.as_str(), o.claim.as_ref(), o.relation.as_deref()))
+            .map(|o| (o.name.as_str(), o.claim.as_deref(), o.relation.as_deref()))
             .collect();
         assert_eq!(
             rows,
@@ -729,40 +823,41 @@ mod tests {
                 ("StateRelation_state_eq", None, Some("state=")),
                 ("Helper_eq_prf", None, None),
                 ("Comp_Hybrid2.side_inv_Hybrid2", None, None),
-                ("Comp_Hybrid2.PkgInv_Hybrid2_Prf", None, None),
-                ("PkgInv_PRF", None, None),
-                ("Comp_Hybrid2.GameInv_Hybrid2", None, None),
+                ("Comp_Hybrid2.PkgInv_main_of_Prf_in_Hybrid2", None, None),
+                ("PkgInv_main_of_PRF", None, None),
+                ("Comp_Hybrid2.GameInv_main_of_Hybrid2", None, None),
             ]
         );
-        assert_eq!(leaf_part_ops(left, right, &[], &[]).len(), 4);
+        assert_eq!(leaf_part_ops(project, left, right, &[], &[]).unwrap().len(), 4);
     }
 
-    /// Story 69: in the side-invariant job, a wrapper and `GameInv_<C>` stand for the claims
+    /// Story 69: in the side-invariant job, a wrapper and `GameInv_<N>_of_<C>` stand for the claims
     /// of one-sided execution of the composition (symbolic-execution story 25).
     #[test]
     fn the_side_invariant_ops_of_a_composition_name_its_claims() {
-        let (theorem, _) = load_project("example-projects/4WHS", "Simple4WHS");
+        let (theorem, project) = load_project("example-projects/4WHS", "Simple4WHS");
         let comp = theorem.find_game_instance("Hybrid2").unwrap().game();
-        let rows: Vec<(String, Option<String>)> = side_invariant_ops(comp)
+        let rows: Vec<(String, Option<String>)> = side_invariant_ops(project, comp)
+            .unwrap()
             .into_iter()
-            .map(|o| (o.name, o.claim.map(|c| c.claim("main"))))
+            .map(|o| (o.name, o.claim))
             .collect();
         assert_eq!(
             rows,
             [
                 ("Comp_Hybrid2.side_inv_Hybrid2".to_string(), None),
                 (
-                    "Comp_Hybrid2.PkgInv_Hybrid2_Prf".to_string(),
+                    "Comp_Hybrid2.PkgInv_main_of_Prf_in_Hybrid2".to_string(),
                     Some("package-invariant!main!Hybrid2-Prf!".to_string())
                 ),
-                ("PkgInv_PRF".to_string(), None),
+                ("PkgInv_main_of_PRF".to_string(), None),
                 (
-                    "Comp_Hybrid2.GameInv_Hybrid2".to_string(),
+                    "Comp_Hybrid2.GameInv_main_of_Hybrid2".to_string(),
                     Some("game-invariant!main!Hybrid2!".to_string())
                 ),
             ]
         );
         let none = theorem.find_game_instance("Hybrid1").unwrap().game();
-        assert!(side_invariant_ops(none).is_empty());
+        assert!(side_invariant_ops(project, none).unwrap().is_empty());
     }
 }

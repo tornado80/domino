@@ -1,0 +1,15 @@
+composition ClashGame {
+
+    instance A_B = A_B {
+    }
+
+    instance A = A {
+    }
+
+    compose {
+        adversary: {
+            Inc: A_B,
+            Dec: A,
+        },
+    }
+}

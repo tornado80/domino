@@ -1,0 +1,23 @@
+package P {
+    invariant: [ ./packages/P.smt2 ]
+    params {
+        n: Integer,
+    }
+
+    state {
+        k: Integer,
+    }
+
+    /* a branch on the parameter `n`, then one path that breaks `k >= 0` */
+    oracle O(x: Integer) -> Integer {
+        if (n > 0) {
+            k <- n;
+        } else {
+            k <- 0;
+        }
+        if (x < 0) {
+            k <- x;
+        }
+        return 0;
+    }
+}

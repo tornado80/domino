@@ -490,16 +490,24 @@ mod tests {
     use crate::util::smtsolver::process::IncrementalCvc5Backend;
 
     fn project() -> DirectoryProject<'static> {
+        project_in("testdata/debug/se25")
+    }
+
+    fn project_in(dir: &str) -> DirectoryProject<'static> {
         // the files are leaked: the project borrows them for the length of the test binary
-        let dir = PathBuf::from("testdata/debug/se25");
+        let dir = PathBuf::from(dir);
         let files: &'static DirectoryFiles =
             Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
         DirectoryProject::load(dir, files).unwrap()
     }
 
     fn side_run(out: &Path) -> LockstepRun {
+        side_run_of(&project(), out)
+    }
+
+    fn side_run_of(project: &DirectoryProject<'_>, out: &Path) -> LockstepRun {
         run_side_command(
-            &project(),
+            project,
             "T",
             "S",
             "O",
@@ -561,6 +569,30 @@ mod tests {
         let trace = std::fs::read_to_string(out.path().join("trace.json")).unwrap();
         assert!(trace.contains("\"one_sided\": true"));
         assert!(trace.contains("\"absent\""));
+    }
+
+    /// Story 73: each named package invariant is a check of its own, named by the invariant;
+    /// a path that breaks only `nonneg` fails only that check.
+    #[test]
+    fn a_path_that_breaks_one_named_invariant_fails_only_its_check() {
+        const MAIN: &str = "package-invariant!main!S-p!";
+        const NONNEG: &str = "package-invariant!nonneg!S-p!";
+        let out = tempfile::tempdir().unwrap();
+        let run = side_run_of(&project_in("testdata/debug/ec73"), out.path());
+        let names: Vec<&str> = run.meta.claims.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, [MAIN, NONNEG, GAME]);
+        let failing: Vec<bool> = run
+            .outcome
+            .pairs
+            .iter()
+            .map(|p| matches!(p.verdict_of(NONNEG), Some(Verdict::GoalFails { .. })))
+            .collect();
+        assert_eq!(failing, [true, false, true, false]);
+        for p in &run.outcome.pairs {
+            assert!(matches!(p.verdict_of(MAIN), Some(Verdict::Verified)), "{}", p.id);
+        }
+        let summary = std::fs::read_to_string(out.path().join("summary.txt")).unwrap();
+        assert!(summary.contains(NONNEG) && summary.contains(MAIN), "{summary}");
     }
 
     #[test]

@@ -1,0 +1,31 @@
+theorem Clash {
+    instance L = ClashGame {
+    }
+
+    instance R = ClashGame {
+    }
+
+    gamehops {
+        equivalence L R {
+            invariant: [ ./theorem/invariant-true.smt2 ]
+            Inc: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+            Dec: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+        }
+    }
+}

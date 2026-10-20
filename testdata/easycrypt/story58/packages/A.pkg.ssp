@@ -1,0 +1,11 @@
+package A {
+    invariant: [ ./packages/A.smt2 ]
+    state {
+        ctr: Integer,
+    }
+
+    oracle Dec() -> Integer {
+        ctr <- (ctr - 1);
+        return ctr;
+    }
+}

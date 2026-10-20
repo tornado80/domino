@@ -42,13 +42,13 @@ type Game_side = {
   Game_abort_flag : bool
 }.
 
-op PkgInv_Game_C (s : Game_side) : bool =
-  PkgInv_Ctr s.`Game_pkg_C.
+op PkgInv_main_of_C_in_Game (s : Game_side) : bool =
+  PkgInv_main_of_Ctr s.`Game_pkg_C.
 
-op GameInv_Game (g : Game_side) : bool =
+op GameInv_main_of_Game (g : Game_side) : bool =
   0 <= g.`Game_pkg_C.`Ctr_ctr.
 
 op side_inv_Game (s : Game_side) : bool =
      !s.`Game_abort_flag
-  =>    PkgInv_Game_C s
-     /\ GameInv_Game s.
+  =>    PkgInv_main_of_C_in_Game s
+     /\ GameInv_main_of_Game s.

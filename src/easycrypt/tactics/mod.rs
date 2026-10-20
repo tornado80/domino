@@ -83,6 +83,7 @@ use crate::util::smtsolver::SmtSolverBackend;
 use crate::writers::easycrypt::export::{EquivalenceReport, ExportedTheorem, SideInvReport};
 use crate::writers::easycrypt::invariant::{invariant_ops, leaf_part_ops, side_invariant_ops};
 use crate::writers::easycrypt::lower::inline_oracle_ec;
+use crate::writers::easycrypt::EcExportError;
 
 use super::check::{
     describe_mismatch, ok_or_reject, sentences_until_proof, CheckError, EquivalenceSetup,
@@ -1571,13 +1572,13 @@ where
     let (left, right) = (setup.left_inst, setup.right_inst);
     let (unfold, part_ops, judgement) = match kind {
         JobKind::Equivalence => (
-            invariant_ops(left, right, &walked.relations, &walked.helpers),
-            leaf_part_ops(left, right, &walked.relations, &walked.helpers),
+            invariant_ops(project, left, right, &walked.relations, &walked.helpers).map_err(EcExportError::from)?,
+            leaf_part_ops(project, left, right, &walked.relations, &walked.helpers).map_err(EcExportError::from)?,
             Judgement::Equiv,
         ),
         // `Comp_<C>.side_inv_<C>` first: the premise unfolded is the one that mentions it
         JobKind::SideInvariants(_) => {
-            let ops = side_invariant_ops(left.game());
+            let ops = side_invariant_ops(project, left.game()).map_err(EcExportError::from)?;
             (ops.clone(), ops, Judgement::Hoare)
         }
     };

@@ -1,0 +1,16 @@
+composition S {
+    const n: Integer;
+    invariant: [ ./games/S.smt2 ]
+
+    instance p = P {
+        params {
+            n: n,
+        }
+    }
+
+    compose {
+        adversary: {
+            O: p,
+        },
+    }
+}

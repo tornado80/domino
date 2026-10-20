@@ -1668,41 +1668,6 @@ pub(crate) fn game_invariant_claim_name(name: &str, owner: &str) -> String {
     format!("game-invariant!{name}!{owner}!")
 }
 
-/// The claims of every named invariant of one kind on one owner: what one EasyCrypt
-/// side-invariant operator (`PkgInv_<C>_<Inst>`, `GameInv_<C>`) stands for while it is the
-/// conjunction of the named invariants (story 71; story 73 gives each name its own operator).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InvariantClaims {
-    /// The package invariants of package instance `pkg_inst` in the state of `owner`.
-    Package { owner: String, pkg_inst: String },
-    /// The game invariants on the state of `owner`.
-    Game { owner: String },
-}
-
-impl InvariantClaims {
-    /// The claim of the invariant called `name` of this owner, from the owner functions.
-    pub(crate) fn claim(&self, name: &str) -> String {
-        match self {
-            InvariantClaims::Package { owner, pkg_inst } => {
-                package_invariant_claim_name(name, owner, pkg_inst)
-            }
-            InvariantClaims::Game { owner } => game_invariant_claim_name(name, owner),
-        }
-    }
-
-    /// Whether `claim` is the claim of one of the named invariants of this owner.
-    pub(crate) fn contains(&self, claim: &str) -> bool {
-        let prefix = match self {
-            InvariantClaims::Package { .. } => "package-invariant!",
-            InvariantClaims::Game { .. } => "game-invariant!",
-        };
-        claim
-            .strip_prefix(prefix)
-            .and_then(|rest| rest.split_once('!'))
-            .is_some_and(|(name, _)| self.claim(name) == claim)
-    }
-}
-
 #[cfg(test)]
 mod story04_tests {
     //! Story 04 — assumptions/goal split + skippable return constraint.
