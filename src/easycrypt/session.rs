@@ -1053,6 +1053,23 @@ pub fn split_sentences(source: &str) -> Vec<String> {
 pub(crate) mod tests {
     use super::*;
 
+    /// [`Session::start_with`] on a fake script just written by the test. A fork in a parallel
+    /// test thread can still hold the script's write descriptor, so `exec` fails with
+    /// `ETXTBSY` for a short time; the start is tried again then.
+    pub(crate) fn start_fake(script: &Path, dir: &Path) -> Result<Session, SessionError> {
+        for _ in 0..50 {
+            match Session::start_with(script, dir) {
+                Err(SessionError::Spawn { source, .. })
+                    if source.kind() == std::io::ErrorKind::ExecutableFileBusy =>
+                {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                other => return other,
+            }
+        }
+        Session::start_with(script, dir)
+    }
+
     #[test]
     fn sentences_end_at_a_dot_before_whitespace() {
         let src = "require import A B.\n(* a (* nested *) comment. *)\nlemma l : Pr[M.f() @ &m : res] = x.\nproof.\nbyequiv\n  (: ={glob A}\n     ==> _) => //.\ncall (: inv {| a = M.x{1} |}); last first.\n";
@@ -1103,7 +1120,7 @@ pub(crate) mod tests {
             )
             .unwrap();
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let err = Session::start_with(&script, dir.path()).err().unwrap();
+            let err = start_fake(&script, dir.path()).err().unwrap();
             assert!(matches!(err, SessionError::NotJsonCapable { .. }), "{err}");
             let text = err.to_string();
             for needle in [old, "domino-json/3", ENV_VAR] {
@@ -1168,8 +1185,7 @@ done
     #[test]
     fn each_request_is_one_json_line_with_its_want() {
         let dir = tempfile::tempdir().unwrap();
-        let mut session =
-            Session::start_with(&goal_keeping_easycrypt(dir.path()), dir.path()).unwrap();
+        let mut session = start_fake(&goal_keeping_easycrypt(dir.path()), dir.path()).unwrap();
         session.send("a.", Want::Full).unwrap();
         session.send("say \"x\"\nand y.", Want::Head).unwrap();
         let lines = requests(dir.path());
@@ -1188,8 +1204,7 @@ done
     #[test]
     fn the_front_goal_survives_a_failure_and_comes_back_with_an_undo() {
         let dir = tempfile::tempdir().unwrap();
-        let mut session =
-            Session::start_with(&goal_keeping_easycrypt(dir.path()), dir.path()).unwrap();
+        let mut session = start_fake(&goal_keeping_easycrypt(dir.path()), dir.path()).unwrap();
         session.send("a.", Want::Full).unwrap();
         assert_eq!(front_pp(&session), "a");
         let r = session.send("bad.", Want::Full).unwrap();
@@ -1260,7 +1275,7 @@ done
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut session = Session::start_with(&script, dir.path()).unwrap();
+        let mut session = start_fake(&script, dir.path()).unwrap();
         let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
         let seen = events.clone();
         session.set_observer(Box::new(move |e| {
@@ -1329,7 +1344,7 @@ done
         std::sync::Arc<std::sync::atomic::AtomicBool>,
         std::rc::Rc<std::cell::RefCell<Vec<bool>>>,
     ) {
-        let mut session = Session::start_with(&interruptible_easycrypt(dir), dir).unwrap();
+        let mut session = start_fake(&interruptible_easycrypt(dir), dir).unwrap();
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         session.set_stop(stop.clone());
         let stopped = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -1419,7 +1434,7 @@ done
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut session = Session::start_with(&script, dir.path()).unwrap();
+        let mut session = start_fake(&script, dir.path()).unwrap();
         let r = session.send("rewrite /inv in hpre.", Want::Full).unwrap();
         assert_eq!((r.status, r.state), (Status::Ok, 2));
         assert_eq!(session.count(), 2);
@@ -1472,7 +1487,7 @@ done
     /// A session of `script` that times a sentence out after 200 ms and re-sends the interrupt
     /// every 200 ms for 1.1 s (six signals), its transcript in the returned sink.
     fn interrupt_session(script: &Path, dir: &Path) -> (Session, TestSink) {
-        let mut session = Session::start_with(script, dir).unwrap();
+        let mut session = start_fake(script, dir).unwrap();
         session.set_timeout(Duration::from_millis(200));
         session.set_interrupt_timing(Duration::from_millis(1_100), Duration::from_millis(200));
         let sink = TestSink::new(usize::MAX);
@@ -1724,7 +1739,7 @@ done
 
     fn fake_session(dir: &Path, answer: &str, sink: &TestSink, mode: EcTranscriptMode) -> Session {
         let script = fake_easycrypt(dir, answer);
-        let mut session = Session::start_with(&script, dir).unwrap();
+        let mut session = start_fake(&script, dir).unwrap();
         session.set_transcript_sink(
             Box::new(sink.clone()),
             Path::new("/out/progress/ec-transcript.jsonl"),

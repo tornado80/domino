@@ -3268,8 +3268,8 @@ fn the_leaf_budget_is_off_by_default() {
 #[test]
 fn each_record_says_why_the_driver_sent_its_sentence() {
     use crate::debug::lockstep::JointTree;
+    use crate::easycrypt::session::tests::start_fake;
     use crate::easycrypt::session::tests::TestSink;
-    use crate::easycrypt::session::Session;
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().unwrap();
@@ -3341,7 +3341,7 @@ done
         stop_reason: crate::debug::driver::StopReason::Completed,
     };
     let tree = super::driver::OracleTree::new(&outcome);
-    let mut session = Session::start_with(&script, dir.path()).unwrap();
+    let mut session = start_fake(&script, dir.path()).unwrap();
     let sink = TestSink::new(usize::MAX);
     session.set_transcript_sink(
         Box::new(sink.clone()),
@@ -3525,8 +3525,8 @@ fn run_leaf(
     part_ops: &[crate::writers::easycrypt::invariant::InvariantOp],
 ) -> LeafRun {
     use crate::debug::lockstep::JointTree;
+    use crate::easycrypt::session::tests::start_fake;
     use crate::easycrypt::session::tests::TestSink;
-    use crate::easycrypt::session::Session;
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().unwrap();
@@ -3572,7 +3572,7 @@ done
         stop_reason: crate::debug::driver::StopReason::Completed,
     };
     let tree = super::driver::OracleTree::new(&outcome);
-    let mut session = Session::start_with(&script, dir.path()).unwrap();
+    let mut session = start_fake(&script, dir.path()).unwrap();
     let sink = TestSink::new(usize::MAX);
     session.set_transcript_sink(
         Box::new(sink.clone()),
