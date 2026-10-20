@@ -4,8 +4,9 @@ use std::convert::Infallible;
 
 use crate::{
     expressions::{Expression, ExpressionKind},
-    identifier::Identifier,
+    identifier::{pkg_ident::PackageIdentifier, Identifier},
     package::Composition,
+    parser::package::ForComp,
     statement::{
         Assignment, AssignmentRhs, CodeBlock, IfThenElse, InvokeOracle, Pattern, Statement,
     },
@@ -33,6 +34,33 @@ impl super::Transformation for Transformation<'_> {
             (),
         ))
     }
+}
+
+/// The values of the loop variable `ident` of `for ident: lower <(=) ident <(=) upper`, with the
+/// comparisons the loop declares.
+fn iterations(ident: &Identifier, lower: i64, upper: i64) -> std::ops::Range<i64> {
+    let (start_comp, end_comp) = match ident {
+        Identifier::PackageIdentifier(PackageIdentifier::CodeLoopVar(var)) => {
+            (var.start_comp, var.end_comp)
+        }
+        other => unreachable!("the variable of a `for` loop is a code loop variable: {other:?}"),
+    };
+    let start = if start_comp == ForComp::Lt {
+        lower + 1
+    } else {
+        lower
+    };
+    let end = if end_comp == ForComp::Lte {
+        upper + 1
+    } else {
+        upper
+    };
+    start..end
+}
+
+/// `cb` with each loop that has literal bounds unrolled. Other loops stay.
+pub(crate) fn unroll_block(cb: &CodeBlock) -> CodeBlock {
+    unroll(cb, &Vec::new())
 }
 
 fn unroll(cb: &CodeBlock, subst: &Vec<(&Identifier, &Identifier)>) -> CodeBlock {
@@ -64,7 +92,7 @@ fn unroll(cb: &CodeBlock, subst: &Vec<(&Identifier, &Identifier)>) -> CodeBlock 
                     newsubst.push((ident, &gen_ident));
                     let loopcode = unroll(code, &newsubst);
 
-                    for i in (*lower)..(*upper) {
+                    for i in iterations(ident, *lower, *upper) {
                         newcode.push(Statement::Assignment(
                             Assignment {
                                 pattern: Pattern::Ident(gen_ident.clone()),
@@ -133,4 +161,35 @@ fn unroll(cb: &CodeBlock, subst: &Vec<(&Identifier, &Identifier)>) -> CodeBlock 
     }
 
     CodeBlock(newcode)
+}
+
+#[cfg(test)]
+mod iteration_tests {
+    use super::*;
+    use crate::identifier::pkg_ident::PackageOracleCodeLoopVarIdentifier;
+
+    fn var(start_comp: ForComp, end_comp: ForComp) -> Identifier {
+        Identifier::PackageIdentifier(PackageIdentifier::CodeLoopVar(
+            PackageOracleCodeLoopVarIdentifier {
+                pkg_name: "P".into(),
+                name: "i".into(),
+                start: Box::new(Expression::integer(1)),
+                end: Box::new(Expression::integer(2)),
+                start_comp,
+                end_comp,
+                pkg_inst_name: None,
+                game_name: None,
+                game_inst_name: None,
+                theorem_name: None,
+            },
+        ))
+    }
+
+    #[test]
+    fn the_loop_bounds_follow_the_declared_comparisons() {
+        assert_eq!(iterations(&var(ForComp::Lte, ForComp::Lte), 1, 2), 1..3);
+        assert_eq!(iterations(&var(ForComp::Lte, ForComp::Lt), 1, 2), 1..2);
+        assert_eq!(iterations(&var(ForComp::Lt, ForComp::Lte), 1, 2), 2..3);
+        assert_eq!(iterations(&var(ForComp::Lt, ForComp::Lt), 0, 3), 1..3);
+    }
 }
