@@ -405,7 +405,9 @@ impl Session {
             binary: binary.clone(),
             detail,
         };
-        self.write_raw(PROBE_SENTENCE)?;
+        if let Err(e) = self.write_raw(PROBE_SENTENCE) {
+            return Err(not_json(format!("it exited without answering ({e})")));
+        }
         let line = match self.lines.recv_timeout(Duration::from_secs(120)) {
             Ok(Ok(line)) => line,
             Ok(Err(e)) => return Err(not_json(e.to_string())),
