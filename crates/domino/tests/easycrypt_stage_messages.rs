@@ -265,10 +265,11 @@ fn prove_says_what_it_wrote_for_each_equivalence_it_proves() {
     let _ = std::fs::remove_dir_all(&none_dir);
 }
 
-/// Two equivalences, so "later ones list only their own file" can be seen. Over 6 files the
-/// first line counts instead of naming, which is the rule too.
+/// Two equivalences. Story 68: every file but the oracle lemma files is translation's, the
+/// glue `Eq_<L>_<R>.ec` of each equivalence included, so the first job writes them all and the
+/// second finds them on disk. Over 6 files the first line counts instead of naming.
 #[test]
-fn prove_lists_the_shared_files_once_and_then_only_each_equivalences_own() {
+fn prove_lists_the_translation_files_once_and_the_next_equivalence_finds_them_on_disk() {
     let Some(ec) = easycrypt_binary() else {
         eprintln!("DOMINO_EASYCRYPT not set, skipping");
         return;
@@ -294,8 +295,7 @@ fn prove_lists_the_shared_files_once_and_then_only_each_equivalences_own() {
     );
     assert_eq!(
         wrote[1].as_str(),
-        "easycrypt prove: Eq_H1_kem_correctness_ideal_H2 — wrote missing translation files: \
-         Eq_H1_kem_correctness_ideal_H2.ec"
+        "easycrypt prove: Eq_H1_kem_correctness_ideal_H2 — translation files already on disk"
     );
     assert!(
         !lines

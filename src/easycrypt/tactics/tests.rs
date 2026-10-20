@@ -468,8 +468,9 @@ fn an_interrupted_report_names_what_was_sealed() {
 fn labelled_admits(text: &str) -> Vec<String> {
     text.lines()
         .filter_map(|line| {
+            // story 65: `<id> [claim]; <reason>[; Domino: …][; smt: …] *)`
             let (_, label) = line.split_once("admit. (* domino: ")?;
-            let reason = label.split_once("reason: ")?.1;
+            let reason = label.split_once("; ")?.1;
             Some(reason.split([';', ' ']).next().unwrap().to_string())
         })
         .collect()
@@ -720,8 +721,8 @@ fn a_resumed_oracle_reads_back_its_admits_and_lockstep() {
 
 #[test]
 fn labels_are_read_back_from_the_file() {
-    let text = "  + admit. (* domino: J1 invariant; reason: stuck; Domino: verified *)\n\
-                  admit. (* domino: N4 program; reason: program-mismatch; Domino: inconclusive *)\n\
+    let text = "  + admit. (* domino: J1 invariant; stuck; Domino: verified *)\n\
+                  admit. (* domino: N4 program; program-mismatch; Domino: inconclusive *)\n\
                 + proc; inline. admit.\n";
     assert_eq!(labelled_admits(text), vec!["stuck", "program-mismatch"]);
 }
@@ -1061,11 +1062,13 @@ mod live {
         Some((result, out, captures))
     }
 
-    /// The live page of the first equivalence: beside its transcript (story 36).
+    /// The live page of the first equivalence: beside the transcript of its first oracle
+    /// this run proved (story 36; a resumed oracle has no transcript).
     fn page_path(result: &TheoremTactics) -> PathBuf {
-        result.equivalences[0].oracles[0]
-            .transcript
-            .as_ref()
+        result.equivalences[0]
+            .oracles
+            .iter()
+            .find_map(|o| o.transcript.as_ref())
             .expect("a proved oracle")
             .with_file_name("index.html")
     }
@@ -1206,9 +1209,10 @@ mod live {
             .sum();
         let time = oracle.easycrypt_time.as_millis() as u64;
         // each record's `ms` is cut from a total over all oracles: one oracle's sum can be 1 ms
-        // over its own time
+        // over its own time; the wall-clock time after the last record is not in a record, and
+        // under load it can be a few ms of a short oracle
         assert!(
-            ms <= time + 1 && ms * 100 >= time * 99,
+            ms <= time + 1 && (ms * 100 >= time * 99 || time - ms <= 20),
             "records {ms} ms, report {time} ms"
         );
         // the time by role sums the same records (story 57)
@@ -1679,7 +1683,11 @@ mod live {
         let mut rejected = 0;
         for line in transcript.lines() {
             let v: serde_json::Value = serde_json::from_str(line).unwrap();
-            if v["ctx"]["oracle"].is_null() || v.get("event").is_some() {
+            // `pragma Goals:printall.` (story 61) asks for the goals and changes nothing
+            let pragma = v["sentence"]
+                .as_str()
+                .is_some_and(|s| s.starts_with("pragma "));
+            if v["ctx"]["oracle"].is_null() || v.get("event").is_some() || pragma {
                 continue;
             }
             if v["response"]["status"] == "ok" {
@@ -1689,10 +1697,11 @@ mod live {
             }
         }
         assert!(walked >= 10, "{transcript}");
-        // one write per accepted sentence, one at the end of each oracle, one at the end
+        // one write per accepted sentence, and two for each oracle (story 68: each oracle is a
+        // job of its own, written when its walk ends and when its job ends)
         assert_eq!(
             eq.writes,
-            walked + eq.oracles.len() + 1,
+            walked + 2 * eq.oracles.len(),
             "{rejected} rejected"
         );
         assert!(eq.writes > by_node.equivalences[0].writes);
@@ -1753,14 +1762,15 @@ mod live {
         let interrupted = labelled.iter().filter(|r| *r == "interrupted").count();
         assert!(*admits > 0 && interrupted == *admits, "{text}");
         assert!(
-            text.contains(&format!(
-                "admit. (* domino: {node} open-goal; reason: interrupted"
-            )),
+            text.contains(&format!("admit. (* domino: {node} open-goal; interrupted")),
             "{text}"
         );
         // the report names what was sealed, and its admit counts are the file's
         let report = std::fs::read_to_string(out.path().join(&eq.report_file)).unwrap();
-        assert_eq!(report, eq.render());
+        // story 68: the file is the oracle job's last write, whose elapsed time (the last
+        // line's end) is measured a moment before the equivalence's
+        let without_elapsed = |r: &str| r.rsplit_once(", ").unwrap().0.to_string();
+        assert_eq!(without_elapsed(&report), without_elapsed(&eq.render()));
         assert!(
             report.contains(&format!(
                 "interrupted: sealed {oracle} with {admits} admits at node {node}"
@@ -1813,14 +1823,11 @@ mod live {
             )),
             "{report}"
         );
-        // nothing was sent for the stopped oracle: one `proc; inline.` after the `call`
+        // nothing was sent for the stopped oracle: one `proc; inline.`, the first oracle's
+        // (story 68: each oracle's session opens its own lemma, with no `call`)
         let sent = sentences(&result.equivalences[0].transcript());
-        let call = sent.iter().position(|s| s.starts_with("call (")).unwrap();
         assert_eq!(
-            sent[call..]
-                .iter()
-                .filter(|s| *s == "proc; inline.")
-                .count(),
+            sent.iter().filter(|s| *s == "proc; inline.").count(),
             1,
             "{sent:?}"
         );
@@ -1973,15 +1980,11 @@ mod live {
             resumed.admits_by_reason().len(),
             first.admits_by_reason().len()
         );
-        // not walked: one `proc; inline.` after the call (the other oracle's), the resumed
-        // oracle's goal only got `admit.`
+        // not walked: one `proc; inline.`, the other oracle's (story 68: a resumed oracle
+        // starts no session)
         let sent = sentences(&eq.transcript());
-        let call = sent.iter().position(|s| s.starts_with("call (")).unwrap();
         assert_eq!(
-            sent[call..]
-                .iter()
-                .filter(|s| *s == "proc; inline.")
-                .count(),
+            sent.iter().filter(|s| *s == "proc; inline.").count(),
             1,
             "{sent:?}"
         );
@@ -2001,8 +2004,9 @@ mod live {
             !report.contains(&format!("  {}: resumed", proved.oracle)),
             "{report}"
         );
-        let page = std::fs::read_to_string(page_path(&result)).unwrap();
-        assert!(page.contains("resumed from session record"));
+        // the equivalence's page lists its oracles; an oracle's own page is only the proved one's
+        let page = equivalence_page(&result, out.path());
+        assert!(page.contains("proved earlier (from its record)"), "{page}");
         // the record is complete and still holds both scripts
         let record = read_record(&path);
         assert!(record.complete);
@@ -2053,7 +2057,9 @@ mod live {
         let Some((first_run, out)) = stopped_after_the_first_oracle() else {
             return;
         };
-        std::fs::remove_file(record_path(&first_run, out.path())).unwrap();
+        let first = &first_run.equivalences[0].oracles[0].oracle;
+        let session = record_path(&first_run, out.path());
+        std::fs::remove_file(session.join(format!("{first}.record.json"))).unwrap();
         assert_eq!(
             proof_file(&first_run, out.path())
                 .matches(UNTOUCHED)
@@ -2082,6 +2088,15 @@ mod live {
         };
         let path = record_path(&first_run, out.path());
         let record = read_record(&path);
+        // a version-1 record is a record of the whole equivalence, which the job splits into
+        // one record for each oracle on first use (story 68)
+        for o in &record.oracles {
+            let _ = std::fs::remove_file(path.join(format!("{}.record.json", o.name)));
+        }
+        let whole = crate::easycrypt::job::equivalence_record_path(
+            out.path(),
+            &first_run.equivalences[0].proof_file,
+        );
         let statuses: Vec<String> = record
             .oracles
             .iter()
@@ -2090,7 +2105,7 @@ mod live {
             })
             .collect();
         std::fs::write(
-            &path,
+            &whole,
             format!(
                 r#"{{"version": 1, "theorem": "Proof", "left": "{}", "right": "{}", "complete": false, "oracles": [{}]}}"#,
                 record.left,

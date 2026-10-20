@@ -176,36 +176,51 @@ fn a_proof_job_never_creates_another_equivalences_file() {
     let theorem = dir.join("KEM_Proof");
     let out = domino("simple-KEM-example", &dir, &ec, &["export"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    let (mine, other) = (
-        theorem.join("Eq_Prot_H1_kem_correctness_real.ec"),
+    // story 68: each oracle lemma file is a job's; the glue `Eq_<L>_<R>.ec` of every
+    // equivalence is a translation file, created by any proof job when it is missing
+    let (mine, other, glue) = (
+        theorem.join("Eq_Prot_H1_kem_correctness_real_GetPK.ec"),
+        theorem.join("Eq_H1_kem_correctness_ideal_H2_GetPK.ec"),
         theorem.join("Eq_H1_kem_correctness_ideal_H2.ec"),
     );
-    std::fs::remove_file(&mine).unwrap();
-    std::fs::remove_file(&other).unwrap();
-    std::fs::remove_file(theorem.join("Types.ec")).unwrap();
+    for file in [&mine, &other, &glue] {
+        std::fs::remove_file(file).unwrap();
+    }
 
-    // an oracle that does not exist ends the job before its own skeleton is written
-    let out = domino(
-        "simple-KEM-example",
-        &dir,
-        &ec,
-        &[
-            "prove",
-            "--theorem",
-            "KEM_Proof",
-            "--proofstep",
-            "0",
-            "--oracle",
-            "NoSuchOracle",
-        ],
-    );
+    // an oracle that does not exist ends the job before it writes a file: the oracle names
+    // are known before translation's files are made (story 68)
+    let prove = |oracle: &str| {
+        domino(
+            "simple-KEM-example",
+            &dir,
+            &ec,
+            &[
+                "prove",
+                "--theorem",
+                "KEM_Proof",
+                "--proofstep",
+                "0",
+                "--oracle",
+                oracle,
+            ],
+        )
+    };
+    let out = prove("NoSuchOracle");
     assert!(!out.status.success());
-    assert!(
-        theorem.join("Types.ec").exists(),
-        "translation's file is created"
-    );
+    assert!(stderr(&out).contains("NoSuchOracle"), "{}", stderr(&out));
     assert!(!mine.exists(), "a typo in `--oracle` writes no skeleton");
-    assert!(!other.exists(), "another equivalence's file is not created");
+    assert!(!glue.exists(), "a typo in `--oracle` writes no file");
+
+    // a job on one oracle creates the missing translation files, the other equivalence's glue
+    // included, and no other job's oracle file
+    let out = prove("GetPK");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(mine.exists(), "its own oracle file");
+    assert!(glue.exists(), "translation's file is created");
+    assert!(
+        !other.exists(),
+        "another equivalence's oracle file is not created"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

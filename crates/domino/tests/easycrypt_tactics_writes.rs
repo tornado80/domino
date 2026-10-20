@@ -68,6 +68,9 @@ fn tactics(project: &str, out: &Path, easycrypt: &Path, extra: &[&str]) -> Child
         .unwrap()
 }
 
+/// The lemma file of the first oracle of `test-oracle-rename` (story 68: one file per oracle).
+const FIRST_ORACLE_FILE: &str = "Eq_medium_composition_small_composition_ChangeNameUsefulOracle.ec";
+
 #[test]
 fn a_tactics_run_never_runs_easycrypt_compile() {
     let Some(real) = easycrypt_binary() else {
@@ -104,14 +107,11 @@ fn a_tactics_run_never_runs_easycrypt_compile() {
         !invocations.lines().any(|l| l == "compile"),
         "{invocations}"
     );
-    // the proof is written all the same, and no `.eco` cache next to it
-    let proof =
-        std::fs::read_to_string(dir.join("out/Proof/Eq_medium_composition_small_composition.ec"))
-            .unwrap();
+    // the oracle lemma is written all the same (story 68), and no `.eco` cache next to it
+    let oracle = "out/Proof/Eq_medium_composition_small_composition_UsefulOracle";
+    let proof = std::fs::read_to_string(dir.join(format!("{oracle}.ec"))).unwrap();
     assert!(!proof.contains("+ proc; inline. admit."), "{proof}");
-    assert!(!dir
-        .join("out/Proof/Eq_medium_composition_small_composition.eco")
-        .exists());
+    assert!(!dir.join(format!("{oracle}.eco")).exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -123,8 +123,10 @@ fn a_run_killed_mid_oracle_leaves_its_last_write_intact() {
     };
     let dir = scratch("sigkill");
     let theorem = dir.join("out/Proof");
-    let file = theorem.join("Eq_medium_composition_small_composition.ec");
-    let report = theorem.join("progress/Eq_medium_composition_small_composition/report.txt");
+    // story 68: the first oracle's lemma file and its report
+    let file = theorem.join(FIRST_ORACLE_FILE);
+    let report = theorem
+        .join("progress/Eq_medium_composition_small_composition/ChangeNameUsefulOracle/report.txt");
     let mut child = tactics(
         "../test-projects/test-oracle-rename",
         &dir.join("out"),
@@ -135,7 +137,7 @@ fn a_run_killed_mid_oracle_leaves_its_last_write_intact() {
     let began = Instant::now();
     loop {
         if let Ok(text) = std::fs::read_to_string(&file) {
-            if text.contains("reason: interrupted") {
+            if text.contains("; interrupted *)") {
                 break;
             }
         }
@@ -153,13 +155,12 @@ fn a_run_killed_mid_oracle_leaves_its_last_write_intact() {
     use std::os::unix::process::ExitStatusExt;
     assert_eq!(status.signal(), Some(9), "killed, not finished");
 
-    // what is on disk is a whole write, at least as far as the one seen: every oracle bullet,
-    // closed by `qed.`, and the first oracle's work in it
+    // what is on disk is a whole write, at least as far as the one seen: the oracle's bullet,
+    // closed by `qed.`, with its work in it
     let text = std::fs::read_to_string(&file).unwrap();
-    assert!(text.trim_end().ends_with("end section."), "{text}");
-    assert!(text.contains("\nqed.\n"), "{text}");
+    assert!(text.trim_end().ends_with("qed."), "{text}");
     let progress = sspverif::writers::easycrypt::overwrite::proof_progress(&text);
-    assert_eq!(progress.total, 2, "{text}");
+    assert_eq!(progress.total, 1, "{text}");
     assert!(progress.partial + progress.proved >= 1, "{text}");
     // the report is written just before the file: whole, and at least as new as the file (a
     // kill between the two renames leaves it one write ahead)
@@ -187,7 +188,7 @@ fn a_run_killed_at_the_default_granularity_leaves_a_compiling_file_and_a_record_
     let dir = scratch("tactic-kill");
     let out = dir.join("out");
     let theorem = out.join("Proof");
-    let file = theorem.join("Eq_medium_composition_small_composition.ec");
+    let file = theorem.join(FIRST_ORACLE_FILE);
     let mut child = tactics(
         "../test-projects/test-oracle-rename",
         &out,
@@ -195,11 +196,12 @@ fn a_run_killed_at_the_default_granularity_leaves_a_compiling_file_and_a_record_
         &["--no-quick-close"],
     );
     // the record is written right after the file: wait for both, so the kill is between writes
-    let record = theorem.join("session/Eq_medium_composition_small_composition/record.json");
+    let record = theorem
+        .join("session/Eq_medium_composition_small_composition/ChangeNameUsefulOracle.record.json");
     let began = Instant::now();
     loop {
         if let Ok(text) = std::fs::read_to_string(&file) {
-            if text.contains("reason: interrupted") && record.exists() {
+            if text.contains("; interrupted *)") && record.exists() {
                 break;
             }
         }
