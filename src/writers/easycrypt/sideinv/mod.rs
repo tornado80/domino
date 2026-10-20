@@ -33,12 +33,12 @@ use crate::project::Project;
 use crate::theorem::Theorem;
 
 use self::bottom_up::{line, BottomUp};
-use super::ast::{EcBinop, EcExpr, EcFile, EcItem, EcLemma, ProofLine, Require};
+use super::ast::{EcBinop, EcExpr, EcFile, EcItem, EcLemma, LemmaBinder, ProofLine, Require};
 use super::game::instance_wirings;
 use super::interfaces::{discover_compositions, InterfacesOutput};
 use super::invariant::{
-    game_inv_op_name, game_invariant_names, game_side_inv_op_name, has_side_invariants,
-    pkg_side_inv_op_name, side_inv_op_name, StateOwners,
+    game_inv_op_name, game_invariant_names, game_side_inv_op_name, has_links, has_side_invariants,
+    links_op_name, pkg_side_inv_op_name, side_consts, side_inv_op_name, StateOwners,
 };
 use super::names::{NameKind, Names};
 use super::proof::{
@@ -97,7 +97,20 @@ fn composition_files(
     owners: &StateOwners,
 ) -> Result<SideInvFiles, EcExportError> {
     let layout = compute_layout(comp, interfaces)?;
-    let inv = side_inv_app(comp, &layout, None)?
+    // story 80: one binder for each game constant of the side record
+    let consts = side_consts(comp)?;
+    let binders: Vec<LemmaBinder> = consts
+        .iter()
+        .map(|k| LemmaBinder::Typed {
+            name: k.mangled.clone(),
+            ty: k.ty.clone(),
+        })
+        .collect();
+    let values: Vec<EcExpr> = consts
+        .iter()
+        .map(|k| EcExpr::Var(k.mangled.clone()))
+        .collect();
+    let inv = side_inv_app(comp, &layout, None, &values)?
         .expect("a composition with a side invariant has `side_inv_<C>`");
     let theory = layout.comp_theory.clone();
     let c = layout.comp_mangled.clone();
@@ -108,6 +121,7 @@ fn composition_files(
         project,
     )?;
     let game_names = game_invariant_names(project, comp).map_err(EcExportError::from)?;
+    let links = has_links(comp);
     let with_head = |head: String| match &inv {
         EcExpr::App { args, .. } => EcExpr::App {
             head: format!("{theory}.{head}"),
@@ -167,7 +181,7 @@ fn composition_files(
         };
         let lemma = EcLemma {
             name: stem.clone(),
-            binders: vec![],
+            binders: binders.clone(),
             statement: EcExpr::OracleHoare {
                 proc: game,
                 pre: Box::new(inv.clone()),
@@ -197,11 +211,16 @@ fn composition_files(
 
     let start = (!game_names.is_empty()).then(|| {
         let stem = side_inv_start_stem(&c);
+        let links = links.then(|| with_head(links_op_name(&c)));
         let post = EcExpr::right_chain(
             EcBinop::And,
-            game_names
-                .iter()
-                .map(|n| with_head(game_inv_op_name(n, &c)))
+            links
+                .into_iter()
+                .chain(
+                    game_names
+                        .iter()
+                        .map(|n| with_head(game_inv_op_name(n, &c))),
+                )
                 .collect(),
         )
         .expect("a composition with game invariants has one");
@@ -216,10 +235,10 @@ fn composition_files(
                 requires: requires.clone(),
                 items: vec![EcItem::Lemma(EcLemma {
                     name: stem.clone(),
-                    binders: vec![],
+                    binders: binders.clone(),
                     statement: EcExpr::OracleHoare {
                         proc: format!("{theory}.Game_{c}.{INIT}"),
-                        pre: Box::new(EcExpr::Bool(true)),
+                        pre: Box::new(init_args_pre(values.clone())),
                         post: Box::new(post),
                     },
                     proof: walked(INIT),
@@ -257,6 +276,21 @@ fn composition_files(
         start,
         game_invariants: !game_names.is_empty(),
     })
+}
+
+/// The precondition of the start lemma (story 80): `arg = x` for one `init` argument,
+/// `arg = (x1, …)` for more, with the binders of the game constants; `true` for none.
+fn init_args_pre(mut values: Vec<EcExpr>) -> EcExpr {
+    let rhs = match values.len() {
+        0 => return EcExpr::Bool(true),
+        1 => values.remove(0),
+        _ => EcExpr::Tuple(values),
+    };
+    EcExpr::Binop {
+        op: EcBinop::Eq,
+        lhs: Box::new(EcExpr::Var("arg".to_string())),
+        rhs: Box::new(rhs),
+    }
 }
 
 /// `SideInvInit_<C>`.

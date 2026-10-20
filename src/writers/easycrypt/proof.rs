@@ -34,6 +34,7 @@ use super::interfaces::{self, InterfacesOutput};
 use super::invariant::{self, InvariantError, InvariantFile};
 use super::names::{NameKind, Names};
 use super::package;
+use super::render::render_expr;
 use super::types::translate_type;
 use super::EcExportError;
 
@@ -324,11 +325,15 @@ fn instance_state_lit(
 /// read from the module variables at `mem` (none for the side-invariant lemma's one memory),
 /// or `None` when the composition has no side invariant. The side record's fields are
 /// qualified with the composition's theory, so a file that uses it need not import that
-/// theory; the `<Pkg>_pkgstate` fields need the package files imported.
+/// theory; the `<Pkg>_pkgstate` fields need the package files imported. `init_args` are the
+/// values of the router's `init` arguments (the lemma binders, or a game instance's
+/// bindings); the game-constant fields ([`invariant::side_consts`], story 80), when the record
+/// has them, are these arguments in their order.
 pub(super) fn side_inv_app(
     comp: &Composition,
     layout: &CompLayout,
     mem: Option<u8>,
+    init_args: &[EcExpr],
 ) -> Result<Option<EcExpr>, EcExportError> {
     if !invariant::has_side_invariants(comp) {
         return Ok(None);
@@ -351,6 +356,10 @@ pub(super) fn side_inv_app(
             let field = invariant::params_field_name(&prefix, inst.name());
             fields.push((format!("{theory}.{field}"), params));
         }
+    }
+    for (constant, value) in invariant::side_consts(comp)?.iter().zip(init_args) {
+        let field = invariant::const_field_name(&prefix, &constant.mangled);
+        fields.push((format!("{theory}.{field}"), value.clone()));
     }
     fields.push((
         format!("{theory}.{}", invariant::abort_field_name(&prefix)),
@@ -578,7 +587,7 @@ fn build_equivalence_file(
             left_layout.comp_theory, left_layout.comp_mangled
         ),
         proc: "run".to_string(),
-        args: left_run_args,
+        args: left_run_args.clone(),
         memory: "m".to_string(),
         event: Box::new(EcExpr::Var("res".to_string())),
     };
@@ -588,7 +597,7 @@ fn build_equivalence_file(
             right_layout.comp_theory, right_layout.comp_mangled
         ),
         proc: "run".to_string(),
-        args: right_run_args,
+        args: right_run_args.clone(),
         memory: "m".to_string(),
         event: Box::new(EcExpr::Var("res".to_string())),
     };
@@ -625,8 +634,25 @@ fn build_equivalence_file(
     };
     // story 69: the side invariants of both sides, assumed by each oracle lemma and joined in
     // by the glue
-    let left_side = side_inv_app(left_comp, &left_layout, Some(1))?;
-    let right_side = side_inv_app(right_comp, &right_layout, Some(2))?;
+    let left_side = side_inv_app(left_comp, &left_layout, Some(1), &left_run_args)?;
+    let right_side = side_inv_app(right_comp, &right_layout, Some(2), &right_run_args)?;
+    // story 80: the theorem constants that the game-constant fields of a side read, the binders
+    // of each oracle lemma; and the arguments of each side's lemma
+    let side_binders = side_const_binders(
+        &binders,
+        &binder_mangled,
+        &[(left_comp, &left_args), (right_comp, &right_args)],
+    )?;
+    let side_lemma_args =
+        |comp: &Composition, run_args: &[EcExpr]| -> Result<String, EcExportError> {
+            let n = invariant::side_consts(comp)?.len();
+            Ok(run_args[..n]
+                .iter()
+                .map(|a| format!(" {}", render_expr(a)))
+                .collect())
+        };
+    let left_lemma_args = side_lemma_args(left_comp, &left_run_args)?;
+    let right_lemma_args = side_lemma_args(right_comp, &right_run_args)?;
     let assumed: Vec<EcExpr> = left_side.iter().chain(&right_side).cloned().collect();
 
     // --- the byequiv induction start's own relational precondition
@@ -665,15 +691,15 @@ fn build_equivalence_file(
     // the side-invariant lemmas of an oracle, as `conseq` takes them: the left side's, then the
     // right side's; `_` for a left side without one when the right side has one
     let side_lemmas = |oracle: &str| -> Vec<String> {
-        let lemma = |side: &Option<EcExpr>, layout: &CompLayout| {
+        let lemma = |side: &Option<EcExpr>, layout: &CompLayout, args: &str| {
             side.as_ref().map(|_| {
                 let lemma = side_inv_oracle_stem(&layout.comp_mangled, oracle);
-                format!("{lemma}.{lemma}")
+                applied(&format!("{lemma}.{lemma}"), args)
             })
         };
         match (
-            lemma(&left_side, &left_layout),
-            lemma(&right_side, &right_layout),
+            lemma(&left_side, &left_layout, &left_lemma_args),
+            lemma(&right_side, &right_layout, &right_lemma_args),
         ) {
             (None, None) => vec![],
             (Some(l), None) => vec![l],
@@ -691,8 +717,16 @@ fn build_equivalence_file(
             .iter()
             .map(|l| format!(" {l}"))
             .collect();
+        let oracle_args: String = side_binders
+            .iter()
+            .map(|b| match b {
+                LemmaBinder::Typed { name, .. } => format!(" {name}"),
+                LemmaBinder::Memory(_) => unreachable!("a side binder is typed"),
+            })
+            .collect();
         proof.push(bullet_line(format!(
-            "by conseq {lemma_name}{joined} => /#."
+            "by conseq {}{joined} => /#.",
+            applied(&lemma_name, &oracle_args)
         )));
         let statement = EcExpr::OracleEquiv {
             left: format!(
@@ -719,7 +753,7 @@ fn build_equivalence_file(
                 requires: theory_requires.clone(),
                 items: vec![EcItem::Lemma(EcLemma {
                     name: lemma_name,
-                    binders: vec![],
+                    binders: side_binders.clone(),
                     statement,
                     proof: vec![
                         plain_line(format!("(* {proc_name} *)")),
@@ -903,6 +937,39 @@ pub(super) fn state_files<'c>(
         }
     }
     files
+}
+
+/// The binders of the equivalence lemma (`binders`, named through `binder_mangled`) that the
+/// game-constant fields of a side read (story 80), in their order: the binders of each oracle
+/// lemma, whose side invariants read them.
+fn side_const_binders(
+    binders: &[LemmaBinder],
+    binder_mangled: &HashMap<String, String>,
+    sides: &[(&Composition, &[RunArgValue])],
+) -> Result<Vec<LemmaBinder>, EcExportError> {
+    let mut read: Vec<&str> = Vec::new();
+    for &(comp, args) in sides {
+        let n = invariant::side_consts(comp)?.len();
+        for arg in &args[..n] {
+            if let RunArgValue::TheoremConst(name) = arg {
+                read.push(binder_mangled[name].as_str());
+            }
+        }
+    }
+    Ok(binders
+        .iter()
+        .filter(|b| matches!(b, LemmaBinder::Typed { name, .. } if read.contains(&name.as_str())))
+        .cloned()
+        .collect())
+}
+
+/// `lemma` applied to `args` (each with a space in front), in parentheses when there are any.
+fn applied(lemma: &str, args: &str) -> String {
+    if args.is_empty() {
+        lemma.to_string()
+    } else {
+        format!("({lemma}{args})")
+    }
 }
 
 /// The file of composition `comp`'s side-invariant lemmas that joins them, without `.ec`:

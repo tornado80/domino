@@ -1,0 +1,19 @@
+composition C {
+    const c: Bool;
+    const u: Bool;
+
+    invariant: [ ./games/C.smt2 ]
+
+    instance P = P {
+        params {
+            b: c,
+        }
+    }
+
+    compose {
+        adversary: {
+            Inc: P,
+            Get: P,
+        },
+    }
+}

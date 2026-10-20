@@ -1,0 +1,20 @@
+package P {
+    params {
+        b: Bool,
+    }
+
+    state {
+        ctr: Integer,
+    }
+
+    oracle Inc() -> Integer {
+        if b {
+            ctr <- (ctr + 1);
+        }
+        return ctr;
+    }
+
+    oracle Get() -> Integer {
+        return ctr;
+    }
+}

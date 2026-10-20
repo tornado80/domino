@@ -60,6 +60,13 @@ fn has_param_fields(pkg: &Package) -> bool {
         .any(|(name, ty, _)| is_field(pkg, name, ty))
 }
 
+/// Whether `pkg` has a value parameter that [`param_fields`] keeps: one with a module variable.
+pub(crate) fn has_value_params(pkg: &Package) -> bool {
+    pkg.params
+        .iter()
+        .any(|(name, ty, _)| !matches!(ty.kind(), TypeKind::Fn(..)) && is_field(pkg, name, ty))
+}
+
 /// Whether `<C>_side` of `comp` has the field `<C>_params_<I>` for `inst`: the templates of its
 /// package take the parameters ([`has_pkg_params`]), or `comp` has a game invariant and the
 /// package a parameter that [`param_fields`] keeps (story 79).

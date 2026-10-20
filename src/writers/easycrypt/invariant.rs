@@ -41,8 +41,10 @@ use super::package;
 use super::types::{func_op_name, translate_type};
 use super::EcExportError;
 
+mod consts;
 mod params;
 mod side;
+pub(crate) use consts::{const_field_name, has_links, links_op_name, side_consts};
 pub(crate) use params::{
     has_side_params, params_field_name, params_record_packages, pkg_param_fields, pkg_params_lit,
     side_params_lit, template_app,
@@ -1341,6 +1343,10 @@ pub fn side_invariant_ops(
         }
     }
     ops.extend(templates);
+    // story 80: no Domino claim stands for the links; the walk unfolds them
+    if consts::has_links(comp) {
+        ops.push(InvariantOp::plain(qualified(consts::links_op_name(&name))));
+    }
     for invariant in side::game_invariant_names(project, comp)? {
         ops.push(InvariantOp {
             claim: Some(game_invariant_claim_name(&invariant, &comp.name)),

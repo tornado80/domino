@@ -5133,3 +5133,41 @@ mod package_parameters_in_game_invariants {
         assert_eq!(result.admit_count(), 0, "{}", result.render());
     }
 }
+
+/// Story 80 (ADR 0019): a game invariant that reads the game constants `c` and `u` of `C`.
+mod game_constants_in_game_invariants {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::easycrypt::session::json_binary_configured;
+    use crate::project::{DirectoryFiles, DirectoryProject};
+    use crate::writers::easycrypt::export::{export_theorem, write_files};
+
+    /// `C` passes `c` to `P`'s `b`; no package reads `u`. `C_1` binds `c` to `true`.
+    const PROJECT: &str = "test-projects/test-game-invariant-consts";
+
+    #[test]
+    fn the_whole_theorem_has_no_admit() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let dir = PathBuf::from(PROJECT);
+        let files = DirectoryFiles::load(&dir).unwrap();
+        let project = DirectoryProject::load(dir, &files).unwrap();
+        let theorem = project.get_theorem("Proof").unwrap();
+        let exported = export_theorem(theorem, &project).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        write_files(out.path(), &exported.files).unwrap();
+        let result = run_tactics(
+            project.get_theorem("Proof").unwrap(),
+            &project,
+            &exported,
+            out.path(),
+            &crate::util::smtsolver::process::IncrementalCvc5Backend,
+            &TacticsOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(result.admit_count(), 0, "{}", result.render());
+    }
+}

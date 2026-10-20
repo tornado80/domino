@@ -31,6 +31,7 @@ use crate::writers::easycrypt::names::Names;
 use crate::writers::easycrypt::types::{func_op_name, translate_type};
 use crate::writers::easycrypt::EcExportError;
 
+use super::consts::{const_field_name, links_body, links_op_name, side_consts, SideConst};
 use super::params::{
     has_pkg_params, has_side_params, param_fields, params_field_name, pkg_param_fields,
     pkg_params_type_name, template_app, theorem_const_of, PkgParamField,
@@ -367,11 +368,13 @@ pub(crate) fn has_side_invariants(comp: &Composition) -> bool {
 /// - the side record `<name>_side`: a field `<name>_pkg_<Inst> : <Pkg>_pkgstate` for each
 ///   instance with state, then a field `<name>_params_<Inst> : <Pkg>_pkgparams` for each
 ///   instance that [`has_side_params`] (stories 78, 79), both in `ordered_pkgs_idx()`
-///   order, then `<name>_abort_flag : bool`;
+///   order, then a field `<name>_const_<X>` for each game constant of [`side_consts`]
+///   (story 80), then `<name>_abort_flag : bool`;
+/// - with game invariants, `links_<name> (s : <name>_side)` (story 80, [`links_body`]);
 /// - `PkgInv_<N>_of_<Inst>_in_<name> (s : <name>_side)` for each package invariant `<N>` of
 ///   each instance: one Domino claim each;
 /// - `GameInv_<N>_of_<name> (g : <name>_side)` for each game invariant `<N>`;
-/// - `side_inv_<name> s = !s.<abort> => PkgInv_… s /\ … /\ GameInv_<name> s`;
+/// - `side_inv_<name> s = !s.<abort> => PkgInv_… s /\ … /\ links_<name> s /\ GameInv_<name> s`;
 /// - with package and game invariants both, `pkg_inv_<name>` and `game_inv_<name>`, the two
 ///   parts of `side_inv_<name>` alone (story 77).
 ///
@@ -418,6 +421,12 @@ pub(crate) fn composition_items<P: Project>(
         }
     }
     let mut game_conjuncts = Vec::new();
+    if let Some(body) = links_body(comp, &prefix)? {
+        let op = links_op_name(name);
+        ops.define_named(&op, &format!("the links of `{}`", comp.name))?;
+        items.push(op_def(&op, "s", record_ty.clone(), body));
+        game_conjuncts.push(apply(&op, "s"));
+    }
     if !comp.invariants.is_empty() {
         let owner = format!("composition `{}`", comp.name);
         let lookup = game_lookup(game, &prefix)?;
@@ -492,6 +501,10 @@ fn side_record_fields(
                 EcType::Named(pkg_params_type_name(&inst.pkg.name)),
             ));
         }
+    }
+    // story 80: the game constants
+    for constant in side_consts(comp)? {
+        fields.push((const_field_name(prefix, &constant.mangled), constant.ty));
     }
     let abort = abort_field_name(prefix);
     fields.push((abort.clone(), EcType::Bool));
@@ -622,7 +635,9 @@ fn template_args(
 /// - `game.<Inst>.<param>` -> ``g.`<prefix>params_<Inst>.`<Pkg>_param_<param>``, for every
 ///   field of `<Pkg>_pkgparams` (story 79);
 /// - `game.<f>` -> `func_<c>`, for every function constant `f` that `game` binds to the theorem
-///   constant `c` (story 79). A value constant is not here.
+///   constant `c` (story 79);
+/// - `game.<X>` -> ``g.`<prefix>const_<X>``, for every game constant of the side record
+///   (story 80).
 fn game_lookup(game: &GameInstance, prefix: &str) -> Result<StateLookup, EcExportError> {
     let comp = game.game();
     let mut lookup = state_lookup(comp, prefix)?;
@@ -652,6 +667,10 @@ fn game_lookup(game: &GameInstance, prefix: &str) -> Result<StateLookup, EcExpor
         lookup
             .fields
             .insert(format!("game.{}", ident.name), (op, ty));
+    }
+    for SideConst { raw, mangled, ty } in side_consts(comp)? {
+        let field = field_expr("g", &const_field_name(prefix, &mangled));
+        lookup.fields.insert(format!("game.{raw}"), (field, ty));
     }
     Ok(lookup)
 }
@@ -719,6 +738,7 @@ mod tests {
     const STORY69: &str = "testdata/easycrypt/story69";
     const PARAMS: &str = "test-projects/test-package-invariant-params";
     const GAME_PARAMS: &str = "test-projects/test-game-invariant-params";
+    const GAME_CONSTS: &str = "test-projects/test-game-invariant-consts";
 
     fn export(dir: &str, theorem: &str) -> Result<ExportedTheorem, EcExportError> {
         let files = DirectoryFiles::load(Path::new(dir)).unwrap();
@@ -808,6 +828,7 @@ mod tests {
                 "op side_inv_Hybrid2 (s : Hybrid2_side) : bool =\n",
                 "     !s.`Hybrid2_abort_flag\n",
                 "  =>    PkgInv_main_of_Prf_in_Hybrid2 s\n",
+                "     /\\ links_Hybrid2 s\n",
                 "     /\\ GameInv_main_of_Hybrid2 s."
             )
         );
@@ -1050,12 +1071,14 @@ mod tests {
                 ("Comp_Hybrid2.side_inv_Hybrid2", None, None),
                 ("Comp_Hybrid2.PkgInv_main_of_Prf_in_Hybrid2", None, None),
                 ("PkgInv_main_of_PRF", None, None),
+                // story 80: the links have no claim
+                ("Comp_Hybrid2.links_Hybrid2", None, None),
                 ("Comp_Hybrid2.GameInv_main_of_Hybrid2", None, None),
             ]
         );
         assert_eq!(
             leaf_part_ops(project, left, right, &[], &[]).unwrap().len(),
-            4
+            5
         );
     }
 
@@ -1079,6 +1102,7 @@ mod tests {
                     Some("package-invariant!main!Hybrid2-Prf!".to_string())
                 ),
                 ("PkgInv_main_of_PRF".to_string(), None),
+                ("Comp_Hybrid2.links_Hybrid2".to_string(), None),
                 (
                     "Comp_Hybrid2.GameInv_main_of_Hybrid2".to_string(),
                     Some("game-invariant!main!Hybrid2!".to_string())
@@ -1256,6 +1280,105 @@ mod tests {
         crate::writers::easycrypt::test_support::assert_compiles(
             &base,
             &format!("{base}/Eq_left_right.ec"),
+        );
+    }
+
+    /// Story 80: `C_side` holds the game constants `c` and `u`, which `init` takes;
+    /// `links_C` relates `P`'s `b` to `c`, and `game_inv_C` starts with it.
+    #[test]
+    fn the_side_record_holds_the_game_constants_and_links_c_relates_them() {
+        let exported = export(GAME_CONSTS, "Proof").unwrap();
+        let comp = file(&exported, "Comp_C.ec");
+        let side = item_text(comp, "type C_side");
+        assert!(
+            side.contains("  C_const_c : bool;\n  C_const_u : bool;\n  C_abort_flag : bool\n"),
+            "{side}"
+        );
+        assert_eq!(
+            item_text(comp, "op links_C"),
+            "op links_C (s : C_side) : bool =\n  s.`C_params_P.`P_param_b = s.`C_const_c."
+        );
+        assert!(
+            item_text(comp, "op side_inv_C")
+                .contains("=>    links_C s\n     /\\ GameInv_main_of_C s."),
+            "{comp}"
+        );
+        let inv = item_text(comp, "op GameInv_main_of_C");
+        for read in ["g.`C_const_c", "g.`C_const_u"] {
+            assert!(inv.contains(read), "{read} in:\n{inv}");
+        }
+    }
+
+    /// Story 80: the side-invariant lemmas take one binder for each game constant, and the
+    /// start lemma fixes the `init` arguments to them.
+    #[test]
+    fn the_side_invariant_lemmas_take_the_game_constants_as_binders() {
+        let exported = export(GAME_CONSTS, "Proof").unwrap();
+        let inc = file(&exported, "SideInv_C_Inc.ec");
+        assert!(
+            inc.contains("lemma SideInv_C_Inc (c : bool) (u : bool) :"),
+            "{inc}"
+        );
+        assert!(inc.contains("Comp_C.C_const_c = c"), "{inc}");
+        let start = file(&exported, "SideInvInit_C.ec");
+        assert!(
+            start.contains("lemma SideInvInit_C (c : bool) (u : bool) :"),
+            "{start}"
+        );
+        assert!(start.contains("arg = (c, u)"), "{start}");
+        assert!(start.contains("Comp_C.links_C"), "{start}");
+    }
+
+    /// Story 80: the equivalence gives each side lemma the bindings of its game instance.
+    #[test]
+    fn the_equivalence_instantiates_the_side_lemma_with_the_bindings_of_c_1() {
+        let exported = export(GAME_CONSTS, "Proof").unwrap();
+        let glue = file(&exported, "Eq_C_1_D_1.ec");
+        assert!(
+            glue.contains(
+                "by conseq (Eq_C_1_D_1_Inc u) (SideInv_C_Inc.SideInv_C_Inc true u) => /#."
+            ),
+            "{glue}"
+        );
+        let oracle = file(&exported, "Eq_C_1_D_1_Inc.ec");
+        assert!(
+            oracle.contains("lemma Eq_C_1_D_1_Inc (u : bool) :"),
+            "{oracle}"
+        );
+        assert!(oracle.contains("Comp_C.C_const_c = true"), "{oracle}");
+    }
+
+    /// Story 80: a composition with package invariants only has no constant field and no links.
+    #[test]
+    fn a_composition_with_package_invariants_only_has_no_constant_fields() {
+        let exported = export(PARAMS, "Proof").unwrap();
+        for (name, text) in &exported.files {
+            for gone in ["_const_", "links_"] {
+                assert!(
+                    !text.contains(gone),
+                    "{gone} in {}:\n{text}",
+                    name.display()
+                );
+            }
+        }
+    }
+
+    /// Story 80: the tree of the game-constants project compiles (skips without `easycrypt`).
+    #[test]
+    fn the_tree_of_the_game_consts_project_compiles() {
+        let exported = export(GAME_CONSTS, "Proof").unwrap();
+        let out = tempfile::tempdir().unwrap();
+        crate::writers::easycrypt::export::write_files(out.path(), &exported.files).unwrap();
+        let base = out.path().to_str().unwrap().to_string();
+        for side in &exported.side_invariants {
+            crate::writers::easycrypt::test_support::assert_compiles(
+                &base,
+                &format!("{base}/{}", side.join_file),
+            );
+        }
+        crate::writers::easycrypt::test_support::assert_compiles(
+            &base,
+            &format!("{base}/Eq_C_1_D_1.ec"),
         );
     }
 }

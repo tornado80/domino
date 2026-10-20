@@ -1,0 +1,16 @@
+composition D {
+    const c: Bool;
+
+    instance P = P {
+        params {
+            b: c,
+        }
+    }
+
+    compose {
+        adversary: {
+            Inc: P,
+            Get: P,
+        },
+    }
+}

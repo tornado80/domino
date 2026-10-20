@@ -1,0 +1,50 @@
+theorem Proof {
+    const u: Bool;
+
+    instance C_0 = C {
+        params {
+            c: false,
+            u: u,
+        }
+    }
+
+    instance C_1 = C {
+        params {
+            c: true,
+            u: u,
+        }
+    }
+
+    instance D_1 = D {
+        params {
+            c: true,
+        }
+    }
+
+    gamehops {
+        equivalence C_1 D_1 {
+            invariant: [
+                ./theorem/invariant.smt2
+            ]
+
+            Inc: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    same-output:  [no-abort]
+                    invariant:    [no-abort]
+                }
+            }
+            Get: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    same-output:  [no-abort]
+                    invariant:    [no-abort]
+                }
+            }
+        }
+    }
+}
