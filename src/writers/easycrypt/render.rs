@@ -96,6 +96,7 @@ fn render_item(item: &EcItem) -> String {
             as_name,
             overrides,
         } => render_clone(base, as_name, overrides),
+        EcItem::CloneInclude { base } => format!("clone include {base}."),
         EcItem::ModuleAlias {
             name,
             functor,

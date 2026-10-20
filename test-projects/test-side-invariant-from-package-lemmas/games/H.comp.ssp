@@ -1,0 +1,19 @@
+composition H {
+    invariant: [ ./games/H.smt2 ]
+
+    instance cnt = Cnt {
+    }
+
+    instance wrap = Wrap {
+    }
+
+    compose {
+        adversary: {
+            Step: wrap,
+            Get: cnt,
+        },
+        wrap: {
+            Inc: cnt,
+        },
+    }
+}

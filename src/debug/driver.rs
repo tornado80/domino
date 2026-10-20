@@ -152,6 +152,14 @@ pub enum DebugError {
     #[error("no composition named `{name}` in this project")]
     CompositionNotFound { name: String },
 
+    /// One-sided execution checks only game invariants (story 77): a composition without them
+    /// has no side tree.
+    #[error(
+        "composition `{composition}` has no game invariant, so it has no side tree: its package \
+         invariants come from the package lemmas"
+    )]
+    NoGameInvariants { composition: String },
+
     #[error(
         "theorem `{theorem}` already has a game instance named `{name}`, the name one-sided \
          execution gives the composition with free parameters"

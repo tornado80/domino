@@ -70,7 +70,8 @@ pub fn create_if_absent(path: &Path, text: &str) -> std::io::Result<bool> {
 /// which the proof job of the oracle owns, or a side-invariant lemma file `SideInv_<C>_<O>.ec`
 /// (story 69), which the side-invariant job of the composition owns, or a package lemma file
 /// `PkgInv_<V>_<O>.ec`, `Frame_<V>_<O>.ec` or `PkgInv_<V>_init.ec` (story 76), which the
-/// package-invariant job of the package owns. Every other file, the equivalence's glue
+/// package-invariant job of the package owns, or `SideInvInit_<C>.ec` (story 77), which the
+/// side-invariant job owns. Every other file, the equivalence's glue
 /// `Eq_<L>_<R>.ec`, its `Eq_<L>_<R>_Invariants.ec`, `SideInv_<C>.ec` and `PkgInv_<V>.ec`
 /// included, is a translation file, created when missing.
 pub fn is_oracle_file(exported: &ExportedTheorem, rel: &Path) -> bool {
@@ -92,21 +93,42 @@ pub fn is_oracle_file(exported: &ExportedTheorem, rel: &Path) -> bool {
         )
         .any(|(_, file)| Path::new(file) == rel)
         || exported
-            .package_invariants
+            .side_invariants
             .iter()
-            .any(|p| Path::new(&p.start_file) == rel)
+            .any(|s| s.start_file.as_deref().is_some_and(|f| Path::new(f) == rel))
+        || is_package_lemma_file(exported, rel)
+}
+
+/// Whether `rel` is a package lemma file of `exported` (story 76). These files form one chain
+/// for each variant, and each composition clones the end of the chain (story 77), so any job
+/// that reads a composition needs them on disk.
+fn is_package_lemma_file(exported: &ExportedTheorem, rel: &Path) -> bool {
+    exported.package_invariants.iter().any(|p| {
+        p.oracle_files
+            .iter()
+            .chain(&p.frame_files)
+            .map(|(_, f)| f)
+            .chain(&p.start_file)
+            .any(|f| Path::new(f) == rel)
+    })
+}
+
+/// Whether [`ensure_translation_files`] creates `rel` when it is missing.
+pub fn is_ensured(exported: &ExportedTheorem, rel: &Path) -> bool {
+    !is_oracle_file(exported, rel) || is_package_lemma_file(exported, rel)
 }
 
 /// Creates, in `theorem_out`, every file of `exported` that translation owns (all but the
-/// oracle lemma files) and that is missing. Files that exist are not read. Says nothing: the
-/// caller reports the paths it gets back (story 44).
+/// oracle lemma files) and that is missing, and every missing package lemma file, as
+/// translation wrote it: the compositions clone the chain of these files (story 77). Files that
+/// exist are not read. Says nothing: the caller reports the paths it gets back (story 44).
 pub fn ensure_translation_files(
     exported: &ExportedTheorem,
     theorem_out: &Path,
 ) -> std::io::Result<Vec<PathBuf>> {
     let mut created = Vec::new();
     for (rel, text) in &exported.files {
-        if is_oracle_file(exported, rel) {
+        if !is_ensured(exported, rel) {
             continue;
         }
         if create_if_absent(&theorem_out.join(rel), text)? {

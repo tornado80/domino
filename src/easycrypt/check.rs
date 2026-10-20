@@ -176,21 +176,31 @@ pub(crate) fn sentences_until_call(file: &str, source: &str) -> Result<Vec<Strin
     })
 }
 
-/// The sentences of the oracle lemma file `file` up to and including `proof.` (story 68): the
-/// oracle's goal is in front after them.
+/// The sentences of the oracle lemma file `file` up to and including `proof.` (story 68), and
+/// the sentences of the proof before the walked bullet (story 77): the oracle's goal is in
+/// front after them.
 pub(crate) fn sentences_until_proof(file: &str, source: &str) -> Result<Vec<String>, CheckError> {
+    // story 77: a side-invariant lemma proves its package invariants before the bullet that
+    // the walk proves, and those sentences come first too
+    let source = source
+        .find(WALKED_BULLET)
+        .map_or(source, |at| &source[..at]);
     let mut out = Vec::new();
+    let mut proof = false;
     for sentence in split_sentences(source) {
-        let done = sentence == "proof.";
+        proof |= sentence == "proof.";
         out.push(sentence);
-        if done {
-            return Ok(out);
-        }
     }
-    Err(CheckError::NoProofSentence {
-        file: file.to_string(),
-    })
+    if !proof {
+        return Err(CheckError::NoProofSentence {
+            file: file.to_string(),
+        });
+    }
+    Ok(out)
 }
+
+/// The bullet of a lemma file that a proof job proves along a tree, as translation writes it.
+const WALKED_BULLET: &str = "+ proc; inline. admit.";
 
 pub(crate) fn ok_or_reject<'r>(
     response: &'r Response,
@@ -271,7 +281,8 @@ pub(crate) fn equivalence_setup<'t>(
 
 /// What the side-invariant job of composition `composition` needs (story 69): the setup of an
 /// equivalence of the composition's first game instance with itself. Only the router, its abort
-/// flag and the oracles are read, which every instance of the composition shares.
+/// flag and the oracles are read, which every instance of the composition shares. Without
+/// game invariants it has no oracles to walk (story 77).
 pub(crate) fn side_setup<'t>(
     theorem_ec: &'t Theorem<'_>,
     composition: &str,
@@ -281,7 +292,13 @@ pub(crate) fn side_setup<'t>(
         .iter()
         .find(|i| i.game().name == composition)
         .expect("an exported composition has a game instance in its theorem");
-    setup_of(inst, inst)
+    let mut setup = setup_of(inst, inst)?;
+    // story 77: the side tree checks only game invariants, so without them no tree is walked;
+    // translation proves the package invariants from the package lemmas
+    if inst.game().invariants.is_empty() {
+        setup.oracles.clear();
+    }
+    Ok(setup)
 }
 
 /// What the package-invariant job of package `package` needs (story 76): the oracles of the
@@ -304,9 +321,11 @@ pub(crate) fn pkg_setup<'t>(
         .expect("checked above")
         .pkg;
     let mut setup = setup_of(inst, inst)?;
+    // a package without package invariants has frame lemmas only, and no tree is walked
     setup.oracles = pkg
         .oracles
         .iter()
+        .filter(|_| !pkg.invariants.is_empty())
         .map(|o| {
             let name = &o.sig.name;
             Ok((name.clone(), Names::new().mangle(NameKind::Proc, name)?))

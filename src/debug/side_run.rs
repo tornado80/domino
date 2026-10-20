@@ -273,11 +273,12 @@ fn fingerprint_of(
     )
 }
 
-/// The claims of a side tree: each package invariant of `C`, then its game invariant, on the
-/// new state, each under `left-no-abort`.
+/// The claims of a side tree: each game invariant of `C` on the new state, under
+/// `left-no-abort`. The package invariants are not claims (story 77, ADR 0016): the package
+/// tree checks each package once, and `SideInv_<C>_<O>` takes them from the package lemmas.
 fn side_claims(eqctx: &EquivalenceContext<'_>) -> Vec<ResolvedClaim> {
     eqctx
-        .generate_game_or_package_invariant_claims()
+        .generate_game_invariant_claims()
         .into_iter()
         .filter(|c| c.kind().invariant_side() == Some(InvariantSide::Left))
         .map(|c| ResolvedClaim {
@@ -291,7 +292,8 @@ fn side_claims(eqctx: &EquivalenceContext<'_>) -> Vec<ResolvedClaim> {
 }
 
 /// The base frame of a side tree: the declarations and definitions `prove` uses (both sides',
-/// the copy's never read), and then each invariant of `C` on the old state.
+/// the copy's never read), and then each invariant of `C` on the old state, the package
+/// invariants too: the side tree assumes them, and checks only the game invariants.
 fn side_base_frame(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<SmtExpr> {
     let mut base = vec![SmtExpr::Comment(
         " domino easycrypt debug --side-inv — base frame ".to_string(),
@@ -367,6 +369,11 @@ where
     )?;
 
     let claims = side_claims(&eqctx);
+    if claims.is_empty() {
+        return Err(DebugError::NoGameInvariants {
+            composition: composition.to_string(),
+        });
+    }
     let queries: Vec<ClaimQuery> = claims
         .iter()
         .map(|c| ClaimQuery::of(&eqctx, c, oracle))
@@ -716,12 +723,14 @@ mod tests {
         );
     }
 
+    /// Story 77: the side tree checks only the game invariant; the package invariant is
+    /// assumed on the old state and is not a claim.
     #[test]
     fn a_side_run_checks_the_composition_claims_and_fails_only_the_breaking_path() {
         let out = tempfile::tempdir().unwrap();
         let run = side_run(out.path());
         let names: Vec<&str> = run.meta.claims.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, [PKG, GAME]);
+        assert_eq!(names, [GAME]);
         assert!(run.meta.one_sided);
         assert!(run.meta.fingerprint.contains_key("all"));
 
@@ -740,22 +749,18 @@ mod tests {
             .outcome
             .pairs
             .iter()
-            .map(|p| matches!(p.verdict_of(PKG), Some(Verdict::GoalFails { .. })))
+            .map(|p| matches!(p.verdict_of(GAME), Some(Verdict::GoalFails { .. })))
             .collect();
         assert_eq!(failing, [true, false, true, false]);
         for p in &run.outcome.pairs {
-            if !matches!(p.verdict_of(PKG), Some(Verdict::GoalFails { .. })) {
+            assert!(p.verdict_of(PKG).is_none(), "{}", p.id);
+            if !matches!(p.verdict_of(GAME), Some(Verdict::GoalFails { .. })) {
                 assert!(
-                    matches!(p.verdict_of(PKG), Some(Verdict::Verified)),
+                    matches!(p.verdict_of(GAME), Some(Verdict::Verified)),
                     "{}",
                     p.id
                 );
             }
-            assert!(
-                matches!(p.verdict_of(GAME), Some(Verdict::Verified)),
-                "{}",
-                p.id
-            );
         }
         assert!(!run.summary.claims.is_empty());
 
@@ -772,16 +777,15 @@ mod tests {
         assert!(trace.contains("\"absent\""));
     }
 
-    /// Story 73: each named package invariant is a check of its own, named by the invariant;
-    /// a path that breaks only `nonneg` fails only that check.
+    /// Story 73: each named invariant is a check of its own, named by the invariant; a path
+    /// that breaks only `nonneg` fails only that check. Since story 77 they are game invariants.
     #[test]
     fn a_path_that_breaks_one_named_invariant_fails_only_its_check() {
-        const MAIN: &str = "package-invariant!main!S-p!";
-        const NONNEG: &str = "package-invariant!nonneg!S-p!";
+        const NONNEG: &str = "game-invariant!nonneg!S!";
         let out = tempfile::tempdir().unwrap();
         let run = side_run_of(&project_in("testdata/debug/ec73"), out.path());
         let names: Vec<&str> = run.meta.claims.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, [MAIN, NONNEG, GAME]);
+        assert_eq!(names, [GAME, NONNEG]);
         let failing: Vec<bool> = run
             .outcome
             .pairs
@@ -791,16 +795,37 @@ mod tests {
         assert_eq!(failing, [true, false, true, false]);
         for p in &run.outcome.pairs {
             assert!(
-                matches!(p.verdict_of(MAIN), Some(Verdict::Verified)),
+                matches!(p.verdict_of(GAME), Some(Verdict::Verified)),
                 "{}",
                 p.id
             );
         }
         let summary = std::fs::read_to_string(out.path().join("summary.txt")).unwrap();
         assert!(
-            summary.contains(NONNEG) && summary.contains(MAIN),
+            summary.contains(NONNEG) && summary.contains(GAME),
             "{summary}"
         );
+    }
+
+    /// Story 77: a composition without game invariants has no side tree.
+    #[test]
+    fn a_composition_without_game_invariants_has_no_side_run() {
+        let dir = "test-projects/test-side-invariant-from-package-lemmas";
+        let project = project_in(dir);
+        let out = tempfile::tempdir().unwrap();
+        let err = run_side_command(
+            &project,
+            "Proof",
+            "G",
+            "Step",
+            &LockstepDebugOptions::easycrypt(Some(10_000)),
+            &IncrementalCvc5Backend,
+            out.path().to_path_buf(),
+            &mut NopObserver,
+            None,
+        )
+        .expect_err("no side tree");
+        assert!(matches!(err, DebugError::NoGameInvariants { .. }), "{err}");
     }
 
     #[test]
@@ -808,7 +833,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let theorem_out = root.path().join("T");
         let run = side_run(&side_debug_dir(&theorem_out, "S", "O"));
-        assert!(!run.is_ok(), "a path breaks the package invariant");
+        assert!(!run.is_ok(), "a path breaks the game invariant");
         index::refresh_indexes(
             root.path(),
             &index::Level::Theorem {

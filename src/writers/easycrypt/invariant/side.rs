@@ -260,7 +260,7 @@ pub(super) fn package_invariant_names(
 }
 
 /// The names of the game invariants of `comp`, empty when it has none.
-pub(super) fn game_invariant_names(
+pub(crate) fn game_invariant_names(
     project: &impl Project,
     comp: &Composition,
 ) -> Result<Vec<String>, InvariantError> {
@@ -336,7 +336,9 @@ pub(crate) fn has_side_invariants(comp: &Composition) -> bool {
 /// - `PkgInv_<N>_of_<Inst>_in_<name> (s : <name>_side)` for each package invariant `<N>` of
 ///   each instance: one Domino claim each;
 /// - `GameInv_<N>_of_<name> (g : <name>_side)` for each game invariant `<N>`;
-/// - `side_inv_<name> s = !s.<abort> => PkgInv_… s /\ … /\ GameInv_<name> s`.
+/// - `side_inv_<name> s = !s.<abort> => PkgInv_… s /\ … /\ GameInv_<name> s`;
+/// - with package and game invariants both, `pkg_inv_<name>` and `game_inv_<name>`, the two
+///   parts of `side_inv_<name>` alone (story 77).
 ///
 /// The `<Pkg>_pkgstate` types and `PkgInv_<N>_of_<Pkg>` templates come from the package files
 /// ([`package_items`]), which the composition file imports. An operator of the composition
@@ -383,7 +385,7 @@ pub(crate) fn composition_items<P: Project>(
         name: side_record_type_name(name),
         fields,
     }];
-    let mut conjuncts = Vec::new();
+    let mut pkg_conjuncts = Vec::new();
     for inst in invariant_instances(comp) {
         for invariant in package_invariant_names(ctx.project, inst)? {
             let template = pkg_inv_template_name(&invariant, &inst.pkg.name);
@@ -404,9 +406,10 @@ pub(crate) fn composition_items<P: Project>(
                 args: vec![field_expr("s", &instance_field_name(&prefix, inst.name()))],
             };
             items.push(op_def(&op, "s", record_ty.clone(), body));
-            conjuncts.push(apply(&op, "s"));
+            pkg_conjuncts.push(apply(&op, "s"));
         }
     }
+    let mut game_conjuncts = Vec::new();
     if !comp.invariants.is_empty() {
         let owner = format!("composition `{}`", comp.name);
         let lookup = game_lookup(comp, &prefix)?;
@@ -418,12 +421,10 @@ pub(crate) fn composition_items<P: Project>(
             )?;
             let body = translate(ctx, &invariant.file, &lookup, &invariant.body)?;
             items.push(op_def(&op, "g", record_ty.clone(), body));
-            conjuncts.push(apply(&op, "s"));
+            game_conjuncts.push(apply(&op, "s"));
         }
     }
-    let op = side_inv_op_name(name);
-    ops.define_named(&op, &format!("the side invariant of `{}`", comp.name))?;
-    let guarded = EcExpr::Binop {
+    let guarded = |conjuncts: Vec<EcExpr>| EcExpr::Binop {
         op: EcBinop::Implies,
         lhs: Box::new(EcExpr::Unop {
             op: EcUnop::Not,
@@ -431,8 +432,38 @@ pub(crate) fn composition_items<P: Project>(
         }),
         rhs: Box::new(fold_and(conjuncts)),
     };
-    items.push(op_def(&op, "s", record_ty, guarded));
+    let op = side_inv_op_name(name);
+    ops.define_named(&op, &format!("the side invariant of `{}`", comp.name))?;
+    let all = pkg_conjuncts
+        .iter()
+        .chain(&game_conjuncts)
+        .cloned()
+        .collect();
+    items.push(op_def(&op, "s", record_ty.clone(), guarded(all)));
+    // story 77: `SideInv_<C>_<O>` proves the two parts apart, the package invariants from the
+    // package lemmas and the game invariants along the side tree
+    if !pkg_conjuncts.is_empty() && !game_conjuncts.is_empty() {
+        for (op, part, conjuncts) in [
+            (pkg_side_inv_op_name(name), "package", pkg_conjuncts),
+            (game_side_inv_op_name(name), "game", game_conjuncts),
+        ] {
+            ops.define_named(&op, &format!("the {part} invariants of `{}`", comp.name))?;
+            items.push(op_def(&op, "s", record_ty.clone(), guarded(conjuncts)));
+        }
+    }
     Ok(Some(items))
+}
+
+/// `pkg_inv_<C>`: the package invariants of the instances of composition `<C>`, under
+/// `!abort`, when it also has game invariants (story 77).
+pub(crate) fn pkg_side_inv_op_name(comp: &str) -> String {
+    format!("pkg_inv_{comp}")
+}
+
+/// `game_inv_<C>`: the game invariants of composition `<C>`, under `!abort`, when it also has
+/// package invariants (story 77). The side tree checks these only.
+pub(crate) fn game_side_inv_op_name(comp: &str) -> String {
+    format!("game_inv_{comp}")
 }
 
 /// The package instances of `comp` that have a package invariant, in `ordered_pkgs_idx()`

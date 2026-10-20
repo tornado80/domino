@@ -1,0 +1,17 @@
+package Wrap {
+    invariant: [ ./packages/Wrap.smt2 ]
+
+    state {
+        calls: Integer,
+    }
+
+    import oracles {
+        Inc() -> Integer,
+    }
+
+    oracle Step() -> Integer {
+        calls <- (calls + 1);
+        y <- invoke Inc();
+        return y;
+    }
+}

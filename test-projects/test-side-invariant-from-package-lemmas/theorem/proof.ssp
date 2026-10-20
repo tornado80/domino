@@ -1,0 +1,34 @@
+theorem Proof {
+    instance left = G {
+    }
+
+    instance right = H {
+    }
+
+    gamehops {
+        equivalence left right {
+            invariant: [
+                ./theorem/invariant.smt2
+            ]
+
+            Step: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    same-output:  [no-abort]
+                    invariant:    [no-abort]
+                }
+            }
+            Get: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    same-output:  [no-abort]
+                    invariant:    [no-abort]
+                }
+            }
+        }
+    }
+}

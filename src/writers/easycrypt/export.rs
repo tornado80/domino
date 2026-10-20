@@ -82,6 +82,15 @@ pub struct SideInvReport {
     /// `(exported oracle, SideInv_<C>_<O>.ec)` for each oracle, in export order: the files the
     /// side-invariant job owns.
     pub oracle_files: Vec<(String, String)>,
+    /// `SideInvInit_<C>.ec`, the start lemma of the game invariants, which the job owns too;
+    /// `None` without game invariants (story 77).
+    pub start_file: Option<String>,
+    /// Whether the composition has game invariants. Without them the job walks no side tree:
+    /// translation proves each `SideInv_<C>_<O>` from the package lemmas, and the job checks it.
+    pub game_invariants: bool,
+    /// The packages whose package lemma files the composition's lemmas use, each once: the
+    /// side-invariant job does not start without them (story 77).
+    pub packages: Vec<String>,
 }
 
 /// The package lemma files of one package variant (story 76): what a package-invariant job
@@ -99,8 +108,9 @@ pub struct PkgInvReport {
     pub oracle_files: Vec<(String, String)>,
     /// `(oracle, Frame_<V>_<O>.ec)` for each oracle, when the package has imports.
     pub frame_files: Vec<(String, String)>,
-    /// `PkgInv_<V>_init.ec`, the start lemma.
-    pub start_file: String,
+    /// `PkgInv_<V>_init.ec`, the start lemma; `None` for a variant without package invariants
+    /// (frame lemmas only, story 77).
+    pub start_file: Option<String>,
 }
 
 /// A game hop this exporter does not translate, named with its kind and the
@@ -324,7 +334,7 @@ pub fn export_theorem_observed(
         });
     }
 
-    let side_files = build_side_inv_files(&theorem, &interfaces_output, &owners)?;
+    let side_files = build_side_inv_files(&theorem, project, &interfaces_output, &owners)?;
     let side_invariants = side_files
         .iter()
         .map(|f| SideInvReport {
@@ -335,6 +345,9 @@ pub fn export_theorem_observed(
                 .iter()
                 .map(|o| (o.oracle.clone(), o.file_name.clone()))
                 .collect(),
+            start_file: f.start.as_ref().map(|s| s.file_name.clone()),
+            game_invariants: f.game_invariants,
+            packages: side_packages(&theorem, &f.composition, &pkg_files),
         })
         .collect();
 
@@ -353,7 +366,7 @@ pub fn export_theorem_observed(
                 join_file: f.join_file.clone(),
                 oracle_files: pairs(&f.oracles),
                 frame_files: pairs(&f.frames),
-                start_file: f.start.file_name.clone(),
+                start_file: f.start.as_ref().map(|s| s.file_name.clone()),
             }
         })
         .collect();
@@ -385,6 +398,26 @@ pub fn export_theorem_observed(
         side_invariants,
         package_invariants,
     })
+}
+
+/// The packages of composition `composition` that have package lemma files, each once, in the
+/// order of `pkg_files`.
+fn side_packages(
+    theorem: &Theorem<'_>,
+    composition: &str,
+    pkg_files: &[PkgInvFiles],
+) -> Vec<String> {
+    let comp = discover_compositions(theorem)
+        .into_iter()
+        .find(|c| c.name == composition)
+        .expect("a side-invariant report names a composition of the theorem");
+    let mut out: Vec<String> = Vec::new();
+    for f in pkg_files {
+        if comp.pkgs.iter().any(|i| i.pkg.name == f.package) && !out.contains(&f.package) {
+            out.push(f.package.clone());
+        }
+    }
+    out
 }
 
 /// Adds what each composition with side invariants declares for them (story 69) to its file:
@@ -475,6 +508,16 @@ fn lemma_files<'a>(
                 file: &o.file,
             });
         }
+        if let Some(start) = &f.start {
+            out.push(LemmaFile {
+                name: &start.file_name,
+                owner: format!(
+                    "the start lemma of the game invariants of composition `{}`",
+                    f.composition
+                ),
+                file: &start.file,
+            });
+        }
         out.push(LemmaFile {
             name: &f.join_file,
             owner: format!(
@@ -500,11 +543,13 @@ fn lemma_files<'a>(
                 });
             }
         }
-        out.push(LemmaFile {
-            name: &f.start.file_name,
-            owner: format!("the start lemma of package variant `{}`", f.variant),
-            file: &f.start.file,
-        });
+        if let Some(start) = &f.start {
+            out.push(LemmaFile {
+                name: &start.file_name,
+                owner: format!("the start lemma of package variant `{}`", f.variant),
+                file: &start.file,
+            });
+        }
         out.push(LemmaFile {
             name: &f.join_file,
             owner: format!("the package lemmas of package variant `{}`", f.variant),

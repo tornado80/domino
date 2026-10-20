@@ -1,0 +1,16 @@
+package Cnt {
+    invariant: [ ./packages/Cnt.smt2 ]
+
+    state {
+        ctr: Integer,
+    }
+
+    oracle Inc() -> Integer {
+        ctr <- (ctr + 1);
+        return ctr;
+    }
+
+    oracle Get() -> Integer {
+        return ctr;
+    }
+}

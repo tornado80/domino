@@ -12,6 +12,17 @@ lemma SideInv_Game_Inc : hoare[Comp_Game.Game_Game.d_Inc :
             {| Comp_Game.Game_pkg_C = {| Ctr_ctr = Comp_Game.Pkg_Inst_C.ctr |};
                Comp_Game.Game_abort_flag = Comp_Game.Game_Game.abort_flag |}].
 proof.
+(* the package invariants, from the package lemmas (ADR 0016) *)
+have inv_C_by_C_d_Inc : hoare[Comp_Game.Pkg_Inst_C.d_Inc : PkgInv_main_of_Ctr {| Ctr_ctr = Comp_Game.Pkg_Inst_C.ctr |} ==> res <> None => PkgInv_main_of_Ctr {| Ctr_ctr = Comp_Game.Pkg_Inst_C.ctr |}].
++ by conseq (Comp_Game.Cloned_Pkg_C.PkgInv_Ctr_Inc) => /#.
+have pkg : hoare[Comp_Game.Game_Game.d_Inc : Comp_Game.side_inv_Game {| Comp_Game.Game_pkg_C = {| Ctr_ctr = Comp_Game.Pkg_Inst_C.ctr |}; Comp_Game.Game_abort_flag = Comp_Game.Game_Game.abort_flag |} ==> Comp_Game.pkg_inv_Game {| Comp_Game.Game_pkg_C = {| Ctr_ctr = Comp_Game.Pkg_Inst_C.ctr |}; Comp_Game.Game_abort_flag = Comp_Game.Game_Game.abort_flag |}].
++ proc; sp; if; 2: by auto => /#.
+  wp; call inv_C_by_C_d_Inc.
+  by auto => /#.
+(* the game invariants, along the side tree *)
+conseq pkg (_: Comp_Game.side_inv_Game {| Comp_Game.Game_pkg_C = {| Ctr_ctr = Comp_Game.Pkg_Inst_C.ctr |}; Comp_Game.Game_abort_flag = Comp_Game.Game_Game.abort_flag |} ==> Comp_Game.game_inv_Game {| Comp_Game.Game_pkg_C = {| Ctr_ctr = Comp_Game.Pkg_Inst_C.ctr |}; Comp_Game.Game_abort_flag = Comp_Game.Game_Game.abort_flag |}).
++ by move=> &hr h; split.
++ by move=> &hr _ *; rewrite /Comp_Game.pkg_inv_Game /Comp_Game.game_inv_Game /Comp_Game.side_inv_Game /=; smt().
 (* d_Inc *)
 + proc; inline. admit.
 qed.

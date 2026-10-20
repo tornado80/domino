@@ -24,7 +24,7 @@
 //! name, clone alias and functor application keeps its own, unprefixed
 //! spelling.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use miette::SourceSpan;
 
@@ -71,6 +71,7 @@ pub fn compute_game_files_observed(
     let mut variant_names = Names::new();
     let variant_name_map = package::assign_names(&discovered, &mut variant_names)?;
 
+    let lemmas = lemma_variants(theorem)?;
     let comps = interfaces::discover_compositions(theorem);
     let mut scope = super::progress::PhaseScope::start(
         observer,
@@ -81,7 +82,7 @@ pub fn compute_game_files_observed(
     for comp in &comps {
         let mangled = interfaces.comp_mangled[&comp.name].clone();
         scope.item(&format!("Comp_{mangled}"));
-        let file = render_game_file(&theorem.name, comp, &interfaces, &variant_name_map)?;
+        let file = render_game_file(&theorem.name, comp, &interfaces, &variant_name_map, &lemmas)?;
         out.push(GameFile {
             name: mangled,
             file,
@@ -89,6 +90,131 @@ pub fn compute_game_files_observed(
     }
     scope.finish();
     Ok(out)
+}
+
+/// The names of the package variants that have package lemma files (stories 76 and 77): a
+/// variant whose package has package invariants, and a variant with imports that, in some
+/// composition, calls an instance with package invariants (directly or further down), for
+/// its frame lemmas. A composition clones `PkgInv_<V>` for these, `Pkg_<V>` for the others.
+pub(crate) fn lemma_variants(theorem: &Theorem<'_>) -> Result<HashSet<String>, EcExportError> {
+    let discovered = package::discover_variants(theorem);
+    let variant_name_map = package::assign_names(&discovered, &mut Names::new())?;
+    let mut out = HashSet::new();
+    for comp in interfaces::discover_compositions(theorem) {
+        let keys = package::compute_all_keys(&comp);
+        for (idx, inst) in comp.pkgs.iter().enumerate() {
+            let has_lemmas = !inst.pkg.invariants.is_empty()
+                || below(&comp, idx)
+                    .into_iter()
+                    .any(|j| !comp.pkgs[j].pkg.invariants.is_empty());
+            if has_lemmas {
+                out.insert(variant_name_map[&keys[idx]].clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The instances that instance `idx` of `comp` calls, directly or through others, each once,
+/// nearest first. The call graph is acyclic.
+pub(crate) fn below(comp: &Composition, idx: usize) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    let mut next = vec![idx];
+    while let Some(i) = next.pop() {
+        for edge in comp.edges.iter().filter(|e| e.from() == i) {
+            if !out.contains(&edge.to()) {
+                out.push(edge.to());
+                next.push(edge.to());
+            }
+        }
+    }
+    out
+}
+
+/// Whether the import adapter of instance `idx` gets [`footprint_proc`]: when `idx` is, or is
+/// below, an instance that calls an instance with package invariants. Then `glob` of the
+/// adapter is known (story 77).
+fn needs_footprint(comp: &Composition, idx: usize) -> bool {
+    (0..comp.pkgs.len()).any(|w| {
+        let under = below(comp, w);
+        (w == idx || under.contains(&idx))
+            && under
+                .iter()
+                .any(|&j| !comp.pkgs[j].pkg.invariants.is_empty())
+    })
+}
+
+/// `proc ec_footprint() : unit`, which reads each variable of each instance below instance
+/// `idx`, so that `glob` of `idx`'s import adapter holds exactly those variables, in
+/// EasyCrypt's order of their paths (story 77). Without it, `glob` of an adapter holds only the
+/// variables its procedures use, and `SideInv_<C>_<O>` could not state a package invariant
+/// that reads another one as a function of it. Nothing calls it.
+fn footprint_proc(
+    comp: &Composition,
+    idx: usize,
+    inst_module_name: &[String],
+) -> Result<EcProc, EcExportError> {
+    let mut locals = Vec::new();
+    for j in below(comp, idx) {
+        for (var, ty) in package::module_vars(&comp.pkgs[j].pkg)? {
+            locals.push((
+                format!("fp{}", locals.len()),
+                ty,
+                Some(EcExpr::Qualified {
+                    path: vec![inst_module_name[j].clone(), var],
+                    mem: None,
+                }),
+            ));
+        }
+    }
+    Ok(EcProc {
+        name: FOOTPRINT.to_string(),
+        args: vec![],
+        ret: EcType::Unit,
+        locals,
+        body: EcBlock(vec![]),
+        ret_expr: None,
+    })
+}
+
+/// The procedure of an import adapter that fixes its `glob` ([`footprint_proc`]).
+pub(crate) const FOOTPRINT: &str = "ec_footprint";
+
+/// How one package instance of a composition is wired in its game file (story 77).
+pub(crate) struct InstanceWiring {
+    /// The instance's mangled name, the `<m>` of `Pkg_Inst_<m>`, `Cloned_Pkg_<m>` and
+    /// `Pkg_Imports_<m>`.
+    pub mangled: String,
+    /// The module name of its package variant, `<V>`.
+    pub variant: String,
+    /// The module its variant is applied to: `Pkg_Inst_<callee>` or `Pkg_Imports_<m>`; `None`
+    /// for a package without imports.
+    pub provider: Option<String>,
+}
+
+/// The wiring of each instance of `comp`, by index into `comp.pkgs`, as its game file has it.
+pub(crate) fn instance_wirings(
+    theorem: &Theorem<'_>,
+    comp: &Composition,
+) -> Result<Vec<InstanceWiring>, EcExportError> {
+    let discovered = package::discover_variants(theorem);
+    let variant_name_map = package::assign_names(&discovered, &mut Names::new())?;
+    let keys = package::compute_all_keys(comp);
+    let mangled = instance_mangled_names(comp)?;
+    let modules = instance_module_names(comp)?;
+    Ok(comp
+        .pkgs
+        .iter()
+        .enumerate()
+        .map(|(idx, inst)| InstanceWiring {
+            mangled: mangled[idx].clone(),
+            variant: variant_name_map[&keys[idx]].clone(),
+            provider: (!inst.pkg.imports.is_empty()).then(|| match direct_pass_callee(comp, idx) {
+                Some(callee) => modules[callee].clone(),
+                None => format!("Pkg_Imports_{}", mangled[idx]),
+            }),
+        })
+        .collect())
 }
 
 fn param_assignment<'a>(inst: &'a PackageInstance, name: &str) -> &'a Expression {
@@ -325,6 +451,7 @@ fn render_game_file(
     comp: &Composition,
     interfaces: &InterfacesOutput,
     variant_name_map: &HashMap<VariantKey, String>,
+    lemma_variants: &HashSet<String>,
 ) -> Result<EcFile, EcExportError> {
     let span = interfaces::composition_span(comp);
     let mangled = &interfaces.comp_mangled[&comp.name];
@@ -364,10 +491,19 @@ fn render_game_file(
     // reference to the resulting module (`Cloned_Pkg_<inst>.<Variant>`) does
     // not, since that resolves through the *local* clone alias, not the
     // theory name.
+    // story 77: a variant with package lemmas is cloned from the end of its chain of lemma
+    // files, `PkgInv_<V>`, so each clone has the lemmas about its own copy of the module
+    let clone_base = |v: &String| {
+        if lemma_variants.contains(v) {
+            super::pkginv::pkg_inv_stem(v)
+        } else {
+            format!("Pkg_{v}")
+        }
+    };
     let clone_items: Vec<EcItem> = order
         .iter()
         .map(|&idx| EcItem::Clone {
-            base: format!("Pkg_{}", variant_names[idx]),
+            base: clone_base(&variant_names[idx]),
             as_name: clone_name[idx].clone(),
             overrides: vec![],
         })
@@ -381,6 +517,12 @@ fn render_game_file(
     }
     let mut plain_requires = vec!["Interfaces".to_string()];
     plain_requires.extend(variant_requires.iter().map(|v| format!("Pkg_{v}")));
+    plain_requires.extend(
+        variant_requires
+            .iter()
+            .filter(|v| lemma_variants.contains(*v))
+            .map(|v| super::pkginv::pkg_inv_stem(v)),
+    );
 
     // Adapters (if any) and the unconditional `Pkg_Inst_<inst>` alias for
     // every instance, `order` (callees-before-callers) so a callee's own
@@ -404,13 +546,18 @@ fn render_game_file(
             Some(callee) => inst_module_name[callee].clone(),
             None => {
                 let adapter_name = format!("Pkg_Imports_{}", inst_mangled[idx]);
-                let adapter = build_import_adapter(
+                let mut adapter = build_import_adapter(
                     comp,
                     idx,
                     &adapter_name,
                     &variant_names[idx],
                     &inst_module_name,
                 )?;
+                if needs_footprint(comp, idx) {
+                    if let EcItem::Module(m) = &mut adapter {
+                        m.procs.push(footprint_proc(comp, idx, &inst_module_name)?);
+                    }
+                }
                 alias_items.push(adapter);
                 adapter_name
             }

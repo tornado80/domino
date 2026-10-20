@@ -465,8 +465,10 @@ impl<'a> EquivalenceContext<'a> {
     }
 
     /// One claim for each named package and game invariant of both game instances, each under
-    /// `no-abort`. The side tree (symbolic-execution story 25) checks the left ones until story
-    /// 77; an equivalence checks only [`generate_game_invariant_claims`](Self::generate_game_invariant_claims).
+    /// `no-abort`. The base frame of a side tree assumes the left ones on the old state
+    /// ([`emit_left_side_invariants_old`](Self::emit_left_side_invariants_old)); a side tree
+    /// (story 77) and an equivalence check only
+    /// [`generate_game_invariant_claims`](Self::generate_game_invariant_claims).
     pub(crate) fn generate_game_or_package_invariant_claims(&self) -> Vec<ResolvedClaim> {
         fn invariant_claims(
             stmts: &[crate::gamehops::equivalence::smtrewrite::SmtStmt],

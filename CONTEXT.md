@@ -245,6 +245,9 @@ serve the interface as it stands.
 
 **Instance clone** — an EasyCrypt theory clone of a package variant, one per package instance, so
 that each instance has its own memory. Instances of the same variant differ only by their clone.
+For a variant with package lemmas, the clone is of the last theory of its **lemma chain** (each
+lemma file includes the one before it, the first includes the variant), so that each clone has the
+package lemmas about its own copy of the variant.
 
 **Router** — the EasyCrypt module generated for a composition. It owns the *abort flag*, exposes the
 composition's exported oracles, and forwards each to the package instance that defines it. Packages
@@ -320,7 +323,9 @@ no such lemmas yet.
 **Frame lemma** — the proof that one oracle of a package keeps any property of its environment's
 state that the environment's own oracles keep. It says nothing about the package's invariants and
 follows from the shape of the code alone. It is what carries a called package's invariant through
-the code of the package that calls it.
+the code of the package that calls it, so a package without invariants that calls one with them
+has frame lemmas too. The environment's state is `glob` of its import provider; the provider's
+**footprint** procedure reads every variable below the caller, so that state is known.
 _Distinguish_: **package-invariant lemma** (about the package's own state).
 
 **Session record** — what a proof job leaves about how far proving one oracle lemma got: the

@@ -66,3 +66,21 @@ We decided:
 - The exact form of the frame lemma when an import aborts (`res = None`) is settled in story 76,
   with an EasyCrypt test.
 - `SideInv_` files from before the change are stale: they walk the package code.
+
+## Implementation notes (story 77)
+
+Three things the decision needs in EasyCrypt, found when `SideInv_<C>_<O>` was built from the
+lemmas. They do not change the decision.
+
+- **The lemmas must be about the instance's clone.** A composition clones a variant once for each
+  instance, and a lemma about `<V>` says nothing about a clone. The lemma files of a variant form
+  one chain of theories (`clone include` of the file before), and the composition clones the end
+  of the chain, `PkgInv_<V>`, instead of `Pkg_<V>`. So any job that reads a composition needs the
+  package lemma files: a job creates the missing ones as translation wrote them.
+- **A caller without invariants has frame lemmas too** (`KX` over `PRF` in Full4WHS), and a
+  package-invariant job for its package checks them.
+- **`J` must be a function of `glob I`.** `glob` of an import adapter holds only the variables that
+  its procedures use (`PRF.kid_` is not in `glob` of `KX`'s adapter), and EasyCrypt does not let a
+  frame keep a predicate on another module that shares memory with `I`. So each adapter that a frame
+  lemma can use has a procedure `ec_footprint` that reads every variable below the caller, and
+  `J_<Y>_in_<X>` reads `Y`'s variables at their positions in `glob I`, which EasyCrypt orders by path.

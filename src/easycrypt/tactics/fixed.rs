@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The lemmas of a package-invariant job that no tree is walked for (story 76): the frame
-//! lemmas, whose proof translation writes, and the start lemma.
+//! The lemmas of a job that no tree is walked for (stories 76 and 77): the frame lemmas of a
+//! package-invariant job and the side-invariant lemmas of a composition without game
+//! invariants, whose proof translation writes, and the start lemmas of the package invariants
+//! and of the game invariants.
 //!
 //! Each lemma file is sent whole to a fresh EasyCrypt, one sentence at a time: the file is
 //! proved when EasyCrypt accepts every sentence, `qed.` and `end section.` included.
 //!
-//! - A frame lemma is sent as translation wrote it. When EasyCrypt refuses a sentence, its
-//!   proof becomes `admit.`, and the job says which sentence was refused.
-//! - The start lemma is sent with each of [`start_proofs`] in place of its admitted proof, until
+//! - A lemma whose proof translation wrote is sent as translation wrote it. When EasyCrypt
+//!   refuses a sentence, its proof becomes `admit.`, and the job says which sentence was
+//!   refused.
+//! - A start lemma is sent with each of [`start_proofs`] in place of its admitted proof, until
 //!   one is accepted. When none is, it keeps its admitted proof, and the job names the claims
 //!   it stands for: the package invariants on the state after `init`, which is the start check
-//!   of the package (story 75).
+//!   of the package (story 75), or the game invariants after the composition's `init`.
 //!
 //! The job writes each file it checked, atomically. A file EasyCrypt accepted ends with
 //! [`CHECKED`], and the next job does not check it again; any other file (missing, as
@@ -23,14 +26,14 @@ use std::path::Path;
 use crate::easycrypt::json::Status;
 use crate::easycrypt::session::{split_sentences, Want};
 use crate::project::Project;
-use crate::writers::easycrypt::export::PkgInvReport;
-use crate::writers::easycrypt::invariant::package_invariant_ops;
+use crate::writers::easycrypt::invariant::{game_invariant_names, package_invariant_ops};
 use crate::writers::easycrypt::pkginv::INIT;
 use crate::writers::easycrypt::EcExportError;
+use crate::writers::smt::contexts::game_invariant_claim_name;
 
 use super::driver::BASE_SMT_LEMMAS;
 use super::oracles::EquivalenceJob;
-use super::{spawn_easycrypt, with_script, write_atomically, FixedLemma, TacticsError};
+use super::{spawn_easycrypt, with_script, write_atomically, FixedLemma, JobKind, TacticsError};
 
 /// The proofs tried for a start lemma, in order: the quick close, then `smt` with the base
 /// lemmas about maps and the project's hints (`[easycrypt] smt_hints`).
@@ -51,42 +54,96 @@ fn is_proved<P, B>(job: &EquivalenceJob<'_, P, B>, file: &str) -> bool {
     std::fs::read_to_string(job.out_dir.join(file)).is_ok_and(|text| text.ends_with(CHECKED))
 }
 
-/// The frame files of the oracles the job proves, then, when it proves every oracle, the start
-/// file of `pkg`.
-fn selected_files<'a, P, B>(job: &EquivalenceJob<'_, P, B>, pkg: &'a PkgInvReport) -> Vec<&'a str> {
-    let selected = |oracle: &str| job.options.oracle.as_deref().is_none_or(|o| o == oracle);
-    let frames = pkg.frame_files.iter().filter(|(o, _)| selected(o));
-    let start = job.options.oracle.is_none().then_some(&pkg.start_file);
-    frames
-        .map(|(_, f)| f.as_str())
-        .chain(start.map(String::as_str))
-        .collect()
+/// The lemma files a job checks without a tree.
+pub(super) struct FixedFiles<'a> {
+    /// Files whose proof translation wrote complete, checked as written: the frame lemmas of the
+    /// selected oracles, or the side-invariant lemmas of a composition without game invariants.
+    written: Vec<&'a str>,
+    /// The start lemma, when the job proves every oracle.
+    start: Option<&'a str>,
+    /// What the job is about: `package P` or `composition C`.
+    owner: Owner<'a>,
 }
 
-/// Whether a frame or start lemma that the job checks is not proved yet.
-pub(super) fn any_unproved<P, B>(job: &EquivalenceJob<'_, P, B>, pkg: &PkgInvReport) -> bool {
-    selected_files(job, pkg).iter().any(|f| !is_proved(job, f))
+#[derive(Clone, Copy)]
+enum Owner<'a> {
+    Package(&'a str),
+    Composition(&'a str),
 }
 
-/// Checks the frame lemmas of the oracles the job proves, then, when it proves every oracle,
-/// the start lemma of `pkg`. A file that is proved already is not checked again. Stops, with
-/// what it has, when the run is asked to stop.
+impl<'a> FixedFiles<'a> {
+    /// The files `job` checks without a tree; `None` for the proof job of an equivalence.
+    pub(super) fn of<P, B>(job: &EquivalenceJob<'a, P, B>) -> Option<FixedFiles<'a>> {
+        let selected = |oracle: &str| job.options.oracle.as_deref().is_none_or(|o| o == oracle);
+        let every = job.options.oracle.is_none();
+        match job.kind {
+            JobKind::Equivalence => None,
+            JobKind::PackageInvariants(_) => {
+                let pkg = job
+                    .exported
+                    .package_invariants
+                    .iter()
+                    .find(|p| p.join_file == job.eq.proof_file)?;
+                Some(FixedFiles {
+                    written: pkg
+                        .frame_files
+                        .iter()
+                        .filter(|(o, _)| selected(o))
+                        .map(|(_, f)| f.as_str())
+                        .collect(),
+                    start: pkg.start_file.as_deref().filter(|_| every),
+                    owner: Owner::Package(&pkg.package),
+                })
+            }
+            JobKind::SideInvariants(c) => {
+                let side = job
+                    .exported
+                    .side_invariants
+                    .iter()
+                    .find(|s| s.composition == c)?;
+                Some(FixedFiles {
+                    written: side
+                        .oracle_files
+                        .iter()
+                        .filter(|(o, _)| !side.game_invariants && selected(o))
+                        .map(|(_, f)| f.as_str())
+                        .collect(),
+                    start: side.start_file.as_deref().filter(|_| every),
+                    owner: Owner::Composition(&side.composition),
+                })
+            }
+        }
+    }
+
+    fn files(&self) -> impl Iterator<Item = &'a str> + '_ {
+        self.written.iter().copied().chain(self.start)
+    }
+
+    /// Whether a file that the job checks is not proved yet.
+    pub(super) fn any_unproved<P, B>(&self, job: &EquivalenceJob<'_, P, B>) -> bool {
+        self.files().any(|f| !is_proved(job, f))
+    }
+}
+
+/// Checks the files of `fixed`: those whose proof translation wrote, then the start lemma. A
+/// file that is proved already is not checked again. Stops, with what it has, when the run is
+/// asked to stop.
 pub(super) fn prove_fixed_lemmas<P: Project, B>(
     job: &EquivalenceJob<'_, P, B>,
-    pkg: &PkgInvReport,
+    fixed: &FixedFiles<'_>,
     tmp_dir: &Path,
 ) -> Result<Vec<FixedLemma>, TacticsError> {
     let mut out = Vec::new();
-    for file in selected_files(job, pkg) {
+    for file in fixed.files() {
         if job.options.stop_requested() {
             return Ok(out);
         }
         let admitted = if is_proved(job, file) {
             None
-        } else if file == pkg.start_file {
-            check_start(job, pkg, tmp_dir)?
+        } else if fixed.start == Some(file) {
+            check_start(job, fixed.owner, file, tmp_dir)?
         } else {
-            check_frame(job, file, tmp_dir)?
+            check_written(job, file, tmp_dir)?
         };
         out.push(FixedLemma {
             file: file.to_string(),
@@ -96,9 +153,9 @@ pub(super) fn prove_fixed_lemmas<P: Project, B>(
     Ok(out)
 }
 
-/// Checks the frame lemma in `file` as translation wrote it; when EasyCrypt refuses it, its
-/// proof becomes `admit.`, and the result says why.
-fn check_frame<P: Project, B>(
+/// Checks the lemma in `file` as translation wrote it; when EasyCrypt refuses it, its proof
+/// becomes `admit.`, and the result says why.
+fn check_written<P: Project, B>(
     job: &EquivalenceJob<'_, P, B>,
     file: &str,
     tmp_dir: &Path,
@@ -112,20 +169,22 @@ fn check_frame<P: Project, B>(
             }
             Err(refused) => {
                 write_atomically(&job.out_dir.join(file), tmp_dir, &admitted_proof(source))?;
-                Some(format!("the frame proof was refused: {refused}"))
+                Some(format!(
+                    "the proof translation wrote was refused: {refused}"
+                ))
             }
         },
     )
 }
 
-/// Checks the start lemma of `pkg` with each of [`start_proofs`]; when none is accepted, it
+/// Checks the start lemma in `file` with each of [`start_proofs`]; when none is accepted, it
 /// keeps its admitted proof, and the result names the claims it stands for.
 fn check_start<P: Project, B>(
     job: &EquivalenceJob<'_, P, B>,
-    pkg: &PkgInvReport,
+    owner: Owner<'_>,
+    file: &str,
     tmp_dir: &Path,
 ) -> Result<Option<String>, TacticsError> {
-    let file = &pkg.start_file;
     let source = job.exported_file(file)?;
     let candidates =
         start_proofs(&job.options.smt_hints).map(|proof| with_script(source, INIT, &proof));
@@ -136,11 +195,17 @@ fn check_start<P: Project, B>(
         }
         Err(refused) => {
             write_atomically(&job.out_dir.join(file), tmp_dir, source)?;
-            Some(format!(
-                "{}; Domino: the start check of package {} (story 75); last refusal: {refused}",
-                start_claims(job, &pkg.package)?,
-                pkg.package
-            ))
+            let what = match owner {
+                Owner::Package(p) => format!(
+                    "{}; Domino: the start check of package {p} (story 75)",
+                    start_claims(job, p)?
+                ),
+                Owner::Composition(c) => format!(
+                    "{}; Domino: the start check of the game invariants of {c}",
+                    game_start_claims(job, c)?
+                ),
+            };
+            Some(format!("{what}; last refusal: {refused}"))
         }
     })
 }
@@ -188,6 +253,26 @@ fn admitted_proof(source: &str) -> String {
     };
     let start = start + "proof.\n".len();
     format!("{}admit.{}", &source[..start], &source[end..])
+}
+
+/// The claims of the start lemma of composition `comp`: each of its game invariants.
+fn game_start_claims<P: Project, B>(
+    job: &EquivalenceJob<'_, P, B>,
+    comp: &str,
+) -> Result<String, TacticsError> {
+    let composition = job
+        .theorem_ec
+        .instances
+        .iter()
+        .map(|i| i.game())
+        .find(|g| g.name == comp)
+        .expect("the theorem uses the composition");
+    let claims: Vec<String> = game_invariant_names(job.project, composition)
+        .map_err(EcExportError::from)?
+        .iter()
+        .map(|n| game_invariant_claim_name(n, comp))
+        .collect();
+    Ok(format!("claims {}", claims.join(", ")))
 }
 
 /// The claims of the start lemma: each package invariant of `package`.

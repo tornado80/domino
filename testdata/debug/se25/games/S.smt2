@@ -1,3 +1,3 @@
-; holds on every state: the side run checks it and verifies it everywhere
+; the side run checks only game invariants (story 77): the path with `x < 0` breaks this one
 (define-game-invariant main
-  (or (>= game.p.k 0) (< game.p.k 0)))
+  (>= game.p.k 0))

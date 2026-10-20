@@ -461,6 +461,7 @@ fn an_interrupted_report_names_what_was_sealed() {
         side_invariants: vec![],
         package_invariants: vec![],
         unproved_side_invariants: vec![],
+        unproved_package_invariants: vec![],
         elapsed: Duration::from_secs(4),
         swallowed_interrupt: None,
     };
@@ -807,6 +808,7 @@ fn a_swallowed_interrupt_is_warned_about_once_per_run() {
         side_invariants: vec![],
         package_invariants: vec![],
         unproved_side_invariants: vec![],
+        unproved_package_invariants: vec![],
         elapsed: Duration::ZERO,
         swallowed_interrupt: watch.warning(),
     };
@@ -872,6 +874,7 @@ fn an_unanswered_interrupt_is_its_own_line_in_the_report() {
         side_invariants: vec![],
         package_invariants: vec![],
         unproved_side_invariants: vec![],
+        unproved_package_invariants: vec![],
         elapsed: Duration::ZERO,
         swallowed_interrupt: None,
     };
@@ -4352,9 +4355,10 @@ pub(super) mod side_invariant_jobs {
     }
 
     /// Symbolic-execution story 25's composition `S`: a branch on the free parameter `n`, then
-    /// one on the argument `x`, where `x < 0` breaks the package invariant `k >= 0`. Each branch
+    /// one on the argument `x`, where `x < 0` breaks the game invariant `k >= 0`. Each branch
     /// is an `if.` with a bullet for each arm, and the two terminals where the invariant breaks
-    /// are admitted with Domino's verdict, without EasyCrypt time spent on them.
+    /// are admitted with Domino's verdict, without EasyCrypt time spent on them. The package
+    /// invariant comes from the package lemma (story 77), admitted here.
     #[test]
     fn a_side_tree_with_branches_is_walked_with_if_and_its_failing_claim_is_admitted() {
         if !json_binary_configured() {
@@ -4395,18 +4399,15 @@ pub(super) mod side_invariant_jobs {
         assert!(!o.stats.admits.is_empty(), "{}", result.render());
         for a in &o.stats.admits {
             assert_eq!(a.reason, AdmitReason::DominoFails, "{}", result.render());
-            assert_eq!(
-                a.claim,
-                "invariant/PkgInv_main_of_p_in_S",
-                "{}",
-                result.render()
-            );
+            // the leaf's one claim fails: the whole leaf is admitted, not split by meaning
+            assert_eq!(a.claim, "side-invariant", "{}", result.render());
         }
         compiles(out.path(), "SideInv_S_O.ec").unwrap();
     }
 
-    /// Story 73: a package with two named invariants, where a path breaks only `nonneg`: only
-    /// the leaf parts of `nonneg` are admitted, with Domino's verdict.
+    /// Story 73: two named game invariants (story 77: the side tree checks only those), where
+    /// a path breaks only `nonneg`: only the leaf parts of `nonneg` are admitted, with Domino's
+    /// verdict.
     #[test]
     fn a_path_that_breaks_one_named_invariant_admits_only_its_leaf_part() {
         if !json_binary_configured() {
@@ -4445,7 +4446,7 @@ pub(super) mod side_invariant_jobs {
             assert_eq!(a.reason, AdmitReason::DominoFails, "{}", result.render());
             assert_eq!(
                 a.claim,
-                "invariant/PkgInv_nonneg_of_p_in_S",
+                "invariant/GameInv_nonneg_of_S",
                 "{}",
                 result.render()
             );
@@ -4496,7 +4497,8 @@ pub(super) mod side_invariant_jobs {
             "sp 1.",
             "if.",
             "auto => &hr hpre /=.",
-            "rewrite /Comp_Game.PkgInv_main_of_C_in_Game /=.",
+            // story 77: the walked goal is the game invariant only
+            "rewrite /Comp_Game.GameInv_main_of_Game /=.",
         ] {
             assert!(lemma.contains(step), "{step} in:\n{lemma}");
         }
@@ -4583,8 +4585,12 @@ pub(super) mod side_invariant_jobs {
             }
             most = most.max(running);
         }
-        assert_eq!(started, 2, "one EasyCrypt for each job's oracle");
-        assert_eq!(most, 2, "the two jobs at the same time");
+        // story 77: the package job and the side job's start lemma run EasyCrypt too
+        assert!(started >= 2, "one EasyCrypt for each job's oracle");
+        assert!(
+            most >= 2,
+            "the proof job beside the chain of package and side jobs"
+        );
         assert_eq!(result.equivalences.len(), 1, "{}", result.render());
         assert_eq!(result.side_invariants.len(), 1, "{}", result.render());
     }
@@ -4825,5 +4831,193 @@ mod package_invariant_jobs {
             panic!("one package-invariant job: {}", result.render());
         };
         assert_eq!(job.oracles.len(), 3, "{}", result.render());
+    }
+}
+
+/// Story 77: `SideInv_<C>_<O>` from the package lemmas, the game-invariant start lemma, and the
+/// order of the package and side jobs.
+mod side_invariants_from_package_lemmas {
+    use std::path::{Path, PathBuf};
+    use std::time::SystemTime;
+
+    use super::*;
+    use crate::easycrypt::session::json_binary_configured;
+    use crate::project::{DirectoryFiles, DirectoryProject};
+    use crate::writers::easycrypt::export::{export_theorem, write_files, ExportedTheorem};
+
+    /// `Wrap` (package invariant `counted`) calls `Cnt` (package invariant `nonneg`). `G` has
+    /// no game invariant; `H` has the game invariant `bounded`.
+    const PROJECT: &str = "test-projects/test-side-invariant-from-package-lemmas";
+
+    fn project() -> DirectoryProject<'static> {
+        let dir = PathBuf::from(PROJECT);
+        let files = Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
+        DirectoryProject::load(dir, files).unwrap()
+    }
+
+    fn exported(project: &DirectoryProject<'static>) -> ExportedTheorem {
+        export_theorem(project.get_theorem("Proof").unwrap(), project).unwrap()
+    }
+
+    fn run(
+        project: &DirectoryProject<'static>,
+        exported: &ExportedTheorem,
+        out: &Path,
+        options: &TacticsOptions,
+    ) -> TheoremTactics {
+        run_tactics(
+            project.get_theorem("Proof").unwrap(),
+            project,
+            exported,
+            out,
+            &crate::util::smtsolver::process::IncrementalCvc5Backend,
+            options,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_whole_theorem_run_puts_each_package_job_before_the_first_side_job_that_needs_it() {
+        let exported = exported(&project());
+        let out = tempfile::tempdir().unwrap();
+        let plan = plan_run(&exported, out.path(), &TacticsOptions::default()).unwrap();
+        // the proof job is planned too: it runs at once, beside the chain
+        assert_eq!(plan.equivalences.len(), 1);
+        let needs = |c: &str| -> Vec<&str> {
+            exported
+                .side_invariants
+                .iter()
+                .find(|s| s.composition == c)
+                .map(|s| s.packages.iter().map(String::as_str).collect())
+                .unwrap()
+        };
+        let sides: Vec<&str> = plan.side.iter().map(|(_, c)| c.as_str()).collect();
+        assert_eq!(sides, ["G", "H"]);
+        assert_eq!(
+            chain_steps(&plan, needs),
+            [
+                ChainStep::Package("Cnt"),
+                ChainStep::Package("Wrap"),
+                ChainStep::Side(0),
+                ChainStep::Side(1),
+            ]
+        );
+        // `--side-inv` runs no package job
+        let only = TacticsOptions {
+            side_inv: Some("H".into()),
+            ..TacticsOptions::default()
+        };
+        let plan = plan_run(&exported, out.path(), &only).unwrap();
+        assert_eq!(chain_steps(&plan, needs), [ChainStep::Side(0)]);
+    }
+
+    /// No EasyCrypt runs: the side job does not start.
+    #[test]
+    fn side_inv_with_a_missing_package_file_does_not_start_and_warns() {
+        let project = project();
+        let exported = exported(&project);
+        let out = tempfile::tempdir().unwrap();
+        write_files(out.path(), &exported.files).unwrap();
+        std::fs::remove_file(out.path().join("PkgInv_Cnt_Inc.ec")).unwrap();
+        let options = TacticsOptions {
+            side_inv: Some("H".into()),
+            ..TacticsOptions::default()
+        };
+        let result = run(&project, &exported, out.path(), &options);
+        assert!(result.side_invariants.is_empty(), "{}", result.render());
+        assert_eq!(result.unproved_package_invariants, ["Cnt"]);
+        assert!(
+            result.render().contains(
+                "warning: package invariants of Cnt are not proved: run prove --pkg-inv Cnt first"
+            ),
+            "{}",
+            result.render()
+        );
+        assert!(!out.path().join("progress").exists(), "no job started");
+    }
+
+    #[test]
+    fn side_inv_lemmas_take_the_package_invariants_from_the_package_lemmas() {
+        let exported = exported(&project());
+        let text = |name: &str| exported.files[Path::new(name)].clone();
+        let h = text("SideInv_H_Step.ec");
+        for part in [
+            // `cnt` below `wrap`: the frame lemma of `wrap`, with `J` read from `glob` of its
+            // provider
+            "op J_Cnt_in_Wrap (g : (glob Comp_H.Pkg_Inst_Cnt)) : bool =",
+            "(Comp_H.Cloned_Pkg_Wrap.Frame_Wrap_Step Comp_H.Pkg_Inst_Cnt J_Cnt_in_Wrap",
+            "(Comp_H.Cloned_Pkg_Wrap.PkgInv_Wrap_Step Comp_H.Pkg_Inst_Cnt)",
+            "have pkg : hoare[Comp_H.Game_H.d_Step :",
+            "conseq pkg (_: Comp_H.side_inv_H",
+            "==> Comp_H.game_inv_H",
+            "(* d_Step *)\n+ proc; inline. admit.",
+        ] {
+            assert!(h.contains(part), "{part} in:\n{h}");
+        }
+        // no game invariant: no walk, no admit
+        let g = text("SideInv_G_Step.ec");
+        assert!(!g.contains("admit") && !g.contains("conseq pkg"), "{g}");
+        let side = |c: &str| {
+            exported
+                .side_invariants
+                .iter()
+                .find(|s| s.composition == c)
+                .unwrap()
+        };
+        assert!(!side("G").game_invariants && side("G").start_file.is_none());
+        assert!(side("H").game_invariants);
+        assert_eq!(side("H").start_file.as_deref(), Some("SideInvInit_H.ec"));
+        assert!(text("SideInvInit_H.ec").contains(
+            "lemma SideInvInit_H : hoare[Comp_H.Game_H.init :\n      true\n      ==> Comp_H.GameInv_bounded_of_H"
+        ));
+        assert_eq!(side("H").packages, ["Cnt", "Wrap"]);
+    }
+
+    /// A whole-theorem run: no admit; the package jobs end before the side job that needs
+    /// them starts, and the proof job starts at once.
+    #[test]
+    fn a_whole_theorem_run_proves_everything_in_the_order_of_the_chain() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let project = project();
+        let exported = exported(&project);
+        let out = tempfile::tempdir().unwrap();
+        let result = run(&project, &exported, out.path(), &TacticsOptions::default());
+        assert_eq!(result.admit_count(), 0, "{}", result.render());
+        assert_eq!(result.package_invariants.len(), 2, "{}", result.render());
+        assert_eq!(result.side_invariants.len(), 2, "{}", result.render());
+        assert_eq!(result.equivalences.len(), 1, "{}", result.render());
+        // `G` has no game invariant: no side tree, its lemmas checked as translation wrote them
+        let g = &result.side_invariants[0];
+        assert!(g.oracles.is_empty(), "{}", result.render());
+        let checked: Vec<&str> = g.fixed.iter().map(|f| f.file.as_str()).collect();
+        assert_eq!(checked, ["SideInv_G_Step.ec", "SideInv_G_Get.ec"]);
+        assert!(!out.path().join("!debug!/SideInv_G").exists());
+        // `H`: the game invariant along the side tree, and its start lemma
+        let h = &result.side_invariants[1];
+        assert_eq!(h.oracles.len(), 2, "{}", result.render());
+        assert_eq!(h.fixed[0].file, "SideInvInit_H.ec");
+        let modified = |rel: &str| -> SystemTime {
+            std::fs::metadata(out.path().join(rel))
+                .unwrap()
+                .modified()
+                .unwrap()
+        };
+        let created = |rel: &str| -> SystemTime {
+            std::fs::metadata(out.path().join(rel))
+                .unwrap()
+                .created()
+                .unwrap()
+        };
+        assert!(
+            modified("progress/PkgInv_Wrap/report.txt") < created("progress/SideInv_G"),
+            "the package job ends before the side job starts"
+        );
+        assert!(
+            created("progress/Eq_left_right") < modified("progress/PkgInv_Cnt/report.txt"),
+            "the proof job starts at once"
+        );
     }
 }

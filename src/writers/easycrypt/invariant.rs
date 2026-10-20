@@ -43,7 +43,10 @@ use super::EcExportError;
 
 mod side;
 pub use side::SideInvariantError;
-pub(crate) use side::{composition_items, has_side_invariants, SideCtx};
+pub(crate) use side::{
+    composition_items, game_invariant_names, game_side_inv_op_name, has_side_invariants,
+    pkg_side_inv_op_name, SideCtx,
+};
 
 /// Errors specific to invariant translation. Folds into [`EcExportError`]
 /// via `#[from]` (`mod.rs`), matching [`NameError`]'s own
@@ -1337,6 +1340,28 @@ pub fn side_invariant_ops(
             claim: Some(game_invariant_claim_name(&invariant, &comp.name)),
             ..InvariantOp::plain(qualified(game_inv_op_name(&invariant, &name)))
         });
+    }
+    Ok(ops)
+}
+
+/// The operators of a side-invariant job of `comp`: [`side_invariant_ops`], and, when the
+/// package invariants come from the package lemmas and the walked goal is only the game
+/// invariants (story 77), `game_inv_<C>` after `side_inv_<C>`, so that the walk unfolds the
+/// post of that goal.
+pub fn side_job_ops(
+    project: &impl Project,
+    comp: &crate::package::Composition,
+) -> Result<Vec<InvariantOp>, InvariantError> {
+    let mut ops = side_invariant_ops(project, comp)?;
+    if !side::invariant_instances(comp).is_empty() && !comp.invariants.is_empty() {
+        let name = super::names::mangle_name(NameKind::Module, &comp.name);
+        ops.insert(
+            1,
+            InvariantOp::plain(format!(
+                "Comp_{name}.{}",
+                side::game_side_inv_op_name(&name)
+            )),
+        );
     }
     Ok(ops)
 }

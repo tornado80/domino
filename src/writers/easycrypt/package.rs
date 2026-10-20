@@ -438,7 +438,29 @@ pub(super) fn ordered_imports(pkg: &Package) -> Vec<&(OracleSig, SourceSpan)> {
 /// mangled an oracle: `NameKind::Proc` for the name, `NameKind::Var` for
 /// each argument, return type `T option` (story 14 §3.2 — the shared shape
 /// moved here since this is now its only caller).
-fn build_import_procs(pkg: &Package) -> Result<Vec<ProcSig>, EcExportError> {
+/// The variables of a package's module: its state, then each parameter that needs one
+/// ([`param_needs_var`]), mangled as the variant's module has them.
+pub(crate) fn module_vars(pkg: &Package) -> Result<Vec<(String, EcType)>, EcExportError> {
+    let mut names = Names::new();
+    let mut vars = Vec::new();
+    for (name, ty, span) in &pkg.state {
+        vars.push((
+            names.mangle(NameKind::Var, name)?,
+            translate_type(ty, *span)?,
+        ));
+    }
+    for (name, ty, span) in &pkg.params {
+        if param_needs_var(pkg, name, ty) {
+            vars.push((
+                names.mangle(NameKind::Var, name)?,
+                translate_type(ty, *span)?,
+            ));
+        }
+    }
+    Ok(vars)
+}
+
+pub(crate) fn build_import_procs(pkg: &Package) -> Result<Vec<ProcSig>, EcExportError> {
     let mut names = Names::new();
     let mut procs = Vec::new();
     for (sig, span) in ordered_imports(pkg) {

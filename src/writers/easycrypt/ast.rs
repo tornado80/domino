@@ -74,6 +74,11 @@ pub enum EcItem {
         as_name: String,
         overrides: Vec<CloneOverride>,
     },
+    /// `clone include <base>.`: a copy of theory `base`, its lemmas proved, in this theory
+    /// (story 77: the package lemma files of a variant form one chain, ADR 0016).
+    CloneInclude {
+        base: String,
+    },
     /// `module M = F(A, B).`
     ModuleAlias {
         name: String,

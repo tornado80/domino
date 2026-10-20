@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The package lemmas of the package variants (story 76, ADR 0016).
+//! The package lemmas of the package variants (stories 76 and 77, ADR 0016).
 //!
 //! For each package variant `<V>` whose package `P` has package invariants, with the named
 //! invariants `PkgInv_<N>_of_<P>` (story 73) applied to the variant's state record:
@@ -17,7 +17,16 @@
 //!   ([`frame_proof`]); the package-invariant job checks it.
 //! - `PkgInv_<V>_init.ec`: the **start lemma** `hoare[<V>(I).init : true ==> PkgInv_…]`, its
 //!   proof admitted as the oracle lemmas are; the job owns it.
-//! - `PkgInv_<V>.ec`: requires each of them.
+//!
+//! A variant whose package has no package invariant but has imports gets its frame lemmas only
+//! (story 77): `SideInv_<C>_<O>` carries the invariants of the instances it calls through it.
+//!
+//! **The chain.** A composition clones a package variant once for each instance, and a lemma
+//! about `<V>` says nothing about a clone. So the files of a variant form one chain of
+//! theories: the first file holds `clone include Pkg_<V>.`, each other file `clone include` of
+//! the file before it (oracle lemmas, then frame lemmas, then the start lemma), and the join,
+//! `PkgInv_<V>.ec`, `clone include` of the last file. The composition clones the join instead
+//! of `Pkg_<V>`, and each clone has every lemma about its own copy of `<V>`.
 //!
 //! A package without imports has no `I`: its lemmas are about `<V>` itself, outside a section,
 //! and it has no frame lemmas.
@@ -49,12 +58,13 @@ pub struct PkgInvFiles {
     /// `PkgInv_<V>.ec`, which requires every other file.
     pub join_file: String,
     pub join: EcFile,
-    /// `PkgInv_<V>_<O>.ec` for each oracle, in the package's order.
+    /// `PkgInv_<V>_<O>.ec` for each oracle, in the package's order; empty for a variant
+    /// without package invariants.
     pub oracles: Vec<PkgInvLemmaFile>,
     /// `Frame_<V>_<O>.ec` for each oracle; empty for a package without imports.
     pub frames: Vec<PkgInvLemmaFile>,
-    /// `PkgInv_<V>_init.ec`.
-    pub start: PkgInvLemmaFile,
+    /// `PkgInv_<V>_init.ec`; `None` for a variant without package invariants.
+    pub start: Option<PkgInvLemmaFile>,
 }
 
 /// One lemma file of a package variant.
@@ -70,25 +80,23 @@ pub fn pkg_inv_stem(variant: &str) -> String {
     format!("PkgInv_{variant}")
 }
 
-/// The package lemma files of every variant in `variants` whose package has package
-/// invariants, in the order of `variants`.
+/// The package lemma files of every variant in `variants` that has them
+/// ([`lemma_variants`](super::game::lemma_variants)), in the order of `variants`.
 pub fn build_pkg_inv_files(
     theorem: &Theorem<'_>,
     project: &impl Project,
     variants: &[PackageVariant],
     owners: &StateOwners,
 ) -> Result<Vec<PkgInvFiles>, EcExportError> {
+    let lemma_variants = super::game::lemma_variants(theorem)?;
     let mut out = Vec::new();
-    for variant in variants {
+    for variant in variants.iter().filter(|v| lemma_variants.contains(&v.name)) {
         let inst = owners.instance_of(&variant.package);
         let templates: Vec<String> = package_invariant_ops(project, inst)
             .map_err(EcExportError::from)?
             .into_iter()
             .map(|op| op.name)
             .collect();
-        if templates.is_empty() {
-            continue;
-        }
         let module = variant
             .file
             .items
@@ -156,23 +164,20 @@ impl<'a> VariantCtx<'a> {
                 },
             ));
         }
-        let mut pkg_files = vec![format!("Pkg_{}", variant.name)];
+        let mut requires = vec![Require {
+            import: true,
+            names: ["AllCore", "Distr", "FMap", "Int", "IntDiv", "Types"]
+                .map(String::from)
+                .to_vec(),
+        }];
+        // the chain includes `Pkg_<V>`; the templates are in the file of the package's owner
         let owner_file = owners.file_of(&variant.package);
-        if !pkg_files.contains(&owner_file) {
-            pkg_files.push(owner_file);
+        if !templates.is_empty() && owner_file != format!("Pkg_{}", variant.name) {
+            requires.push(Require {
+                import: true,
+                names: vec![owner_file],
+            });
         }
-        let requires = vec![
-            Require {
-                import: true,
-                names: ["AllCore", "Distr", "FMap", "Int", "IntDiv", "Types"]
-                    .map(String::from)
-                    .to_vec(),
-            },
-            Require {
-                import: true,
-                names: pkg_files,
-            },
-        ];
         Ok(VariantCtx {
             theorem: &theorem.name,
             variant,
@@ -213,6 +218,10 @@ impl<'a> VariantCtx<'a> {
         .expect("a variant with package lemmas has an invariant")
     }
 
+    fn has_invariants(&self) -> bool {
+        !self.templates.is_empty()
+    }
+
     fn files(&self) -> Result<PkgInvFiles, EcExportError> {
         let v = &self.variant.name;
         let mut oracles = Vec::new();
@@ -224,31 +233,29 @@ impl<'a> VariantCtx<'a> {
                 .iter()
                 .find(|p| &p.name == proc_name)
                 .expect("the variant's module has a procedure for each oracle");
-            oracles.push(self.oracle_file(proc, oracle));
+            if self.has_invariants() {
+                oracles.push(self.oracle_file(proc, oracle));
+            }
             if self.has_imports() {
                 frames.push(self.frame_file(proc, oracle));
             }
         }
-        let start = self.start_file();
+        let mut start = self.has_invariants().then(|| self.start_file());
+        let mut prev = format!("Pkg_{v}");
+        for file in oracles.iter_mut().chain(&mut frames).chain(&mut start) {
+            prev = chain_onto(&mut file.file, prev, &file.file_name);
+        }
         let stem = pkg_inv_stem(v);
-        let names: Vec<String> = oracles
-            .iter()
-            .chain(&frames)
-            .chain([&start])
-            .map(|f| f.file_name.trim_end_matches(".ec").to_string())
-            .collect();
-        let join = EcFile {
+        let mut join = EcFile {
             header: vec![format!(
-                "{stem}.ec for theorem `{}`: the package lemmas of `{v}` — generated by `domino \
-                 easycrypt`.",
+                "{stem}.ec for theorem `{}`: the package lemmas of `{v}`, the theory each \
+                 composition clones for an instance of `{v}` — generated by `domino easycrypt`.",
                 self.theorem
             )],
-            requires: vec![Require {
-                import: false,
-                names,
-            }],
+            requires: vec![],
             items: vec![],
         };
+        chain_onto(&mut join, prev, "");
         Ok(PkgInvFiles {
             package: self.variant.package.clone(),
             variant: v.clone(),
@@ -385,6 +392,17 @@ impl<'a> VariantCtx<'a> {
     }
 }
 
+/// Puts `file` after theory `prev` in its variant's chain: `require <prev>.` and
+/// `clone include <prev>.` first. Returns the theory of `file_name`, the next file's `prev`.
+fn chain_onto(file: &mut EcFile, prev: String, file_name: &str) -> String {
+    file.requires.push(Require {
+        import: false,
+        names: vec![prev.clone()],
+    });
+    file.items.insert(0, EcItem::CloneInclude { base: prev });
+    file_name.trim_end_matches(".ec").to_string()
+}
+
 /// The axiom of a frame lemma about import `proc`: `I_<proc>`.
 pub fn import_axiom(proc: &str) -> String {
     format!("{IMPORTS}_{proc}")
@@ -420,7 +438,7 @@ fn tactic(indent: usize, bullet: Option<char>, text: String) -> ProofLine {
 }
 
 /// The structural proof of a frame lemma, forward over the procedure's body: `sp` over the
-/// leading assignments; at an import call `ecall ->> (I_<f>)`, which keeps every fact of the
+/// leading assignments, and `elim*` on what it leaves; at an import call `ecall ->> (I_<f>)`, which keeps every fact of the
 /// precondition that the call cannot change and adds the axiom's post; at a branch `if.` with a
 /// bullet for each arm, the statements after the branch in both; at a sampling
 /// `seq 1 : (#pre)`. Statements without a call to come are closed by `auto => /#.`: the
@@ -448,7 +466,13 @@ fn frame_walk(stmts: &[&EcStmt], leading: usize, indent: usize, out: &mut Vec<Pr
         .take_while(|s| matches!(s, EcStmt::Assign { .. }))
         .count();
     if leading + k > 0 {
-        out.push(tactic(indent, None, format!("sp {}.", leading + k)));
+        // `sp` over an assignment to a variable that the precondition reads leaves an
+        // existential, and `ecall ->>` refuses that precondition: `elim*` takes it out
+        out.push(tactic(
+            indent,
+            None,
+            format!("sp {}; elim* => *.", leading + k),
+        ));
     }
     let rest = &stmts[k..];
     match rest[0] {
@@ -574,16 +598,16 @@ mod tests {
         let text = render_proof_lines(&frame_proof(&proc));
         let expected = [
             "proc.",
-            "sp 1.",
+            "sp 1; elim* => *.",
             "if.",
             "+ ecall ->> (I_d_Get); 1: by move=> &hr /#.",
             "  if.",
-            "  + sp 1.",
+            "  + sp 1; elim* => *.",
             "    ecall ->> (I_d_Put); 1: by move=> &hr /#.",
             "    auto => /#.",
             "  + ecall ->> (I_d_Put); 1: by move=> &hr /#.",
             "    auto => /#.",
-            "+ sp 1.",
+            "+ sp 1; elim* => *.",
             "  ecall ->> (I_d_Put); 1: by move=> &hr /#.",
             "  auto => /#.",
         ]
@@ -621,8 +645,49 @@ mod tests {
             assert!(frame.contains(part), "{part} in:\n{frame}");
         }
         assert!(file("PkgInv_Ctr_init.ec").contains("hoare[Ctr(I).init :"));
-        assert!(file("PkgInv_Ctr.ec")
-            .contains("require PkgInv_Ctr_Step Frame_Ctr_Step PkgInv_Ctr_init."));
+        // story 77: one chain of theories, from `Pkg_Ctr` to the join
+        for (name, prev) in [
+            ("PkgInv_Ctr_Step.ec", "Pkg_Ctr"),
+            ("Frame_Ctr_Step.ec", "PkgInv_Ctr_Step"),
+            ("PkgInv_Ctr_init.ec", "Frame_Ctr_Step"),
+            ("PkgInv_Ctr.ec", "PkgInv_Ctr_init"),
+        ] {
+            let text = file(name);
+            assert!(
+                text.contains(&format!("require {prev}.\n\nclone include {prev}.")),
+                "{name}:\n{text}"
+            );
+        }
+    }
+
+    /// Story 77: a package without package invariants that calls one with them through its
+    /// imports gets frame lemmas, and no package-invariant or start lemma.
+    #[test]
+    fn a_caller_of_a_package_with_invariants_gets_frame_lemmas_only() {
+        let dir = PathBuf::from("example-projects/4WHS");
+        let files = DirectoryFiles::load(&dir).unwrap();
+        let project = DirectoryProject::load(dir, &files).unwrap();
+        let exported = export_theorem(project.get_theorem("Full4WHS").unwrap(), &project).unwrap();
+        let kx = exported
+            .package_invariants
+            .iter()
+            .find(|p| p.variant == "KX_noprfkey")
+            .expect("KX calls PRF");
+        assert!(kx.oracle_files.is_empty() && kx.start_file.is_none());
+        assert_eq!(kx.frame_files.len(), 11);
+        // `Nonces` has neither invariants nor imports
+        assert!(!exported
+            .package_invariants
+            .iter()
+            .any(|p| p.package == "Nonces"));
+        let comp = &exported.files[Path::new("Comp_H6.ec")];
+        for clone in [
+            "clone PkgInv_PRF as Cloned_Pkg_PRF.",
+            "clone Pkg_Nonces as Cloned_Pkg_Nonces.",
+            "clone PkgInv_KX_noprfkey as Cloned_Pkg_KX.",
+        ] {
+            assert!(comp.contains(clone), "{clone} in:\n{comp}");
+        }
     }
 
     #[test]

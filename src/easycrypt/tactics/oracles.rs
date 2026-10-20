@@ -40,6 +40,7 @@ use super::super::job::{
     create_if_absent, ensure_translation_files, oracle_lock_path, oracle_record_path, progress_dir,
     LiveJob, LockError, OracleStatus, ProofLock, SessionRecord,
 };
+use super::fixed::FixedFiles;
 use super::{
     open_lemma, plan_job, tactics_for_oracle, translation_files_line, translation_line,
     with_script, write_atomically, EquivalenceTactics, Interrupted, JobKind, JobPlan, LiveConfig,
@@ -119,7 +120,16 @@ where
         JobKind::PackageInvariants(p) => pkg_setup(job.theorem_ec, p)?,
     };
     if let Some(wanted) = &options.oracle {
-        if !setup.oracles.iter().any(|(name, _)| name == wanted) {
+        let known = |name: &String| name == wanted;
+        if !setup.oracles.iter().any(|(name, _)| known(name))
+            && !eq.oracle_files.iter().any(|(name, _)| known(name))
+            && !job
+                .exported
+                .package_invariants
+                .iter()
+                .filter(|p| p.join_file == eq.proof_file)
+                .any(|p| p.frame_files.iter().any(|(name, _)| known(name)))
+        {
             return Err(CheckError::NoSuchOracle {
                 oracle: wanted.clone(),
                 file: eq.proof_file.clone(),
@@ -129,19 +139,14 @@ where
     }
     let names: Vec<String> = setup.oracles.iter().map(|(n, _)| n.clone()).collect();
     // story 35: the records decide before anything is created or truncated
-    // a package-invariant job: the lemmas no tree is walked for
-    let pkg = job
-        .exported
-        .package_invariants
-        .iter()
-        .find(|p| p.join_file == eq.proof_file)
-        .filter(|_| matches!(job.kind, JobKind::PackageInvariants(_)));
+    // the lemmas no tree is walked for
+    let fixed = FixedFiles::of(job);
     let prior = match plan_job(eq, job.out_dir, options, &names)? {
         JobPlan::Prove { prior } => prior,
-        // every oracle is done, but a frame or start lemma may not be: the job checks it
-        JobPlan::Skip { record } if pkg.is_some_and(|p| super::fixed::any_unproved(job, p)) => {
+        // every oracle is done, but a lemma without a tree may not be: the job checks it
+        JobPlan::Skip { record } if fixed.as_ref().is_some_and(|f| f.any_unproved(job)) => {
             eprintln!(
-                "{}: its frame or start lemmas are not proved yet; checking them",
+                "{}: lemmas that no tree is walked for are not proved yet; checking them",
                 job.stem()
             );
             Some(record)
@@ -227,10 +232,10 @@ where
         board.interrupted = Some(Interrupted::NoOracleInFlight);
     }
     board.running_done();
-    // the frame and start lemmas, once every oracle is done
-    if let Some(pkg) = pkg {
+    // the lemmas without a tree, once every oracle is done
+    if let Some(fixed) = &fixed {
         if board.interrupted.is_none() {
-            board.fixed = super::fixed::prove_fixed_lemmas(job, pkg, &dir)?;
+            board.fixed = super::fixed::prove_fixed_lemmas(job, fixed, &dir)?;
         }
     }
     let tactics = board.tactics(job);

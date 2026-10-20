@@ -92,7 +92,7 @@ use crate::writers::easycrypt::export::{
     EquivalenceReport, ExportedTheorem, PkgInvReport, SideInvReport,
 };
 use crate::writers::easycrypt::invariant::{
-    invariant_ops, leaf_part_ops, package_invariant_ops, side_invariant_ops,
+    invariant_ops, leaf_part_ops, package_invariant_ops, side_job_ops,
 };
 use crate::writers::easycrypt::lower::inline_oracle_ec;
 use crate::writers::easycrypt::progress::{ExportObserver, NopExportObserver};
@@ -102,7 +102,7 @@ use super::check::{
     describe_mismatch, ok_or_reject, sentences_until_proof, CheckError, EquivalenceSetup,
 };
 use super::job::{
-    equivalence_record_path, is_oracle_file, old_saved_tree_path, old_session_record_path,
+    equivalence_record_path, is_ensured, old_saved_tree_path, old_session_record_path,
     oracle_record_path, path_to_read, saved_tree_path, split_equivalence_record, ClosedNode,
     LockError, LockstepRecord, OracleRecord, OracleStatus, SavedTree, SessionRecord,
     SessionRecordError,
@@ -664,6 +664,9 @@ pub struct TheoremTactics {
     /// The compositions whose side-invariant files a `--proofstep` job did not find on disk;
     /// their equivalences were not started (story 69 §3.3).
     pub unproved_side_invariants: Vec<String>,
+    /// The packages whose package lemma files a side-invariant job did not find on disk; the
+    /// side jobs of their compositions were not started (story 77).
+    pub unproved_package_invariants: Vec<String>,
     pub elapsed: Duration,
     /// The warning given when an answer showed EasyCrypt swallowed an interrupt (once per run).
     pub swallowed_interrupt: Option<String>,
@@ -779,43 +782,162 @@ where
             .iter()
             .map(|eq| (eq, JobKind::Equivalence))
     };
-    // the side-invariant jobs, one after another; on a thread of their own while the
+    // the package-invariant and side-invariant jobs, one after another (story 77): a side job
+    // after the package jobs of its own composition; on a thread of their own while the
     // equivalences' proof jobs run (story 69 §3.3)
-    let sides = || {
-        plan.side
-            .iter()
-            .map(|(eq, c)| (eq, JobKind::SideInvariants(c.as_str())))
-    };
-    let packages = || {
-        plan.packages
-            .iter()
-            .map(|(eq, p)| (eq, JobKind::PackageInvariants(p.as_str())))
-    };
-    // `--pkg-inv`: the jobs of the package's variants, and nothing else
-    let package_invariants = run_jobs(&ctx, packages(), progress)?;
-    let (equivalences, side_invariants) = if !plan.packages.is_empty() {
-        (Vec::new(), Vec::new())
-    } else if plan.equivalences.is_empty() {
-        (Vec::new(), run_jobs(&ctx, sides(), progress)?)
-    } else if plan.side.is_empty() {
-        (run_jobs(&ctx, eqs(), progress)?, Vec::new())
-    } else {
-        std::thread::scope(|s| {
-            let side = s.spawn(|| run_jobs(&ctx, sides(), &mut || Box::new(NopExportObserver)));
-            let equivalences = run_jobs(&ctx, eqs(), progress);
-            let side = side.join().expect("the side-invariant jobs do not panic");
-            Ok::<_, TacticsError>((equivalences?, side?))
-        })?
-    };
+    let (equivalences, (side_invariants, package_invariants, unproved_packages)) =
+        if plan.equivalences.is_empty() {
+            (Vec::new(), run_side_chain(&ctx, &plan, progress)?)
+        } else if plan.side.is_empty() && plan.packages.is_empty() {
+            (
+                run_jobs(&ctx, eqs(), progress)?,
+                (Vec::new(), Vec::new(), Vec::new()),
+            )
+        } else {
+            std::thread::scope(|s| {
+                let chain =
+                    s.spawn(|| run_side_chain(&ctx, &plan, &mut || Box::new(NopExportObserver)));
+                let equivalences = run_jobs(&ctx, eqs(), progress);
+                let chain = chain.join().expect("the side-invariant jobs do not panic");
+                Ok::<_, TacticsError>((equivalences?, chain?))
+            })?
+        };
     Ok(TheoremTactics {
         theorem: theorem.name.clone(),
         equivalences,
         side_invariants,
         package_invariants,
         unproved_side_invariants: plan.unproved,
+        unproved_package_invariants: unproved_packages,
         elapsed: started.elapsed(),
         swallowed_interrupt: swallow.warning(),
     })
+}
+
+/// The package-invariant and side-invariant jobs of `plan`, one after another, in the order of
+/// [`chain_steps`] (story 77, ADR 0016). A side job starts only if the package lemma files of
+/// its composition are on disk (a file with admits counts); else a warning, and it does not
+/// start. Returns the side jobs, the package jobs, and the packages whose files were missing.
+#[allow(clippy::type_complexity)]
+fn run_side_chain<'a, P, B>(
+    ctx: &RunCtx<'a, P, B>,
+    plan: &'a RunPlan,
+    progress: &mut dyn FnMut() -> Box<dyn ExportObserver>,
+) -> Result<
+    (
+        Vec<EquivalenceTactics>,
+        Vec<EquivalenceTactics>,
+        Vec<String>,
+    ),
+    TacticsError,
+>
+where
+    P: Project + Sync,
+    B: SmtSolverBackend + Sync,
+{
+    let needs = |composition: &str| -> Vec<&'a str> {
+        ctx.exported
+            .side_invariants
+            .iter()
+            .find(|s| s.composition == composition)
+            .map(|s| s.packages.iter().map(String::as_str).collect())
+            .unwrap_or_default()
+    };
+    let (mut sides, mut packages, mut unproved) = (Vec::new(), Vec::new(), Vec::new());
+    for step in chain_steps(plan, needs) {
+        if ctx.options.stop_requested() {
+            break;
+        }
+        match step {
+            ChainStep::Package(name) => {
+                let jobs = plan
+                    .packages
+                    .iter()
+                    .filter(|(_, p)| p == name)
+                    .map(|(eq, p)| (eq, JobKind::PackageInvariants(p.as_str())));
+                packages.extend(run_jobs(ctx, jobs, progress)?);
+            }
+            ChainStep::Side(i) => {
+                let (eq, composition) = &plan.side[i];
+                let missing: Vec<&str> = needs(composition)
+                    .into_iter()
+                    .filter(|p| !package_files_on_disk(ctx.exported, ctx.out_dir, p))
+                    .collect();
+                for p in &missing {
+                    eprintln!("{}", unproved_package_invariants_line(p));
+                    if !unproved.iter().any(|u: &String| u == p) {
+                        unproved.push(p.to_string());
+                    }
+                }
+                if missing.is_empty() {
+                    sides.extend(run_jobs(
+                        ctx,
+                        std::iter::once((eq, JobKind::SideInvariants(composition.as_str()))),
+                        progress,
+                    )?);
+                }
+            }
+        }
+    }
+    Ok((sides, packages, unproved))
+}
+
+/// One step of [`run_side_chain`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChainStep<'a> {
+    /// The package-invariant jobs of every variant of this package.
+    Package(&'a str),
+    /// The side-invariant job of `plan.side[i]`.
+    Side(usize),
+}
+
+/// The order of the package-invariant and side-invariant jobs of `plan`: for each side job, the
+/// package jobs of its composition (`needs`) that have not run, then the side job; then the
+/// package jobs that no side job needed. Each package once, and only a package that `plan`
+/// has a job for.
+fn chain_steps<'a>(plan: &'a RunPlan, needs: impl Fn(&str) -> Vec<&'a str>) -> Vec<ChainStep<'a>> {
+    let mut steps = Vec::new();
+    let mut ran: Vec<&str> = Vec::new();
+    let mut package = |name: &'a str, steps: &mut Vec<ChainStep<'a>>| {
+        if !ran.contains(&name) && plan.packages.iter().any(|(_, p)| p == name) {
+            ran.push(name);
+            steps.push(ChainStep::Package(name));
+        }
+    };
+    for (i, (_, composition)) in plan.side.iter().enumerate() {
+        for name in needs(composition) {
+            package(name, &mut steps);
+        }
+        steps.push(ChainStep::Side(i));
+    }
+    for (_, name) in &plan.packages {
+        package(name, &mut steps);
+    }
+    steps
+}
+
+/// The warning of a side-invariant job whose composition uses package `package`, and does not
+/// find its package lemma files on disk (story 77).
+pub fn unproved_package_invariants_line(package: &str) -> String {
+    format!(
+        "warning: package invariants of {package} are not proved: run prove --pkg-inv {package} \
+         first"
+    )
+}
+
+/// Whether every package lemma file of every variant of `package` is in `out_dir`.
+fn package_files_on_disk(exported: &ExportedTheorem, out_dir: &Path, package: &str) -> bool {
+    exported
+        .package_invariants
+        .iter()
+        .filter(|p| p.package == package)
+        .all(|p| {
+            std::iter::once(&p.join_file)
+                .chain(p.oracle_files.iter().map(|(_, f)| f))
+                .chain(p.frame_files.iter().map(|(_, f)| f))
+                .chain(&p.start_file)
+                .all(|f| out_dir.join(f).is_file())
+        })
 }
 
 /// What a run proves, decided before any job starts (story 69 §3.3).
@@ -827,17 +949,19 @@ struct RunPlan {
     side: Vec<(EquivalenceReport, String)>,
     /// The compositions whose side-invariant files a `--proofstep` run did not find.
     unproved: Vec<String>,
-    /// The package-invariant jobs that run (`--pkg-inv` only): the job's report
-    /// ([`pkg_job_report`]) and the package's Domino name.
+    /// The package-invariant jobs that run (`--pkg-inv`, or a whole-theorem run): the job's
+    /// report ([`pkg_job_report`]) and the package's Domino name.
     packages: Vec<(EquivalenceReport, String)>,
 }
 
 /// - `--pkg-inv P`: the package-invariant job of each variant of `P` only.
-/// - `--side-inv C`: the side-invariant job of `C` only.
+/// - `--side-inv C`: the side-invariant job of `C` only, if the package lemma files of its
+///   packages are on disk (story 77, checked when it starts).
 /// - `--proofstep P`: the proof job of `P`, if the side-invariant files of its compositions are
 ///   on disk (a file with admits counts); else a warning, and nothing runs.
-/// - neither: every equivalence, and the side-invariant job of every composition with side
-///   invariants (each job skips what its records say is proved).
+/// - neither: every equivalence, every package-invariant job and the side-invariant job of
+///   every composition with side invariants (each job skips what its records say is proved),
+///   in the order of [`run_side_chain`].
 fn plan_run(
     exported: &ExportedTheorem,
     out_dir: &Path,
@@ -883,7 +1007,11 @@ fn plan_run(
             equivalences: exported.equivalences.clone(),
             side: exported.side_invariants.iter().map(side_job).collect(),
             unproved: Vec::new(),
-            packages: Vec::new(),
+            packages: exported
+                .package_invariants
+                .iter()
+                .map(|p| (pkg_job_report(p), p.package.clone()))
+                .collect(),
         });
     };
     let mut plan = RunPlan {
@@ -1039,7 +1167,7 @@ fn translation_line(exported: &ExportedTheorem, created: &[PathBuf]) -> String {
     let total = exported
         .files
         .keys()
-        .filter(|p| !is_oracle_file(exported, p))
+        .filter(|p| is_ensured(exported, p))
         .count();
     if created.is_empty() {
         format!("translation files: all {total} present, trusted as they are")
@@ -1744,7 +1872,7 @@ where
         ),
         // `Comp_<C>.side_inv_<C>` first: the premise unfolded is the one that mentions it
         JobKind::SideInvariants(_) => {
-            let ops = side_invariant_ops(project, left.game()).map_err(EcExportError::from)?;
+            let ops = side_job_ops(project, left.game()).map_err(EcExportError::from)?;
             (ops.clone(), ops, Judgement::Hoare)
         }
         // the templates `PkgInv_<N>_of_<P>`, each standing for its package claim
@@ -2066,6 +2194,9 @@ impl TheoremTactics {
         let mut out = format!("tactics for theorem {}\n", self.theorem);
         for job in self.jobs() {
             out.push_str(&job.render());
+        }
+        for p in &self.unproved_package_invariants {
+            let _ = writeln!(out, "{}", unproved_package_invariants_line(p));
         }
         for c in &self.unproved_side_invariants {
             let _ = writeln!(out, "{}", unproved_side_invariants_line(c));
