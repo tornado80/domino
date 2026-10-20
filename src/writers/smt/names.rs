@@ -219,3 +219,14 @@ impl NameSection for SamplePosition {
             .push(&self.sample_name)
     }
 }
+
+/// The constructor of the call-result record `record` (ADR 0017).
+pub(crate) fn call_record_constructor(record: &str) -> String {
+    format!("mk-{record}")
+}
+
+/// The selector of field `site` (1-based, in control-flow order) of the call-result record
+/// `record` (ADR 0017).
+pub(crate) fn call_record_field(record: &str, site: usize) -> String {
+    format!("{record}-{site}")
+}

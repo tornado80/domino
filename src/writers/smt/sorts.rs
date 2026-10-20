@@ -50,7 +50,7 @@ impl From<&Type> for SmtlibSort {
                 parameters: tys.iter().map(|ty| ty.into()).collect(),
             },
 
-            TypeKind::UserDefined(_) => todo!(),
+            TypeKind::UserDefined(name) => name.as_str().into(),
             TypeKind::Set(_) => todo!(),
             TypeKind::List(_) => todo!(),
             TypeKind::Fn(_, _) => todo!(),
@@ -102,7 +102,7 @@ impl From<Type> for Sort {
             TypeKind::List(_) => todo!(),
             TypeKind::Set(_) => todo!(),
             TypeKind::Fn(_, _) => todo!(),
-            TypeKind::UserDefined(_) => todo!(),
+            TypeKind::UserDefined(name) => Sort::Other(name, vec![]),
         }
     }
 }

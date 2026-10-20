@@ -1,0 +1,25 @@
+package Flag {
+    invariant: [ ./packages/Flag.smt2 ]
+
+    params {
+        n: Integer,
+    }
+
+    state {
+        differed: Bool,
+    }
+
+    import oracles {
+        Get(x: Integer) -> Bits(n),
+    }
+
+    /* the invariant holds only if both calls return the same value */
+    oracle Twice(x: Integer) -> Bits(n) {
+        a <- invoke Get(x);
+        b <- invoke Get(x);
+        if (a != b) {
+            differed <- true;
+        }
+        return a;
+    }
+}

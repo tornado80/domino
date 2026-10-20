@@ -48,7 +48,7 @@ impl ClaimGroup {
     }
 }
 
-/// Proves the invariant of a single package against its synthetic game.
+/// Proves the invariant of a single package in its one-game theorem.
 pub(crate) struct PackageInvariantSmtDriver<
     'a,
     Backend: SmtSolverBackend + Sync,
@@ -127,6 +127,8 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
         let mut base_smt = Vec::new();
         base_smt.push(SmtExpr::Comment("base declarations:\n".to_string()));
         base_smt.extend(self.ctx.emit_base_declarations());
+        base_smt.push(SmtExpr::Comment("call-result records:\n".to_string()));
+        base_smt.extend(self.ctx.emit_call_records());
         base_smt.push(SmtExpr::Comment("theorem param funcs:\n".to_string()));
         base_smt.extend(self.ctx.emit_theorem_paramfuncs());
         base_smt.push(SmtExpr::Comment("game definitions:\n".to_string()));

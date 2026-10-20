@@ -1,0 +1,24 @@
+composition G {
+    const n: Integer;
+
+    instance flag = Flag {
+        params {
+            n: n,
+        }
+    }
+
+    instance det = Det {
+        params {
+            n: n,
+        }
+    }
+
+    compose {
+        adversary: {
+            Twice: flag,
+        },
+        flag: {
+            Get: det,
+        },
+    }
+}

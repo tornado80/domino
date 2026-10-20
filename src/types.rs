@@ -169,7 +169,8 @@ impl Type {
                     t.rewrite_type(rules),
                 ),
                 TypeKind::Unknown => unreachable!(),
-                TypeKind::UserDefined(_) => unreachable!(),
+                // a named type has no lengths to rewrite
+                TypeKind::UserDefined(_) => self.clone(),
             }
         }
     }

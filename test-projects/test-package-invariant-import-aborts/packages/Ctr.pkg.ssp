@@ -1,0 +1,23 @@
+package Ctr {
+    invariant: [ ./packages/Ctr.smt2 ]
+
+    params {
+        n: Integer,
+    }
+
+    state {
+        ctr: Integer,
+    }
+
+    import oracles {
+        Get(x: Integer) -> Bits(n),
+    }
+
+    /* ctr is negative only on the path where Get aborts, and then Step aborts too */
+    oracle Step(x: Integer) -> Bits(n) {
+        ctr <- (0 - 1);
+        y <- invoke Get(x);
+        ctr <- 0;
+        return y;
+    }
+}

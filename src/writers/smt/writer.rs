@@ -745,19 +745,24 @@ impl<'a> CompositionSmtWriter<'a> {
         idents: &[Identifier],
         expr: &Expression,
     ) -> SmtExpr {
-        let TypeKind::Tuple(types) = expr.get_type().into_kind() else {
-            unreachable!("if this wasn't a tuple type, the type checker would have complained")
+        // a tuple, or a call-result record (ADR 0017), which only the package check builds
+        let selector = match expr.get_type().into_kind() {
+            TypeKind::Tuple(types) => {
+                let len = types.len();
+                Box::new(move |i| format!("el{len}-{i}")) as Box<dyn Fn(usize) -> String>
+            }
+            TypeKind::UserDefined(record) => {
+                Box::new(move |i| names::call_record_field(&record, i))
+            }
+            _ => {
+                unreachable!("if this wasn't a tuple type, the type checker would have complained")
+            }
         };
         let bindings = idents
             .iter()
             .enumerate()
             .filter(|(_, ident)| ident.ident_ref() != "_")
-            .map(|(i, ident)| {
-                (
-                    ident.ident(),
-                    (format!("el{}-{}", types.len(), i + 1), expr).into(),
-                )
-            })
+            .map(|(i, ident)| (ident.ident(), (selector(i + 1), expr).into()))
             .collect();
 
         SmtLet {

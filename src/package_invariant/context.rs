@@ -4,8 +4,8 @@
 //!
 //! This is the single-game counterpart of
 //! [`EquivalenceContext`](crate::writers::smt::contexts::EquivalenceContext): it emits the
-//! declarations of one game (the synthetic game from [`super::virtualgame`]) and the two kinds of
-//! claims a package invariant consists of.
+//! declarations of one game (the closed package alone, from [`super::open_game`]), the call-result
+//! records of its oracles (ADR 0017), and the two kinds of claims a package invariant consists of.
 
 use std::collections::HashSet;
 
@@ -13,6 +13,7 @@ use crate::{
     gamehops::equivalence::smtrewrite::{self, SmtStatementKind, SmtStmt},
     package::{Package, PackageInstance},
     project::Project,
+    statement::{Assignment, AssignmentRhs, Pattern, Statement},
     theorem::{
         BuiltInFact, ClaimKind, GameInstance, InvariantSide, ResolvedClaim, ResolvedDependency,
         Theorem,
@@ -21,11 +22,12 @@ use crate::{
         samplify::SampleInfo,
         theorem_transforms::{self, GameInstAux},
     },
-    types::Type,
+    types::{Type, TypeKind},
     writers::smt::{
         contexts::{game_defs, GameInstanceContext, GenericOracleContext},
-        declare::declare_const,
+        declare::{declare_const, declare_single_constructor_datatype},
         exprs::{SmtAnd, SmtAssert, SmtExpr, SmtImplies, SmtNot},
+        names,
         patterns::{
             self,
             functions::FunctionPattern,
@@ -41,7 +43,7 @@ use crate::{
 
 use super::{
     error::{Error, Result},
-    VirtualGame,
+    open_calls, open_game,
 };
 
 /// Everything needed to emit the SMT for the invariant of one package.
@@ -57,8 +59,11 @@ pub(crate) struct PackageInvariantContext<'a> {
 }
 
 impl<'a> PackageInvariantContext<'a> {
-    /// Builds the synthetic game for `pkg`, runs it through the usual transformation pipeline and
-    /// reads the package's invariant files.
+    /// Closes `pkg` (open calls), builds its one-game theorem, runs it through the usual
+    /// transformation pipeline and reads the package's invariant files.
+    ///
+    /// Errors: [`Error::NoInvariant`], [`Error::OpenCallInLoop`], and the errors of reading and
+    /// rewriting the invariant files.
     pub(crate) fn new(pkg: &'a Package, project: &impl Project) -> Result<Self> {
         if pkg.invariants.is_empty() {
             return Err(Error::NoInvariant {
@@ -66,19 +71,20 @@ impl<'a> PackageInvariantContext<'a> {
             });
         }
 
-        let virtual_game = VirtualGame::new(pkg);
-        let game_inst_name = virtual_game.game_inst_name().to_string();
-        let pkg_inst_name = virtual_game.pkg_inst_name().to_string();
+        let closed = open_calls::close_package(pkg)?;
+        let theorem = open_game::open_game_theorem(&closed);
+        let game_inst_name = theorem.instances[0].name().to_string();
+        let pkg_inst_name = pkg.name.clone();
 
         let (
             game_inst,
             GameInstAux {
                 types, sample_info, ..
             },
-        ) = theorem_transforms::transform_game_inst(virtual_game.game_inst())
-            .expect("transforming the synthetic package invariant game failed unexpectedly");
+        ) = theorem_transforms::transform_game_inst(&theorem.instances[0])
+            .expect("transforming the closed package game failed unexpectedly");
 
-        let theorem = virtual_game.theorem().with_new_instances(vec![game_inst]);
+        let theorem = theorem.with_new_instances(vec![game_inst]);
 
         let mut this = Self {
             pkg,
@@ -139,11 +145,11 @@ impl<'a> PackageInvariantContext<'a> {
             .pkgs
             .iter()
             .find(|pkg_inst| pkg_inst.name == self.pkg_inst_name)
-            .expect("the package under scrutiny is always part of the synthetic game")
+            .expect("the package is the only package of its game")
     }
 
     /// One claim for each named invariant of the package (`package-invariant!<name>!<P>!`), in
-    /// declaration order. The virtual game has one side only; the claims say `Left`.
+    /// declaration order. The game has one side only; the claims say `Left`.
     pub(crate) fn invariant_claims(&self) -> Vec<ResolvedClaim> {
         self.invariants
             .iter()
@@ -183,6 +189,39 @@ impl PackageInvariantContext<'_> {
         types.sort();
 
         game_defs::emit_base_declarations(&types)
+    }
+
+    /// One `declare-datatype` for each oracle with import calls: its call-result record
+    /// `<P>-<O>-calls`, with one field for each call site, in control-flow order (ADR 0017). The
+    /// oracle functions take the record as an argument, so this comes before them.
+    pub(crate) fn emit_call_records(&self) -> Vec<SmtExpr> {
+        self.pkg_inst()
+            .pkg
+            .oracles
+            .iter()
+            .filter_map(|odef| match odef.code.0.first() {
+                Some(Statement::Assignment(
+                    Assignment {
+                        pattern: Pattern::Tuple(fields),
+                        rhs: AssignmentRhs::Expression(expr),
+                    },
+                    _,
+                )) => match expr.get_type().into_kind() {
+                    TypeKind::UserDefined(record) => Some(declare_single_constructor_datatype(
+                        &record,
+                        &names::call_record_constructor(&record),
+                        fields.iter().enumerate().map(|(i, field)| {
+                            (
+                                names::call_record_field(&record, i + 1),
+                                field.get_type().into(),
+                            )
+                        }),
+                    )),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
     }
 
     pub(crate) fn emit_theorem_paramfuncs(&self) -> Vec<SmtExpr> {
@@ -251,7 +290,7 @@ impl PackageInvariantContext<'_> {
         for export in &game_inst.game().exports {
             let mut octx = gctx
                 .exported_oracle_ctx_by_name(export.name())
-                .expect("every export of the synthetic game points at an oracle");
+                .expect("every export of the game points at an oracle");
             octx.set_renamed(export.alias());
 
             for (arg_name, arg_type) in &export.sig().args {
@@ -305,7 +344,7 @@ impl PackageInvariantContext<'_> {
 
         let octx = gctx
             .exported_oracle_ctx_by_name(oracle_name)
-            .expect("the oracle is exported by the synthetic game");
+            .expect("the oracle is exported by the game");
 
         let state = octx.oracle_arg_game_state_pattern();
         let old_state = state.old_global_const_name(game_inst_name);
@@ -337,11 +376,102 @@ mod tests {
 
     use super::PackageInvariantContext;
 
+    fn load(root: &str) -> DirectoryProject<'static> {
+        let files = Box::leak(Box::new(
+            DirectoryFiles::load(std::path::Path::new(root)).unwrap(),
+        ));
+        DirectoryProject::load(std::path::PathBuf::from(root), files).unwrap()
+    }
+
+    #[test]
+    fn each_oracle_with_import_calls_has_one_record_with_a_field_for_each_site() {
+        let project = load("test-projects/err-package-invariant-open-calls-differ");
+        let ctx =
+            PackageInvariantContext::new(project.get_package("Flag").unwrap(), &project).unwrap();
+        let records: Vec<String> = ctx
+            .emit_call_records()
+            .iter()
+            .map(|r| {
+                r.to_string()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+        assert_eq!(records.len(), 1, "{records:?}");
+        let record = &records[0];
+        assert!(
+            record.starts_with("(declare-datatype Flag-Twice-calls ((mk-Flag-Twice-calls"),
+            "{record}"
+        );
+        let first = record.find("(Flag-Twice-calls-1 (Maybe").unwrap();
+        let second = record.find("(Flag-Twice-calls-2 (Maybe").unwrap();
+        assert!(first < second && !record.contains("calls-3"), "{record}");
+    }
+
+    #[test]
+    fn an_oracle_without_import_calls_has_no_record() {
+        let project = load("test-projects/test-package-invariant-imports");
+        let ctx =
+            PackageInvariantContext::new(project.get_package("Ctr").unwrap(), &project).unwrap();
+        let records: Vec<String> = ctx
+            .emit_call_records()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        // Step and Get call an import, Peek does not
+        assert_eq!(records.len(), 2, "{records:?}");
+        assert!(records.iter().all(|r| !r.contains("Ctr-Peek-calls")));
+    }
+
+    /// `None` in the field of a call site aborts the oracle (the abort cascade).
+    #[cfg(feature = "cvc5-lib")]
+    #[test]
+    fn an_import_that_aborts_aborts_the_oracle() {
+        use crate::util::smtsolver::{
+            cvc5lib::Cvc5LibBackend, SmtSolver, SmtSolverBackend, SmtSolverResponse,
+        };
+        use crate::writers::smt::{
+            contexts::GenericOracleContext,
+            exprs::SmtExpr,
+            patterns::{theorem_constants::ConstantPattern, ReturnIsAbortConst},
+        };
+
+        let project = load("test-projects/test-package-invariant-import-aborts");
+        let ctx =
+            PackageInvariantContext::new(project.get_package("Ctr").unwrap(), &project).unwrap();
+        let gctx = ctx.game_inst_ctx();
+        let octx = gctx.exported_oracle_ctx_by_name("Step").unwrap();
+        let calls = octx.smt_arg_name(super::open_calls::CALLS_ARG);
+        let is_abort = ReturnIsAbortConst {
+            game_inst_name: &ctx.game_inst_name,
+            pkg_inst_name: &ctx.pkg_inst_name,
+            oracle_name: "Step",
+            ty: octx.oracle_return_type(),
+        };
+
+        let mut smt = ctx.emit_base_declarations();
+        smt.extend(ctx.emit_call_records());
+        smt.extend(ctx.emit_theorem_paramfuncs());
+        smt.extend(ctx.emit_game_definitions());
+        smt.extend(ctx.emit_constant_declarations());
+        let field = format!("(Ctr-Step-calls-1 {calls})");
+        let mut solver = Cvc5LibBackend::new(true, None).new_smtsolver().unwrap();
+        for expr in smt {
+            solver.write_smt(expr).unwrap();
+        }
+        solver
+            .write_smt(SmtExpr::Atom(format!("(assert (is-mk-none {field}))")))
+            .unwrap();
+        solver
+            .write_smt(SmtExpr::Atom(format!("(assert (not {}))", is_abort.name())))
+            .unwrap();
+        assert_eq!(solver.check_sat().unwrap(), SmtSolverResponse::Unsat);
+    }
+
     #[test]
     fn the_package_check_has_one_claim_for_each_named_invariant() {
-        let root = "test-projects/test-package-invariant-imports";
-        let files = DirectoryFiles::load(std::path::Path::new(root)).unwrap();
-        let project = DirectoryProject::load(std::path::PathBuf::from(root), &files).unwrap();
+        let project = load("test-projects/test-package-invariant-imports");
         let ctx =
             PackageInvariantContext::new(project.get_package("Ctr").unwrap(), &project).unwrap();
 

@@ -31,6 +31,20 @@ pub enum Error {
         known_oracle_names: Vec<String>,
     },
 
+    #[error("oracle {oracle_name} of package {pkg_name} calls an import in a loop that could not be unrolled")]
+    #[diagnostic(help(
+        "the package check gives each import call site its own outcome (ADR 0017), so it needs \
+         every call site once. Give this loop literal integer bounds."
+    ))]
+    OpenCallInLoop {
+        pkg_name: String,
+        oracle_name: String,
+        #[source_code]
+        src: miette::NamedSource<String>,
+        #[label("this loop calls an import")]
+        at: miette::SourceSpan,
+    },
+
     #[error("error reading invariant file {invariant_file_name}: {err}")]
     InvariantFileRead {
         invariant_file_name: String,

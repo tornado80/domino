@@ -1,0 +1,13 @@
+package Det {
+    params {
+        n: Integer,
+    }
+
+    state {
+        k: Bits(n),
+    }
+
+    oracle Get(x: Integer) -> Bits(n) {
+        return k;
+    }
+}

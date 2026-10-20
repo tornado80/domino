@@ -1,0 +1,15 @@
+package Src {
+    params {
+        n: Integer,
+    }
+
+    state {
+        k: Bits(n),
+    }
+
+    /* aborts for every non-negative x */
+    oracle Get(x: Integer) -> Bits(n) {
+        assert (x < 0);
+        return k;
+    }
+}
