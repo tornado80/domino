@@ -60,6 +60,9 @@ pub struct ResultRecord {
     /// `left`, with an empty `right`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition: Option<String>,
+    /// The package of a package tree (symbolic-execution story 29), named like `composition`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
     pub claim: String,
     pub strategy: String,
     pub listing: String,
@@ -96,6 +99,7 @@ impl ResultRecord {
             right: t.right.clone(),
             oracle: t.oracle.clone(),
             composition: entry.composition.clone(),
+            package: entry.package.clone(),
             claim: entry.claim.clone(),
             strategy: entry.strategy.to_string(),
             listing: entry.listing.to_string(),
@@ -249,6 +253,12 @@ pub enum Level {
         theorem: String,
         composition: String,
     },
+    /// The package trees of a package (symbolic-execution story 29), in `!debug!/PkgInv_<P>/`
+    /// under the theorem.
+    PkgInv {
+        theorem: String,
+        package: String,
+    },
 }
 
 impl Level {
@@ -282,6 +292,7 @@ impl Level {
                 theorem,
                 composition,
             } => root.join(theorem).join(side_inv_rel(composition)),
+            Level::PkgInv { theorem, package } => root.join(theorem).join(pkg_inv_rel(package)),
         }
     }
 
@@ -289,11 +300,11 @@ impl Level {
         match self {
             Level::Project => None,
             Level::Theorem { .. } => Some(Level::Project),
-            Level::Proofstep { theorem, .. } | Level::SideInv { theorem, .. } => {
-                Some(Level::Theorem {
-                    theorem: theorem.clone(),
-                })
-            }
+            Level::Proofstep { theorem, .. }
+            | Level::SideInv { theorem, .. }
+            | Level::PkgInv { theorem, .. } => Some(Level::Theorem {
+                theorem: theorem.clone(),
+            }),
         }
     }
 
@@ -313,6 +324,9 @@ impl Level {
                 composition,
             } => {
                 format!("domino debug — {theorem}: side invariants of {composition}")
+            }
+            Level::PkgInv { theorem, package } => {
+                format!("domino debug — {theorem}: package invariants of {package}")
             }
         }
     }
@@ -361,12 +375,16 @@ fn levels_below(root: &Path, level: &Level) -> Vec<Level> {
     let mut theorems = std::collections::BTreeSet::new();
     for found in records_below(&level.dir(root)) {
         let r = found.record;
-        proofsteps.insert(match r.composition {
-            Some(composition) => Level::SideInv {
+        proofsteps.insert(match (r.composition, r.package) {
+            (Some(composition), _) => Level::SideInv {
                 theorem: r.theorem.clone(),
                 composition,
             },
-            None => Level::Proofstep {
+            (None, Some(package)) => Level::PkgInv {
+                theorem: r.theorem.clone(),
+                package,
+            },
+            (None, None) => Level::Proofstep {
                 theorem: r.theorem.clone(),
                 left: r.left,
                 right: r.right,
@@ -462,7 +480,7 @@ fn header(level: &Level) -> &'static [&'static str] {
             "oldest run",
             "",
         ],
-        Level::Proofstep { .. } | Level::SideInv { .. } => &[
+        Level::Proofstep { .. } | Level::SideInv { .. } | Level::PkgInv { .. } => &[
             "oracle",
             "claim",
             "strategy",
@@ -492,15 +510,23 @@ fn rows(level: &Level, dir: &Path, found: &[Found]) -> Vec<Row> {
                 .collect()
         }
         Level::Theorem { theorem } => {
-            let groups = group(found, |r| match &r.composition {
-                // after every proofstep
-                Some(c) => (c.clone(), usize::MAX, String::new()),
-                None => (r.left.clone(), r.proofstep, r.right.clone()),
+            let groups = group(found, |r| match (&r.composition, &r.package) {
+                // after every proofstep, then the package trees
+                (Some(c), _) => (c.clone(), SIDE_INV_ROWS, String::new()),
+                (None, Some(p)) => (p.clone(), PKG_INV_ROWS, String::new()),
+                (None, None) => (r.left.clone(), r.proofstep, r.right.clone()),
             });
             groups
                 .into_iter()
                 .map(|((left, step, right), runs)| {
-                    if step == usize::MAX {
+                    if step == PKG_INV_ROWS {
+                        let hint = format!(
+                            "no index; run `domino easycrypt debug --theorem {theorem} --pkg-inv {left}`"
+                        );
+                        let link = child_link(dir, &pkg_inv_rel(&left), hint);
+                        return child_row(vec!["pkg-inv".to_string(), left], &runs, link);
+                    }
+                    if step == SIDE_INV_ROWS {
                         let hint = format!(
                             "no index; run `domino easycrypt debug --theorem {theorem} --side-inv {left}`"
                         );
@@ -514,10 +540,20 @@ fn rows(level: &Level, dir: &Path, found: &[Found]) -> Vec<Row> {
                 })
                 .collect()
         }
-        Level::Proofstep { .. } | Level::SideInv { .. } => {
+        Level::Proofstep { .. } | Level::SideInv { .. } | Level::PkgInv { .. } => {
             found.iter().map(|f| run_row(dir, f)).collect()
         }
     }
+}
+
+/// The group keys that order the rows of one-sided runs after every proofstep: side trees,
+/// then package trees.
+const SIDE_INV_ROWS: usize = usize::MAX - 1;
+const PKG_INV_ROWS: usize = usize::MAX;
+
+/// `!debug!/PkgInv_<P>`: the directory of a package's package trees, under its theorem's.
+fn pkg_inv_rel(package: &str) -> String {
+    format!("!debug!/PkgInv_{package}")
 }
 
 /// `!debug!/SideInv_<C>`: the directory of a composition's one-sided runs, under its theorem's.
@@ -702,6 +738,7 @@ mod tests {
             right: format!("R{step}"),
             oracle: oracle.into(),
             composition: None,
+            package: None,
             claim: "!all-claims!".into(),
             strategy: strategy.into(),
             listing: "domino".into(),

@@ -42,6 +42,7 @@ use crate::{
     expressions::{Expression, ExpressionKind},
     identifier::{pkg_ident::PackageIdentifier, theorem_ident::TheoremIdentifier, Identifier},
     package::{Composition, Edge, OracleDef, PackageInstance},
+    parser::package::ForComp,
     statement::{Assignment, AssignmentRhs, InvokeOracle, Pattern, Statement},
     theorem::GameInstance,
 };
@@ -379,6 +380,20 @@ fn for_each_ident(block: &[Statement], f: &mut impl FnMut(&Identifier)) {
     }
 }
 
+/// The comparisons a `for` loop declares, as the source spells them (`<` or `<=`).
+fn loop_comparisons(var: &Identifier) -> (&'static str, &'static str) {
+    let spell = |c: ForComp| match c {
+        ForComp::Lt => "<",
+        ForComp::Lte => "<=",
+    };
+    match var {
+        Identifier::PackageIdentifier(PackageIdentifier::CodeLoopVar(v)) => {
+            (spell(v.start_comp), spell(v.end_comp))
+        }
+        _ => ("<=", "<="),
+    }
+}
+
 /// Names of the locals `block` assigns to (including loop variables).
 fn assigned_locals(block: &[Statement]) -> HashSet<String> {
     fn add(id: &Identifier, out: &mut HashSet<String>) {
@@ -647,9 +662,10 @@ impl View<'_> {
             }
 
             Statement::For(var, lower, upper, body, _) => {
-                let var = self.text_of(&Expression::from(frame.ident(var)));
+                let (start, end) = loop_comparisons(var);
+                let name = self.text_of(&Expression::from(frame.ident(var)));
                 let header = format!(
-                    "for {var}: {} <= {var} <= {} {{",
+                    "for {name}: {} {start} {name} {end} {} {{",
                     self.text_of(&self.expr(lower, frame)),
                     self.text_of(&self.expr(upper, frame)),
                 );
@@ -866,6 +882,13 @@ PKENC(m0: Bits(ptl), m1: Bits(ptl)) -> (Bits(kctl), Bits(dctl)) {
             assert!(text.contains(line), "missing `{line}` in:\n{text}");
         }
         assert!(!text.contains("invoke"), "{text}");
+    }
+
+    /// A loop is printed with the comparisons it declares: `<` stays `<`.
+    #[test]
+    fn a_loop_keeps_its_declared_comparisons() {
+        let text = view("testdata/debug/view-loop", "T", "g", "O", &[]);
+        assert!(text.contains("for i: 0 <= i < n {"), "{text}");
     }
 
     const KEM_DEM_BLENDED: &str = "example-projects/kem-dem/kem-dem-cca-blended-parallel";

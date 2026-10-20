@@ -158,6 +158,13 @@ pub enum DebugError {
     )]
     SideInstanceNameTaken { name: String, theorem: String },
 
+    #[error("theorem `{theorem}` uses no instance of package `{package}`")]
+    PackageNotInTheorem { package: String, theorem: String },
+
+    #[diagnostic(transparent)]
+    #[error(transparent)]
+    PackageInvariant(#[from] Box<crate::package_invariant::error::Error>),
+
     #[error("{}", claim_not_found(claim, available, *core))]
     ClaimNotFound {
         claim: String,

@@ -146,8 +146,38 @@ pub fn inline_oracle_ec(
     // frame has been inlined. The lowering is deterministic, so a first pass
     // collects the declarations and a second one lays the listing out with
     // them in place.
-    let (_, decls) = lower_oracle(game_inst, oracle_name, None)?;
-    let (inlined, _) = lower_oracle(game_inst, oracle_name, Some(&decls))?;
+    lower_twice(game_inst, oracle_name, ProcShape::Router)
+}
+
+/// The EasyCrypt listing of oracle `oracle_name` of the one package of `game_inst`, as the
+/// package module's procedure: no router, no abort flag, and every import call an open call
+/// ([`InlStmt::OpenCall`]) where the composition does not wire it. The package tree
+/// (symbolic-execution story 29) walks it. `game_inst` must already have been run through
+/// [`crate::transforms::theorem_transforms::EasyCryptTransform`] and export each oracle of
+/// the package under its own name.
+pub fn package_oracle_ec(
+    game_inst: &GameInstance,
+    oracle_name: &str,
+) -> Result<InlinedOracle, EcExportError> {
+    lower_twice(game_inst, oracle_name, ProcShape::Package)
+}
+
+/// What procedure the listing is.
+#[derive(Clone, Copy)]
+enum ProcShape {
+    /// The composition's router, with the entry procedure inlined in it.
+    Router,
+    /// The entry package's own procedure.
+    Package,
+}
+
+fn lower_twice(
+    game_inst: &GameInstance,
+    oracle_name: &str,
+    shape: ProcShape,
+) -> Result<InlinedOracle, EcExportError> {
+    let (_, decls) = lower_oracle(game_inst, oracle_name, None, shape)?;
+    let (inlined, _) = lower_oracle(game_inst, oracle_name, Some(&decls), shape)?;
     Ok(inlined)
 }
 
@@ -158,6 +188,7 @@ fn lower_oracle(
     game_inst: &GameInstance,
     oracle_name: &str,
     decls: Option<&[Decl]>,
+    shape: ProcShape,
 ) -> Result<(InlinedOracle, Vec<Decl>), EcExportError> {
     let comp = game_inst.game();
     let export = comp
@@ -188,10 +219,13 @@ fn lower_oracle(
     let ret_ec = translate_type(&export.sig().ty, span)?;
     let ret_inner_ec = translate_type(&domino_ret, span)?;
 
-    let (router_module, abort_flag) = router_module_and_flag(comp)?;
     let mut lw = Lowerer {
         comp,
-        inst_modules: instance_module_names(comp)?,
+        inst_modules: match shape {
+            ProcShape::Router => instance_module_names(comp)?,
+            // the package's own module: its variables are not qualified
+            ProcShape::Package => vec![String::new(); comp.pkgs.len()],
+        },
         next_frame_id: 0,
         text: String::new(),
         line: 0,
@@ -207,8 +241,10 @@ fn lower_oracle(
     // procedure's own `ec_result` are one variable here: the router assigns
     // the procedure's result to it unchanged, so merging them is exact.
     let ec_result_name = lw.local_name(&entry, EC_RESULT, true, &export.sig().ty)?;
-    lw.locals
-        .set_init(&ec_result_name, EcExpr::None_(ret_inner_ec));
+    if matches!(shape, ProcShape::Router) {
+        lw.locals
+            .set_init(&ec_result_name, EcExpr::None_(ret_inner_ec));
+    }
 
     let args_ec: Vec<(String, EcType)> = odef
         .sig
@@ -221,79 +257,105 @@ fn lower_oracle(
             ))
         })
         .collect::<Result<_, EcExportError>>()?;
-    let router_proc = Names::new().mangle(NameKind::Proc, export.name())?;
+    let (proc, comment) = match shape {
+        ProcShape::Router => (
+            export.name(),
+            format!(
+                "game instance: {}   (package instance: {}, package: {})",
+                game_inst.name(),
+                entry_inst.name,
+                entry_inst.pkg.name,
+            ),
+        ),
+        ProcShape::Package => (
+            odef.sig.name.as_str(),
+            format!("package: {}", entry_inst.pkg.name),
+        ),
+    };
+    let proc = Names::new().mangle(NameKind::Proc, proc)?;
 
-    lw.emit_plain_line(&render_stmt(
-        &EcStmt::Comment(format!(
-            "game instance: {}   (package instance: {}, package: {})",
-            game_inst.name(),
-            entry_inst.name,
-            entry_inst.pkg.name,
-        )),
-        0,
-    ));
-    lw.emit_plain_line(&render_proc_open(&router_proc, &args_ec, &ret_ec, 0));
+    lw.emit_plain_line(&render_stmt(&EcStmt::Comment(comment), 0));
+    lw.emit_plain_line(&render_proc_open(&proc, &args_ec, &ret_ec, 0));
     for (name, ty, init) in decls.unwrap_or_default() {
         lw.emit_plain_line(&render_local_decl(name, ty, init.as_ref(), 1));
     }
 
-    let abort_flag_path = EcExpr::Qualified {
-        path: vec![router_module, abort_flag],
-        mem: None,
-    };
-    lw.emit_plain_line(&render_if_open(
-        &EcExpr::Unop {
-            op: EcUnop::Not,
-            arg: Box::new(abort_flag_path.clone()),
-        },
-        1,
-    ));
-    lw.mark(lw.line, LineRole::RouterGuard, None);
-    let entry_call = EcStmt::Call {
-        lhs: Some(EcLvalue::Var(ec_result_name.clone())),
-        module: lw.inst_modules[entry_idx].clone(),
-        proc: Names::new().mangle(NameKind::Proc, &odef.sig.name)?,
-        args: args_ec
-            .iter()
-            .map(|(n, _)| EcExpr::Var(n.clone()))
-            .collect(),
-    };
-    lw.emit_plain_line(&render_stmt(
-        &EcStmt::Comment(render_stmt(&entry_call, 0)),
-        2,
-    ));
-    lw.mark(lw.line, LineRole::RouterGuard, None);
+    let ec_result_var = EcExpr::Var(ec_result_name.clone());
+    let body = match shape {
+        ProcShape::Router => {
+            let (router_module, abort_flag) = router_module_and_flag(comp)?;
+            let abort_flag_path = EcExpr::Qualified {
+                path: vec![router_module, abort_flag],
+                mem: None,
+            };
+            lw.emit_plain_line(&render_if_open(
+                &EcExpr::Unop {
+                    op: EcUnop::Not,
+                    arg: Box::new(abort_flag_path.clone()),
+                },
+                1,
+            ));
+            lw.mark(lw.line, LineRole::RouterGuard, None);
+            let entry_call = EcStmt::Call {
+                lhs: Some(EcLvalue::Var(ec_result_name.clone())),
+                module: lw.inst_modules[entry_idx].clone(),
+                proc: Names::new().mangle(NameKind::Proc, &odef.sig.name)?,
+                args: args_ec
+                    .iter()
+                    .map(|(n, _)| EcExpr::Var(n.clone()))
+                    .collect(),
+            };
+            lw.emit_plain_line(&render_stmt(
+                &EcStmt::Comment(render_stmt(&entry_call, 0)),
+                2,
+            ));
+            lw.mark(lw.line, LineRole::RouterGuard, None);
 
-    let mut body = lw.lower_frame_body(&entry, 0, 2)?;
+            let mut body = lw.lower_frame_body(&entry, 0, 2)?;
 
-    // The router's `ec_result = None` branch: the entry procedure fell off
-    // its end without returning, i.e. it aborted. Its flag assignment is
-    // that abort.
-    let ec_result_var = EcExpr::Var(ec_result_name);
-    lw.emit_plain_line(&render_if_open(
-        &EcExpr::Binop {
-            op: EcBinop::Eq,
-            lhs: Box::new(ec_result_var.clone()),
-            rhs: Box::new(EcExpr::None_(translate_type(&domino_ret, span)?)),
-        },
-        2,
-    ));
-    let tail = lw.line;
-    let abort_line = render_stmt(
-        &EcStmt::Assign {
-            lhs: EcLvalue::Var(render_expr(&abort_flag_path)),
-            rhs: EcExpr::Bool(true),
-        },
-        3,
-    );
-    let label = lw.emit_site(&abort_line, SiteKind::Abort, span, &entry, 0);
-    body.0.push(InlStmt::Abort { label });
-    lw.mark(label, LineRole::RouterAbort, None);
-    let tail_end = lw.alloc_line(&render_block_close(2));
-    lw.mark(tail, LineRole::RouterTail, Some(tail_end));
-    lw.emit_plain_line(&render_block_close(1));
-    lw.emit_plain_line(&render_return(&ec_result_var, 1));
-    lw.mark(lw.line, LineRole::Return, None);
+            // The router's `ec_result = None` branch: the entry procedure fell off
+            // its end without returning, i.e. it aborted. Its flag assignment is
+            // that abort.
+            lw.emit_plain_line(&render_if_open(
+                &EcExpr::Binop {
+                    op: EcBinop::Eq,
+                    lhs: Box::new(ec_result_var.clone()),
+                    rhs: Box::new(EcExpr::None_(translate_type(&domino_ret, span)?)),
+                },
+                2,
+            ));
+            let tail = lw.line;
+            let abort_line = render_stmt(
+                &EcStmt::Assign {
+                    lhs: EcLvalue::Var(render_expr(&abort_flag_path)),
+                    rhs: EcExpr::Bool(true),
+                },
+                3,
+            );
+            let label = lw.emit_site(&abort_line, SiteKind::Abort, span, &entry, 0);
+            body.0.push(InlStmt::Abort { label });
+            lw.mark(label, LineRole::RouterAbort, None);
+            let tail_end = lw.alloc_line(&render_block_close(2));
+            lw.mark(tail, LineRole::RouterTail, Some(tail_end));
+            lw.emit_plain_line(&render_block_close(1));
+            lw.emit_plain_line(&render_return(&ec_result_var, 1));
+            lw.mark(lw.line, LineRole::Return, None);
+            body
+        }
+        ProcShape::Package => {
+            let mut body = lw.lower_frame_body(&entry, 0, 1)?;
+            // The procedure falls off its end with `ec_result = None`: it aborted.
+            let label = lw.emit_site(
+                &render_return(&ec_result_var, 1),
+                SiteKind::Abort,
+                span,
+                &entry,
+                0,
+            );
+            body.0.push(InlStmt::Abort { label });
+            body
+        }
+    };
     lw.emit_plain_line(&render_block_close(0));
     lw.frames.sort_by_key(|f| f.open);
 
@@ -428,8 +490,13 @@ impl<'l> FrameNaming<'l> {
         Ok(self.locals.resolve(self.frame_id, raw, base, ty, declare))
     }
 
+    /// A state variable or parameter: qualified with the instance module, or plain in the
+    /// package's own module (an empty `inst_module`).
     fn module_var(&mut self, id: &Identifier) -> Result<EcExpr, EcExportError> {
         let (raw, _) = ident_raw_name_and_type(id);
+        if self.inst_module.is_empty() {
+            return Ok(EcExpr::Var(var_spelling(&mut self.names, &raw, false)?));
+        }
         Ok(EcExpr::Qualified {
             path: vec![
                 self.inst_module.to_string(),
@@ -962,10 +1029,17 @@ impl<'c> Lowerer<'c> {
         depth: usize,
         level: usize,
     ) -> Result<InlStmt, EcExportError> {
-        let edge = edge.ok_or_else(|| InlineError::UnresolvedEdge {
-            oracle: oracle_name.to_string(),
-            pkg_inst: caller.pkg_inst_name.clone(),
-        })?;
+        let Some(edge) = edge else {
+            return self.lower_open_call(
+                bind_pattern,
+                oracle_name,
+                args,
+                span,
+                caller,
+                depth,
+                level,
+            );
+        };
         let comp = self.comp;
         let target_idx = edge.to();
         let target_inst = &comp.pkgs[target_idx];
@@ -1091,6 +1165,70 @@ impl<'c> Lowerer<'c> {
             body,
             frame_lines: (label, close_label),
             arg_lines,
+        })
+    }
+}
+
+impl<'c> Lowerer<'c> {
+    /// An `invoke` with no edge: an import the composition does not wire, so an **open call**
+    /// (ADR 0017, the package tree of symbolic-execution story 29). It is not inlined: the
+    /// listing shows `ec_r<N> <@ O.<import>(args);` as the package module does, and the IR binds
+    /// an unknown value ([`InlStmt::OpenCall`]).
+    ///
+    /// Errors: [`InlineError::UnresolvedEdge`] when the caller does not import `oracle_name`.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_open_call(
+        &mut self,
+        bind_pattern: Option<&Pattern>,
+        oracle_name: &str,
+        args: &[Expression],
+        span: SourceSpan,
+        caller: &EcFrame<'c>,
+        depth: usize,
+        level: usize,
+    ) -> Result<InlStmt, EcExportError> {
+        let import = self.comp.pkgs[caller.pkg_idx]
+            .pkg
+            .imports
+            .iter()
+            .find(|(sig, _)| sig.name == oracle_name)
+            .ok_or_else(|| InlineError::UnresolvedEdge {
+                oracle: oracle_name.to_string(),
+                pkg_inst: caller.pkg_inst_name.clone(),
+            })?;
+        let bind = bind_pattern.map(|p| place_from_pattern(p, caller.scope()));
+        let lhs = match bind_pattern {
+            None => None,
+            Some(Pattern::Ident(id)) => {
+                let mut naming =
+                    FrameNaming::new(&mut self.locals, &self.inst_modules[caller.pkg_idx], caller);
+                Some(EcLvalue::Var(naming.target(id)?))
+            }
+            Some(_) => unreachable!("easycryptify binds every invoke to an `ec_r<N>` temporary"),
+        };
+        let args_ec = args
+            .iter()
+            .map(|a| self.translate_expr(caller, a, span))
+            .collect::<Result<Vec<_>, _>>()?;
+        // the package module's functor parameter, as `package.rs` calls an import
+        let call = EcStmt::Call {
+            lhs,
+            module: "O".to_string(),
+            proc: Names::new().mangle(NameKind::Proc, oracle_name)?,
+            args: args_ec,
+        };
+        let label = self.emit_site(
+            &render_stmt(&call, level),
+            SiteKind::Call,
+            span,
+            caller,
+            depth,
+        );
+        Ok(InlStmt::OpenCall {
+            label,
+            bind,
+            // easycryptify has wrapped the import's signature in `Maybe`
+            ty: import.0.ty.clone(),
         })
     }
 }

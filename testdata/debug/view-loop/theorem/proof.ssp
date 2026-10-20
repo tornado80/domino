@@ -1,0 +1,18 @@
+theorem T {
+    instance g = G {}
+    instance g2 = G {}
+
+    gamehops {
+        equivalence g g2 {
+            invariant: [./theorem/invariant.smt2]
+            O: {
+                randomness: none
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+        }
+    }
+}

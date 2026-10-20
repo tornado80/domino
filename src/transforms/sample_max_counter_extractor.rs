@@ -18,8 +18,9 @@
 //! already ruled out by an earlier stage and show up here as `unreachable!`:
 //!
 //! * a `sample_id` of `None` — `samplify` assigns one to every sample;
-//! * an unresolved oracle invocation — `resolveoracles` fails the whole
-//!   pipeline before we get here if it cannot resolve one;
+//! * an invocation of a name the package does not import — `resolveoracles`
+//!   fails the whole pipeline before we get here. An import with no edge is an
+//!   open call (ADR 0017) and samples nothing of this game;
 //! * an oracle named by an edge/export that the destination package does not
 //!   define — the parser validates every edge and export signature against
 //!   the destination package's oracle list;
@@ -36,7 +37,7 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::expressions::ExpressionKind;
-use crate::package::{Composition, Export, PackageInstance};
+use crate::package::{Composition, Edge, Export, PackageInstance};
 use crate::statement::{Assignment, AssignmentRhs, CodeBlock, Statement};
 
 use super::samplify::Position;
@@ -182,6 +183,15 @@ impl<'a> MaxOffsetExtractor<'a> {
         )
     }
 
+    /// The offsets of an invoke: those of the callee. An open call (no edge, ADR 0017) runs
+    /// no code of this game, so it samples nothing.
+    fn invoke_offsets(&self, edge: Option<&Edge>) -> Result<OffsetMap, UnboundedLoopError> {
+        match edge {
+            Some(edge) => self.oracle_offsets(edge.to(), &edge.sig().name),
+            None => Ok(OffsetMap::default()),
+        }
+    }
+
     fn codeblock_offsets(
         &self,
         code: &CodeBlock,
@@ -227,32 +237,12 @@ impl<'a> MaxOffsetExtractor<'a> {
             }
             Statement::Assignment(
                 Assignment {
-                    rhs:
-                        AssignmentRhs::Invoke {
-                            oracle_name, edge, ..
-                        },
+                    rhs: AssignmentRhs::Invoke { edge, .. },
                     ..
                 },
                 _,
-            ) => {
-                let edge = edge.as_ref().unwrap_or_else(|| {
-                    unreachable!(
-                        "resolveoracles should have resolved (or failed the pipeline on) the \
-                         invocation of `{oracle_name}` before this transform runs"
-                    )
-                });
-                self.oracle_offsets(edge.to(), &edge.sig().name)?
-            }
-            Statement::InvokeOracle(invoke) => {
-                let edge = invoke.edge.as_ref().unwrap_or_else(|| {
-                    unreachable!(
-                        "resolveoracles should have resolved (or failed the pipeline on) the \
-                         invocation of `{}` before this transform runs",
-                        invoke.oracle_name
-                    )
-                });
-                self.oracle_offsets(edge.to(), &edge.sig().name)?
-            }
+            ) => self.invoke_offsets(edge.as_ref())?,
+            Statement::InvokeOracle(invoke) => self.invoke_offsets(invoke.edge.as_ref())?,
             Statement::IfThenElse(ite) if ite.else_block.0.is_empty() => {
                 self.codeblock_offsets(&ite.then_block, loc)?
             }
@@ -446,9 +436,10 @@ mod test {
         let _ = super::Transformation(&comp, &positions).transform();
     }
 
+    /// An invoke with no edge is an open call (ADR 0017): it runs no code of the game, so the
+    /// callee's sampling does not count.
     #[test]
-    #[should_panic(expected = "resolveoracles should have resolved")]
-    fn panics_on_unresolved_oracle_invocation() {
+    fn an_invocation_with_no_edge_samples_nothing() {
         let pkg_code = r#"package Caller {
     import oracles {
         Inner(),
@@ -485,7 +476,14 @@ mod test {
         // `edge: None`.
         let (comp, sample_info) = samplify::Transformation(&comp).transform().unwrap();
 
-        let _ = super::Transformation(&comp, &sample_info.positions).transform();
+        let (_, offsets) = super::Transformation(&comp, &sample_info.positions)
+            .transform()
+            .unwrap();
+        let counted: Vec<&str> = offsets
+            .values()
+            .flat_map(|per_export| per_export.keys().map(|p| p.oracle_name.as_str()))
+            .collect();
+        assert_eq!(counted, ["Outer"]);
     }
 
     #[test]

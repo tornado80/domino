@@ -231,6 +231,10 @@ pub struct LockstepMeta {
     /// absent, and the viewer shows one column.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub one_sided: bool,
+    /// What a one-sided tree checks, for the page header: `side invariants of <C>` or
+    /// `package invariants of <P>`. Empty for a joint tree.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub subject: String,
     /// The fingerprint of the tree (ADR 0008): `all` and each part, by name. Written for a side
     /// tree; empty for a joint tree, whose fingerprint `prove` keeps with its saved tree.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -856,6 +860,7 @@ where
         left_syntactic: count_terminals(&left_inl),
         right_syntactic: count_terminals(&right_inl),
         one_sided: false,
+        subject: String::new(),
         fingerprint: BTreeMap::new(),
     };
 

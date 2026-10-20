@@ -956,7 +956,13 @@ fn easycrypt_debug<P: project::Project>(
         use sspverif::writers::easycrypt::progress::LoggingExportObserver;
 
         let theorem_names = proof_job_theorem(project, &d.theorem)?;
-        if let Some(composition) = &d.side_inv {
+        use sspverif::debug::side_run::StateOwner;
+        let owner = match (&d.side_inv, &d.pkg_inv) {
+            (Some(c), _) => Some(StateOwner::Composition(c.clone())),
+            (None, Some(p)) => Some(StateOwner::Package(p.clone())),
+            (None, None) => None,
+        };
+        if let Some(owner) = &owner {
             let backend =
                 sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.debug_timeout);
             let stop = stop_on_ctrl_c(
@@ -969,17 +975,16 @@ fn easycrypt_debug<P: project::Project>(
                 stage_line(
                     d.progress,
                     &format!(
-                        "easycrypt debug: one-sided execution of {composition} → {}",
-                        theorem_out
-                            .join("!debug!")
-                            .join(format!("SideInv_{composition}"))
+                        "easycrypt debug: one-sided execution of {} → {}",
+                        owner.name(),
+                        sspverif::debug::side_run::one_sided_debug_dir(&theorem_out, owner, "")
                             .display()
                     ),
                 );
-                let entries = sspverif::easycrypt::debug::debug_side_invariants(
+                let entries = sspverif::easycrypt::debug::debug_one_sided(
                     project,
                     name,
-                    composition,
+                    owner,
                     d.oracle.as_deref(),
                     &theorem_out,
                     &backend,

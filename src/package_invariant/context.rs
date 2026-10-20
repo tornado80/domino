@@ -41,6 +41,8 @@ use crate::{
     },
 };
 
+use crate::debug::claims::ClaimQuery;
+
 use super::{
     error::{Error, Result},
     open_calls, open_game,
@@ -168,6 +170,13 @@ impl<'a> PackageInvariantContext<'a> {
             .collect()
     }
 
+    /// The package's one-game theorem with its imports **open**: not closed and not wired, so
+    /// each import call is an open call (ADR 0017). The package tree (symbolic-execution story
+    /// 29) walks it; its names are those of the theorem of this context.
+    pub(crate) fn open_theorem(&self) -> Theorem<'a> {
+        open_game::open_game_theorem(self.pkg)
+    }
+
     /// The names of the oracles the package exposes, in declaration order.
     pub(crate) fn oracle_names(&self) -> Vec<String> {
         self.pkg
@@ -245,7 +254,10 @@ impl PackageInvariantContext<'_> {
 
     /// Declares the constants the oracle claims talk about: the old game state, the game
     /// constants, the oracle arguments, the oracle return values and the randomness.
-    pub(crate) fn emit_constant_declarations(&self) -> Vec<SmtExpr> {
+    ///
+    /// `walked`: the oracle whose return value the package tree builds (story 29). Its return
+    /// value is declared, but not defined by the oracle function.
+    pub(crate) fn emit_constant_declarations(&self, walked: Option<&str>) -> Vec<SmtExpr> {
         let gctx = self.game_inst_ctx();
         let game_inst = self.game_inst();
         let game_inst_name = &self.game_inst_name;
@@ -301,7 +313,7 @@ impl PackageInvariantContext<'_> {
             }
         }
 
-        out.extend(game_defs::build_returns(game_inst, None));
+        out.extend(game_defs::build_returns(game_inst, walked));
 
         // the counters are left arbitrary: the claim holds for every old randomness counter
         for (decl_ctr, constrain_ctr, _zero_ctr) in
@@ -339,34 +351,96 @@ impl PackageInvariantContext<'_> {
         claim: &ResolvedClaim,
         oracle_name: &str,
     ) -> SmtExpr {
-        let gctx = self.game_inst_ctx();
-        let game_inst_name = &self.game_inst_name;
+        let mut precondition = self.invariants_on_old_state(oracle_name);
+        precondition.push(self.no_abort(oracle_name));
+        let precondition = SmtAnd(precondition);
+        SmtAssert(SmtNot(SmtImplies(
+            precondition,
+            self.claim_on_new_state(claim, oracle_name),
+        )))
+        .into()
+    }
 
+    /// The base frame of the package tree of `oracle_name` (symbolic-execution story 29): the
+    /// declarations the package check uses, with the return value of `oracle_name` left to the
+    /// walk, and then each named invariant on the old state.
+    pub(crate) fn emit_tree_base_frame(&self, oracle_name: &str) -> Vec<SmtExpr> {
+        let mut out = vec![SmtExpr::Comment(
+            " domino easycrypt debug --pkg-inv — base frame ".to_string(),
+        )];
+        out.extend(self.emit_base_declarations());
+        out.extend(self.emit_call_records());
+        out.extend(self.emit_theorem_paramfuncs());
+        out.extend(self.emit_game_definitions());
+        out.extend(self.emit_constant_declarations(Some(oracle_name)));
+        out.extend(self.emit_invariant());
+        out.push(SmtExpr::Comment(
+            " the package invariants on the old state ".to_string(),
+        ));
+        out.extend(
+            self.invariants_on_old_state(oracle_name)
+                .into_iter()
+                .map(|inv| SmtAssert(inv).into()),
+        );
+        out
+    }
+
+    /// The checks of a terminal of the package tree of `oracle_name`: each named invariant on
+    /// the new state, under `no-abort` (an aborting terminal has nothing to check).
+    pub(crate) fn tree_claim_queries(&self, oracle_name: &str) -> Vec<ClaimQuery> {
+        self.invariant_claims()
+            .iter()
+            .map(|claim| ClaimQuery {
+                name: claim.name().to_string(),
+                dependencies: vec![(
+                    BuiltInFact::NoAbort.name().to_string(),
+                    SmtAssert(self.no_abort(oracle_name)).into(),
+                )],
+                negated: SmtAssert(SmtNot(self.claim_on_new_state(claim, oracle_name))).into(),
+                parts: Vec::new(),
+            })
+            .collect()
+    }
+
+    fn invariants_on_old_state(&self, oracle_name: &str) -> Vec<SmtExpr> {
+        let (old_state, _) = self.state_names(oracle_name);
+        self.invariant_claims()
+            .iter()
+            .map(|invariant| (invariant.name(), old_state.as_str()).into())
+            .collect()
+    }
+
+    fn claim_on_new_state(&self, claim: &ResolvedClaim, oracle_name: &str) -> SmtExpr {
+        let (_, new_state) = self.state_names(oracle_name);
+        (claim.name(), new_state).into()
+    }
+
+    /// `(not <the return value of oracle_name is an abort>)`
+    fn no_abort(&self, oracle_name: &str) -> SmtExpr {
+        let gctx = self.game_inst_ctx();
         let octx = gctx
             .exported_oracle_ctx_by_name(oracle_name)
             .expect("the oracle is exported by the game");
-
-        let state = octx.oracle_arg_game_state_pattern();
-        let old_state = state.old_global_const_name(game_inst_name);
-        let new_state = state.new_global_const_name(game_inst_name, oracle_name.to_string());
-
         let is_abort = ReturnIsAbortConst {
-            game_inst_name,
+            game_inst_name: &self.game_inst_name,
             pkg_inst_name: &self.pkg_inst_name,
             oracle_name,
             ty: octx.oracle_return_type(),
         };
+        SmtNot(is_abort.name()).into()
+    }
 
-        let mut precondition: Vec<SmtExpr> = self
-            .invariant_claims()
-            .iter()
-            .map(|invariant| (invariant.name(), old_state.as_str()).into())
-            .collect();
-        precondition.push(SmtNot(is_abort.name()).into());
-        let postcondition: SmtExpr = (claim.name(), new_state).into();
-        let precondition = SmtAnd(precondition);
-
-        SmtAssert(SmtNot(SmtImplies(precondition, postcondition))).into()
+    /// The names of the old state and of the new state after `oracle_name`.
+    fn state_names(&self, oracle_name: &str) -> (String, String) {
+        let gctx = self.game_inst_ctx();
+        let octx = gctx
+            .exported_oracle_ctx_by_name(oracle_name)
+            .expect("the oracle is exported by the game");
+        let state = octx.oracle_arg_game_state_pattern();
+        (
+            state.old_global_const_name(&self.game_inst_name),
+            state.new_global_const_name(&self.game_inst_name, oracle_name.to_string()),
+        )
     }
 }
 
@@ -454,7 +528,7 @@ mod tests {
         smt.extend(ctx.emit_call_records());
         smt.extend(ctx.emit_theorem_paramfuncs());
         smt.extend(ctx.emit_game_definitions());
-        smt.extend(ctx.emit_constant_declarations());
+        smt.extend(ctx.emit_constant_declarations(None));
         let field = format!("(Ctr-Step-calls-1 {calls})");
         let mut solver = Cvc5LibBackend::new(true, None).new_smtsolver().unwrap();
         for expr in smt {

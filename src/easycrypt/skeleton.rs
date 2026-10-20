@@ -159,6 +159,11 @@ fn ir_block(block: &InlBlock, in_callee: bool, oracle: &InlinedOracle, out: &mut
     for stmt in &block.0 {
         match stmt {
             InlStmt::Assign { .. } => {}
+            // EasyCrypt keeps an import call as a `call` it cannot classify either
+            InlStmt::OpenCall { label, .. } => out.push(Node {
+                label: Some(*label),
+                ..Node::new(NodeKind::Unknown, line(*label))
+            }),
             InlStmt::Sample { label, .. } => out.push(Node {
                 label: Some(*label),
                 ..Node::new(NodeKind::Sampling, line(*label))

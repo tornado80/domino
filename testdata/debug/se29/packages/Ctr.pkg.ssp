@@ -1,0 +1,38 @@
+package Ctr {
+    invariant: [ ./packages/Ctr.smt2 ]
+    params {
+        n: Integer,
+    }
+
+    state {
+        ctr: Integer,
+    }
+
+    import oracles {
+        Get(x: Integer) -> Integer,
+        Put(x: Integer),
+    }
+
+    /* keeps `ctr >= 0` only because a `None` from `Get` aborts */
+    oracle Step(x: Integer) -> Integer {
+        ctr <- -1;
+        y <- invoke Get(x);
+        ctr <- 1;
+        return y;
+    }
+
+    /* breaks `ctr >= 0` on the path where the import returns and `x < 0` */
+    oracle Bad(x: Integer) -> Integer {
+        y <- invoke Get(x);
+        if (x < 0) {
+            ctr <- x;
+        }
+        return y;
+    }
+
+    /* a bare call */
+    oracle Ping() {
+        invoke Put(ctr);
+        return;
+    }
+}

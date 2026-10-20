@@ -1,0 +1,15 @@
+package Src {
+    state {
+        calls: Integer,
+    }
+
+    oracle Get(x: Integer) -> Integer {
+        calls <- (calls + 1);
+        return x;
+    }
+
+    oracle Put(x: Integer) {
+        calls <- x;
+        return;
+    }
+}

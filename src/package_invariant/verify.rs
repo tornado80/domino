@@ -190,7 +190,7 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
             // the invariants read the game constants, so the constants come first (as in an
             // equivalence)
             let mut smt = base_smt.to_owned();
-            smt.extend(self.ctx.emit_constant_declarations());
+            smt.extend(self.ctx.emit_constant_declarations(None));
             smt.extend(self.ctx.emit_invariant());
             match claim_group {
                 ClaimGroup::InvariantStart => {

@@ -1,0 +1,13 @@
+package L {
+    state {
+        k: Integer,
+    }
+
+    /* `n` is an argument: the loop is not unrolled, and the view prints it */
+    oracle O(n: Integer) -> Integer {
+        for i: 0 <= i < n {
+            k <- (k + i);
+        }
+        return k;
+    }
+}

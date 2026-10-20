@@ -232,7 +232,7 @@ const reasonText = (v, pair) => {
 
 // ---- header ---------------------------------------------------------------
 document.getElementById("h-title").textContent =
-  T.one_sided ? `${T.theorem} · side invariants of ${T.left_game}`
+  T.one_sided ? `${T.theorem} · ${T.subject}`
   : `${T.theorem} · proofstep ${T.proofstep} · ${T.left_game} == ${T.right_game}`;
 document.getElementById("h-sub").textContent =
   `oracle ${T.oracle} · ${T.all_claims && T.listing === "domino" ? (T.core ? "all claims of the core claim set" : "all claims") : "claims " + T.claims.filter(c => !c.admitted).map(c => c.name).join(", ")} · lockstep execution on the ${T.listing} listing`;

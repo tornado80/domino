@@ -274,6 +274,11 @@ pub(crate) struct EcDebug {
     /// composition's parameters free, written under `!debug!/SideInv_<C>/<oracle>/`.
     #[clap(long, conflicts_with = "proofstep")]
     pub(crate) side_inv: Option<String>,
+    /// One-sided execution of this package (symbolic-execution story 29): the package tree of
+    /// each of its oracles (or of `--oracle`), with its parameters free and each import call an
+    /// open call, written under `!debug!/PkgInv_<P>/<oracle>/`.
+    #[clap(long, conflicts_with_all = ["proofstep", "side_inv"])]
+    pub(crate) pkg_inv: Option<String>,
     /// Per-query solver timeout in milliseconds (cvc5 `tlimit-per`), as for
     /// `domino debug --timeout`. A timeout counts as `unknown`, never as verified.
     #[clap(long)]

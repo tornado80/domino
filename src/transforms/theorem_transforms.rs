@@ -291,9 +291,9 @@ fn transform_game_inst_common(
     let (comp, _) = resolveoracles::Transformation(&comp)
         .transform()
         .unwrap_or_else(|ResolutionError(failed_oracle_stmts)| {
-            // The game parser rejects imported-but-unwired oracles
-            // (`missing_edge`) and invocations of unknown oracles
+            // The game parser rejects invocations of unknown oracles
             // (`no_such_oracle`), so resolution cannot fail on a parsed game.
+            // An unwired import is an open call (ADR 0017), not a failure.
             unreachable!("resolveoracles should have caught this: {failed_oracle_stmts:?}")
         });
     let (comp, _) = returnify::TransformNg

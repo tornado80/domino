@@ -1,0 +1,9 @@
+composition G {
+    instance l = L {}
+
+    compose {
+        adversary: {
+            O: l,
+        },
+    }
+}

@@ -218,6 +218,7 @@ fn label_of(stmt: &InlStmt) -> Label {
         | InlStmt::Unwrap { label, .. }
         | InlStmt::Branch { label, .. }
         | InlStmt::Call { label, .. }
+        | InlStmt::OpenCall { label, .. }
         | InlStmt::Return { label, .. }
         | InlStmt::Abort { label } => *label,
     }

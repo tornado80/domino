@@ -21,6 +21,7 @@ use thiserror::Error;
 use crate::debug::driver::DebugError;
 use crate::debug::lockstep_run::{run_lockstep_command, LockstepDebugOptions};
 use crate::debug::progress::DebugObserver;
+use crate::debug::side_run::StateOwner;
 use crate::debug::sweep::{is_interrupted, SweepEntry, Target};
 use crate::easycrypt::check::{equivalence_setup, CheckError};
 use crate::project::Project;
@@ -182,16 +183,16 @@ where
     Ok(entries)
 }
 
-/// `domino easycrypt debug --side-inv <C>` (symbolic-execution story 25): one-sided execution of
-/// each oracle of composition `composition` (only `oracle`, if given), under
-/// `<theorem_out>/!debug!/SideInv_<C>/<O>/`. Then the theorem's debug index
-/// (`<theorem_out>/index.html`) is rewritten to list the runs. A `Ctrl-C` (`stop`) ends the
-/// sweep after the oracle in flight.
+/// `domino easycrypt debug --side-inv <C>` (symbolic-execution story 25) and `--pkg-inv <P>`
+/// (story 29): one-sided execution of each oracle of `owner` (only `oracle`, if given), under
+/// `<theorem_out>/!debug!/SideInv_<C>/<O>/` or `PkgInv_<P>/<O>/`. Then the theorem's debug
+/// index (`<theorem_out>/index.html`) is rewritten to list the runs. A `Ctrl-C` (`stop`) ends
+/// the sweep after the oracle in flight.
 #[allow(clippy::too_many_arguments)]
-pub fn debug_side_invariants<P, B>(
+pub fn debug_one_sided<P, B>(
     project: &P,
     theorem: &str,
-    composition: &str,
+    owner: &StateOwner,
     oracle: Option<&str>,
     theorem_out: &Path,
     backend: &B,
@@ -204,13 +205,15 @@ where
     P: Project,
     B: SmtSolverBackend,
 {
-    use crate::debug::side_run::{run_side_command, side_debug_dir, side_entry, side_oracles};
-    let oracles = side_oracles(project, composition)?;
+    use crate::debug::side_run::{
+        one_sided_debug_dir, one_sided_entry, one_sided_oracles, run_one_sided_command,
+    };
+    let oracles = one_sided_oracles(project, owner)?;
     if let Some(wanted) = oracle {
         if !oracles.iter().any(|o| o == wanted) {
             return Err(DebugError::OracleNotExported {
                 oracle: wanted.to_string(),
-                game_inst: composition.to_string(),
+                game_inst: owner.name().to_string(),
             }
             .into());
         }
@@ -221,19 +224,19 @@ where
         .filter(|o| oracle.is_none_or(|w| w == o.as_str()))
     {
         let mut observer = make_observer();
-        let run = run_side_command(
+        let run = run_one_sided_command(
             project,
             theorem,
-            composition,
+            owner,
             o,
             &LockstepDebugOptions::easycrypt(timeout_ms),
             backend,
-            side_debug_dir(theorem_out, composition, o),
+            one_sided_debug_dir(theorem_out, owner, o),
             observer.as_mut(),
             stop,
         )?;
         drop(observer);
-        let entry = side_entry(&run);
+        let entry = one_sided_entry(&run, owner);
         on_finished(&entry);
         let interrupted = is_interrupted(&entry);
         entries.push(entry);

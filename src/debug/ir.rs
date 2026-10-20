@@ -171,6 +171,16 @@ pub enum InlStmt {
         /// oracle.
         arg_lines: Option<(Label, Label)>,
     },
+    /// An **open call** (ADR 0017): an import call of a package walked on its own (the package
+    /// tree, symbolic-execution story 29), which nothing inlines. Its outcome is unknown: `bind`
+    /// gets a fresh value of `ty` (the import's `Maybe` result), and the call-result guard after
+    /// it decides `None` and `Some`. Only the EasyCrypt lowering produces it, for an `invoke`
+    /// with no edge; it is not a decision point.
+    OpenCall {
+        label: Label,
+        bind: Option<Place>,
+        ty: Type,
+    },
     /// Return from the current frame. At the entry frame this is a global
     /// terminal; inside a [`InlStmt::Call`] frame it resumes the caller.
     Return {
@@ -453,7 +463,9 @@ pub fn count_terminals(inlined: &InlinedOracle) -> u64 {
             return k_fall;
         };
         match head {
-            InlStmt::Assign { .. } | InlStmt::Sample { .. } => f(rest, k_fall, k_ret),
+            InlStmt::Assign { .. } | InlStmt::Sample { .. } | InlStmt::OpenCall { .. } => {
+                f(rest, k_fall, k_ret)
+            }
             InlStmt::Unwrap { .. } => 1u64.saturating_add(f(rest, k_fall, k_ret)),
             InlStmt::Branch { then, els, .. } => {
                 let k = f(rest, k_fall, k_ret);
@@ -1282,6 +1294,7 @@ mod tests {
                 InlStmt::Assign { label, .. }
                 | InlStmt::Sample { label, .. }
                 | InlStmt::Unwrap { label, .. }
+                | InlStmt::OpenCall { label, .. }
                 | InlStmt::Return { label, .. }
                 | InlStmt::Abort { label } => out.push(*label),
                 InlStmt::Branch {

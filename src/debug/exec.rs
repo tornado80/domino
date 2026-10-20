@@ -454,6 +454,7 @@ fn collect_referenced_pkg_consts(block: &InlBlock, out: &mut BTreeSet<(String, S
                 collect_referenced_pkg_consts(body, out);
             }
             InlStmt::Sample { .. }
+            | InlStmt::OpenCall { .. }
             | InlStmt::Return { value: None, .. }
             | InlStmt::Abort { .. } => {}
         }
@@ -982,6 +983,17 @@ impl<'a> Executor<'a> {
                             else_lines: *else_lines,
                         },
                     });
+                }
+
+                // ADR 0017: nothing is known about the outcome, so the result is a fresh
+                // constant with no definition.
+                InlStmt::OpenCall { label, bind, ty } => {
+                    st.visited.push(*label);
+                    // easycryptify binds every import call to an `ec_r<N>` local
+                    if let Some(place @ Place::Local { .. }) = bind {
+                        let id = self.fresh(st, place_basename(place), ty);
+                        st.rebind(place, id);
+                    }
                 }
 
                 InlStmt::Call {

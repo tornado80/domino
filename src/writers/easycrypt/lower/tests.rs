@@ -96,6 +96,7 @@ fn label_of(stmt: &InlStmt) -> Label {
         | InlStmt::Unwrap { label, .. }
         | InlStmt::Branch { label, .. }
         | InlStmt::Call { label, .. }
+        | InlStmt::OpenCall { label, .. }
         | InlStmt::Return { label, .. }
         | InlStmt::Abort { label } => *label,
     }
@@ -266,7 +267,7 @@ fn places(inl: &InlinedOracle) -> Vec<Place> {
             InlStmt::Assign { target, .. }
             | InlStmt::Sample { target, .. }
             | InlStmt::Unwrap { target, .. } => out.push(target.clone()),
-            InlStmt::Call { bind, .. } => out.extend(bind.clone()),
+            InlStmt::Call { bind, .. } | InlStmt::OpenCall { bind, .. } => out.extend(bind.clone()),
             _ => {}
         }
     }

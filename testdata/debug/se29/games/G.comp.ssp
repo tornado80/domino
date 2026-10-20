@@ -1,0 +1,24 @@
+composition G {
+    const n: Integer;
+
+    instance ctr = Ctr {
+        params {
+            n: n,
+        }
+    }
+
+    instance src = Src {
+    }
+
+    compose {
+        adversary: {
+            Step: ctr,
+            Bad: ctr,
+            Ping: ctr,
+        },
+        ctr: {
+            Get: src,
+            Put: src,
+        },
+    }
+}

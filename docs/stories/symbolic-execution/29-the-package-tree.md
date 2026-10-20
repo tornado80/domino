@@ -75,15 +75,15 @@ Vocabulary (`CONTEXT.md`, already updated): **One-sided execution**, **package t
 
 ## 4. Acceptance criteria
 
-- [ ] A test fixture: package `Ctr` with a counter invariant and one import; an oracle that only keeps
+- [x] A test fixture: package `Ctr` with a counter invariant and one import; an oracle that only keeps
       the invariant when the import returns `Some`: the tree has a split at the call-result guard,
       the `None` arm aborts with nothing to check, and the `Some` arm verifies.
-- [ ] A test: an oracle that breaks the invariant on one path: that terminal's check fails, the others
+- [x] A test: an oracle that breaks the invariant on one path: that terminal's check fails, the others
       verify, and the claim name comes from the owner function.
-- [ ] A test: the tree's decision skeleton equals the decision skeleton of `<V>.<O>` in the exported
+- [x] A test: the tree's decision skeleton equals the decision skeleton of `<V>.<O>` in the exported
       `Pkg_<V>.ec` (alignment).
-- [ ] A test: the theorem index lists `pkg-inv` rows and links their index.
-- [ ] `cargo build/test/clippy --workspace`, with and without `--features cvc5-lib`: clean.
+- [x] A test: the theorem index lists `pkg-inv` rows and links their index.
+- [x] `cargo build/test/clippy --workspace`, with and without `--features cvc5-lib`: clean.
 
 ## 5. How to verify
 

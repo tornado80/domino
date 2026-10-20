@@ -193,6 +193,11 @@ fn local_symbols(inl: &InlinedOracle) -> BTreeMap<String, SmtExpr> {
                 InlStmt::Assign { target, .. }
                 | InlStmt::Sample { target, .. }
                 | InlStmt::Unwrap { target, .. } => place(target, out),
+                InlStmt::OpenCall { bind, .. } => {
+                    if let Some(target) = bind {
+                        place(target, out);
+                    }
+                }
                 InlStmt::Branch { then, els, .. } => {
                     block(then, out);
                     block(els, out);

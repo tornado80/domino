@@ -32,7 +32,7 @@ use crate::debug::claims::ClaimQuery;
 use crate::debug::driver::{sites_view, ClaimInfo, DebugError, StopReason};
 use crate::debug::fold::FoldedListing;
 use crate::debug::index;
-use crate::debug::ir::count_terminals;
+use crate::debug::ir::{count_terminals, InlinedOracle};
 use crate::debug::layout::Layout;
 use crate::debug::lockstep::{LockstepOutcome, LockstepSide};
 use crate::debug::lockstep_fingerprint::Fingerprint;
@@ -54,6 +54,7 @@ use crate::theorem::{
     BuiltInFact, ClaimKind, GameInstance, InvariantSide, RandomnessType, ResolvedClaim,
     ResolvedDependency, Theorem,
 };
+use crate::transforms::samplify::SampleInfo;
 use crate::transforms::theorem_transforms::{
     DebugTransform, EasyCryptTransform, EquivalenceTransform,
 };
@@ -329,7 +330,6 @@ where
     B: SmtSolverBackend,
 {
     let started = Instant::now();
-    let layout = Layout::Plain;
     let theorem = project
         .get_theorem(theorem_name)
         .ok_or_else(|| DebugError::TheoremNotFound {
@@ -371,9 +371,101 @@ where
         .iter()
         .map(|c| ClaimQuery::of(&eqctx, c, oracle))
         .collect();
-    let fingerprint = fingerprint_of(&theorem, &eqctx, composition, &inlined);
-    let base = side_base_frame(&eqctx, oracle);
+    execute_one_sided(
+        OneSidedInputs {
+            theorem: theorem.name.clone(),
+            owner: StateOwner::Composition(composition.to_string()),
+            oracle,
+            inlined: &inlined,
+            game_inst: inst,
+            sample_info,
+            claims: claims
+                .iter()
+                .map(|c| ClaimInfo {
+                    name: c.name().to_string(),
+                    dependencies: c.dependency_names(),
+                    admitted: false,
+                })
+                .collect(),
+            queries,
+            fingerprint: fingerprint_of(&theorem, &eqctx, composition, &inlined),
+            base: side_base_frame(&eqctx, oracle),
+        },
+        opts,
+        backend,
+        out,
+        observer,
+        stop,
+        started,
+    )
+}
 
+/// The owner of the state that a one-sided run walks and checks: a composition (its side
+/// tree, story 25) or a package (its package tree, story 29).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StateOwner {
+    Composition(String),
+    Package(String),
+}
+
+impl StateOwner {
+    pub fn name(&self) -> &str {
+        match self {
+            StateOwner::Composition(name) | StateOwner::Package(name) => name,
+        }
+    }
+
+    /// What the tree checks, as the page header says it.
+    fn subject(&self) -> String {
+        match self {
+            StateOwner::Composition(c) => format!("side invariants of {c}"),
+            StateOwner::Package(p) => format!("package invariants of {p}"),
+        }
+    }
+}
+
+/// What the owner of the state prepares for one one-sided run of `oracle`.
+pub(crate) struct OneSidedInputs<'r> {
+    pub theorem: String,
+    pub owner: StateOwner,
+    pub oracle: &'r str,
+    /// The EasyCrypt listing of the oracle.
+    pub inlined: &'r InlinedOracle,
+    /// The instance the executor names the state and the constants by ([`DebugTransform`]).
+    pub game_inst: &'r GameInstance,
+    pub sample_info: &'r SampleInfo,
+    pub claims: Vec<ClaimInfo>,
+    /// One for each of `claims`, in the same order.
+    pub queries: Vec<ClaimQuery>,
+    pub fingerprint: Fingerprint,
+    /// Asserted once at solver level 0.
+    pub base: Vec<SmtExpr>,
+}
+
+/// Run one-sided execution with `inputs`, and write its artifacts and its result record into
+/// `out`.
+pub(crate) fn execute_one_sided<B: SmtSolverBackend>(
+    inputs: OneSidedInputs<'_>,
+    opts: &LockstepDebugOptions,
+    backend: &B,
+    out: PathBuf,
+    observer: &mut dyn DebugObserver,
+    stop: Option<&AtomicBool>,
+    started: Instant,
+) -> Result<LockstepRun, DebugError> {
+    let layout = Layout::Plain;
+    let OneSidedInputs {
+        theorem,
+        owner,
+        oracle,
+        inlined,
+        game_inst,
+        sample_info,
+        claims,
+        queries,
+        fingerprint,
+        base,
+    } = inputs;
     observer.on_event(&DebugEvent::Started {
         oracle,
         claim: "!all-claims!",
@@ -384,22 +476,15 @@ where
         schema: LOCKSTEP_TRACE_SCHEMA,
         mode: ONE_SIDED,
         listing: "easycrypt",
-        theorem: theorem.name.clone(),
+        theorem,
         proofstep: 0,
-        left_game: composition.to_string(),
+        left_game: owner.name().to_string(),
         right_game: String::new(),
         oracle: oracle.to_string(),
         claim: "!all-claims!".to_string(),
         core: false,
         all_claims: true,
-        claims: claims
-            .iter()
-            .map(|c| ClaimInfo {
-                name: c.name().to_string(),
-                dependencies: c.dependency_names(),
-                admitted: false,
-            })
-            .collect(),
+        claims,
         out_dir: out.display().to_string(),
         layout,
         smt_dir: layout.rel("smt"),
@@ -414,7 +499,7 @@ where
         },
         left_listing: inlined.listing.text.clone(),
         right_listing: String::new(),
-        left_folded: FoldedListing::of(&inlined),
+        left_folded: FoldedListing::of(inlined),
         right_folded: FoldedListing::default(),
         left_sites: sites_view(&inlined.listing),
         right_sites: BTreeMap::new(),
@@ -422,9 +507,10 @@ where
         right_lines: Vec::new(),
         left_frames: inlined.listing.frames.clone(),
         right_frames: Vec::new(),
-        left_syntactic: count_terminals(&inlined),
+        left_syntactic: count_terminals(inlined),
         right_syntactic: 0,
         one_sided: true,
+        subject: owner.subject(),
         fingerprint: std::iter::once(("all".to_string(), fingerprint.hex.clone()))
             .chain(fingerprint.parts.clone())
             .collect(),
@@ -453,8 +539,8 @@ where
     let outcome = run_side(
         &mut solver,
         LockstepSide {
-            inlined: &inlined,
-            game_inst: inst,
+            inlined,
+            game_inst,
             sample_info,
         },
         &queries,
@@ -481,14 +567,78 @@ where
         summary,
         elapsed: started.elapsed(),
     };
-    let entry = side_entry(&run);
-    index::write_result(&entry)?;
+    index::write_result(&one_sided_entry(&run, &owner))?;
     Ok(run)
 }
 
-/// The sweep entry of a side run: the target names the composition as its left side, with no
-/// right side, and the entry is marked with the composition.
-pub fn side_entry(run: &LockstepRun) -> SweepEntry {
+/// The oracles of `owner` that one-sided execution walks: the exports of a composition, the
+/// oracles of a package.
+pub fn one_sided_oracles<P: Project>(
+    project: &P,
+    owner: &StateOwner,
+) -> Result<Vec<String>, DebugError> {
+    match owner {
+        StateOwner::Composition(c) => side_oracles(project, c),
+        StateOwner::Package(p) => crate::debug::pkg_run::pkg_oracles(project, p),
+    }
+}
+
+/// The directory of the run of `oracle` of `owner`: [`side_debug_dir`] or
+/// [`crate::debug::pkg_run::pkg_debug_dir`].
+pub fn one_sided_debug_dir(theorem_out: &Path, owner: &StateOwner, oracle: &str) -> PathBuf {
+    match owner {
+        StateOwner::Composition(c) => side_debug_dir(theorem_out, c, oracle),
+        StateOwner::Package(p) => crate::debug::pkg_run::pkg_debug_dir(theorem_out, p, oracle),
+    }
+}
+
+/// One-sided execution of `oracle` of `owner`: a side tree ([`run_side_command`]) or a package
+/// tree ([`crate::debug::pkg_run::run_pkg_command`]).
+#[allow(clippy::too_many_arguments)]
+pub fn run_one_sided_command<P, B>(
+    project: &P,
+    theorem_name: &str,
+    owner: &StateOwner,
+    oracle: &str,
+    opts: &LockstepDebugOptions,
+    backend: &B,
+    out: PathBuf,
+    observer: &mut dyn DebugObserver,
+    stop: Option<&AtomicBool>,
+) -> Result<LockstepRun, DebugError>
+where
+    P: Project,
+    B: SmtSolverBackend,
+{
+    match owner {
+        StateOwner::Composition(c) => run_side_command(
+            project,
+            theorem_name,
+            c,
+            oracle,
+            opts,
+            backend,
+            out,
+            observer,
+            stop,
+        ),
+        StateOwner::Package(p) => crate::debug::pkg_run::run_pkg_command(
+            project,
+            theorem_name,
+            p,
+            oracle,
+            opts,
+            backend,
+            out,
+            observer,
+            stop,
+        ),
+    }
+}
+
+/// The sweep entry of a one-sided run: the target names the owner as its left side, with no
+/// right side, and the entry is marked with the owner.
+pub fn one_sided_entry(run: &LockstepRun, owner: &StateOwner) -> SweepEntry {
     let target = Target {
         theorem: run.meta.theorem.clone(),
         proofstep: 0,
@@ -496,8 +646,13 @@ pub fn side_entry(run: &LockstepRun) -> SweepEntry {
         right: String::new(),
         oracle: run.meta.oracle.clone(),
     };
+    let (composition, package) = match owner {
+        StateOwner::Composition(c) => (Some(c.clone()), None),
+        StateOwner::Package(p) => (None, Some(p.clone())),
+    };
     SweepEntry {
-        composition: Some(run.meta.left_game.clone()),
+        composition,
+        package,
         unit: "terminals",
         ..SweepEntry::from_lockstep(target, run)
     }

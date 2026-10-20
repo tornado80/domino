@@ -125,11 +125,22 @@ impl super::Transformation for Transformation<'_> {
                 .chain(&inst.pkg.state)
                 .map(|(name, _, _)| name.clone())
                 .collect();
+            let imports: Vec<OracleSig> = inst
+                .pkg
+                .imports
+                .iter()
+                .map(|(sig, _)| sig.clone())
+                .collect();
             for oracle in &mut inst.pkg.oracles {
                 let mut reserved = package_names.clone();
                 reserved.extend(oracle.sig.args.iter().map(|(name, _)| name.clone()));
-                oracle.code =
-                    lower_oracle(&oracle.code, &oracle.sig.ty, oracle.file_pos, &reserved)?;
+                oracle.code = lower_oracle(
+                    &oracle.code,
+                    &oracle.sig.ty,
+                    oracle.file_pos,
+                    &reserved,
+                    &imports,
+                )?;
                 oracle.sig = wrap_sig(&oracle.sig);
             }
             for (sig, _) in &mut inst.pkg.imports {
@@ -233,9 +244,11 @@ fn lower_oracle(
     ret_ty: &Type,
     oracle_span: SourceSpan,
     reserved: &BTreeSet<String>,
+    imports: &[OracleSig],
 ) -> Result<CodeBlock, EasyCryptifyError> {
     let body = guard_unwraps(&code.0, reserved)?;
     let mut lowerer = Lowerer {
+        imports,
         ec_result: Identifier::Generated(EC_RESULT.to_string(), Type::maybe(ret_ty.clone())),
         ec_done: Identifier::Generated(EC_DONE.to_string(), Type::boolean()),
         invoke_ctr: 0,
@@ -313,14 +326,16 @@ fn if_then_else(
     })
 }
 
-struct Lowerer {
+struct Lowerer<'a> {
+    /// The package's imports: an invoke with no edge (an open call, ADR 0017) has its type there.
+    imports: &'a [OracleSig],
     ec_result: Identifier,
     ec_done: Identifier,
     /// Per-oracle `ec_r<N>` counter; the first temporary is `ec_r1`.
     invoke_ctr: usize,
 }
 
-impl Lowerer {
+impl Lowerer<'_> {
     fn set_done(&self, value: bool, span: SourceSpan) -> Statement {
         assign(
             Pattern::Ident(self.ec_done.clone()),
@@ -410,10 +425,7 @@ impl Lowerer {
                     edge,
                     file_pos,
                 }) => {
-                    let callee_ty = edge
-                        .as_ref()
-                        .map(|e| e.sig().ty.clone())
-                        .expect("resolveoracles attaches an Edge to every invoke");
+                    let callee_ty = self.callee_type(oracle_name, edge);
                     let (temp, call) =
                         self.bind_invoke(oracle_name, args, edge, &callee_ty, *file_pos);
                     out.push(call);
@@ -496,6 +508,19 @@ impl Lowerer {
 
     /// `ec_rN <- invoke O(args)`, `ec_rN : Maybe(T)` for the callee's
     /// original return type `T`. Returns the temporary and the statement.
+    /// The result type of an invoke: the callee's, or the import's for an open call.
+    fn callee_type(&self, oracle_name: &str, edge: &Option<Edge>) -> Type {
+        match edge {
+            Some(edge) => edge.sig().ty.clone(),
+            None => self
+                .imports
+                .iter()
+                .find(|sig| sig.name == oracle_name)
+                .map(|sig| sig.ty.clone())
+                .expect("resolveoracles leaves only imports without an edge"),
+        }
+    }
+
     fn bind_invoke(
         &mut self,
         oracle_name: &str,
@@ -1406,7 +1431,14 @@ mod tests {
     }
 
     fn lower_int_oracle(body: Vec<Statement>) -> CodeBlock {
-        lower_oracle(&CodeBlock(body), &Type::integer(), span(), &BTreeSet::new()).unwrap()
+        lower_oracle(
+            &CodeBlock(body),
+            &Type::integer(),
+            span(),
+            &BTreeSet::new(),
+            &[],
+        )
+        .unwrap()
     }
 
     // --- a compact renderer, for readable expectations ---------------------
@@ -1901,6 +1933,7 @@ return ec_result
             &Type::empty(),
             span(),
             &BTreeSet::new(),
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -1938,6 +1971,7 @@ return ec_result
             &Type::integer(),
             span(),
             &BTreeSet::new(),
+            &[],
         )
         .unwrap_err();
         assert_eq!(
@@ -2683,6 +2717,7 @@ return ec_result
             &Type::integer(),
             span(),
             &BTreeSet::new(),
+            &[],
         )
         .unwrap_err();
         assert_eq!(
@@ -2708,6 +2743,7 @@ return ec_result
             &Type::integer(),
             span(),
             &BTreeSet::from(["m_v".to_string()]),
+            &[],
         )
         .unwrap_err();
         assert!(matches!(err, EasyCryptifyError::TemporaryNameCollision(_)));
