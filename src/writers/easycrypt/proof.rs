@@ -343,6 +343,15 @@ pub(super) fn side_inv_app(
             fields.push((format!("{theory}.{field}"), state));
         }
     }
+    // story 78: the parameters of each instance whose package has a params record
+    for &idx in &comp.ordered_pkgs_idx() {
+        let inst = &comp.pkgs[idx];
+        let read = |var: &str| module_var(layout, idx, var.to_string(), mem);
+        if let Some(params) = invariant::pkg_params_lit(inst, read)? {
+            let field = invariant::params_field_name(&prefix, inst.name());
+            fields.push((format!("{theory}.{field}"), params));
+        }
+    }
     fields.push((
         format!("{theory}.{}", invariant::abort_field_name(&prefix)),
         EcExpr::Qualified {
@@ -875,14 +884,18 @@ fn theory_requires(
 }
 
 /// The package files (`Pkg_<V>`, without `.ec`) that declare the `<Pkg>_pkgstate` of every
-/// package with state in `comps`, each one time, in order (story 69).
+/// package with state in `comps`, or its `<Pkg>_pkgparams` (story 78), each one time, in order
+/// (story 69).
 pub(super) fn state_files<'c>(
     owners: &invariant::StateOwners,
     comps: impl IntoIterator<Item = &'c Composition>,
 ) -> Vec<String> {
     let mut files: Vec<String> = Vec::new();
     for comp in comps {
-        for inst in comp.pkgs.iter().filter(|i| !i.pkg.state.is_empty()) {
+        let declares = |i: &&crate::package::PackageInstance| {
+            !i.pkg.state.is_empty() || invariant::has_pkg_params(&i.pkg)
+        };
+        for inst in comp.pkgs.iter().filter(declares) {
             let file = owners.file_of(&inst.pkg.name);
             if !files.contains(&file) {
                 files.push(file);

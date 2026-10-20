@@ -7,11 +7,13 @@ clone include Pkg_PRF.
 
 lemma PkgInv_PRF_NewKey : hoare[PRF.d_NewKey :
       PkgInv_main_of_PRF
+        {| PRF_param_prf = func_prf;
+           PRF_param_b = PRF.b |}
         {| PRF_d_LTK = PRF.d_LTK;
            PRF_d_H = PRF.d_H;
            PRF_d_PRF = PRF.d_PRF;
            PRF_kid_ = PRF.kid_ |}
-      ==> res <> None => PkgInv_main_of_PRF {| PRF_d_LTK = PRF.d_LTK; PRF_d_H = PRF.d_H; PRF_d_PRF = PRF.d_PRF; PRF_kid_ = PRF.kid_ |}].
+      ==> res <> None => PkgInv_main_of_PRF {| PRF_param_prf = func_prf; PRF_param_b = PRF.b |} {| PRF_d_LTK = PRF.d_LTK; PRF_d_H = PRF.d_H; PRF_d_PRF = PRF.d_PRF; PRF_kid_ = PRF.kid_ |}].
 proof.
 (* d_NewKey *)
 + proc; inline. admit.

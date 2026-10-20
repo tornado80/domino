@@ -1,0 +1,12 @@
+package Q {
+    invariant: [ ./packages/Q.smt2 ]
+
+    state {
+        n: Integer,
+    }
+
+    oracle Bump() -> Integer {
+        n <- (n + 1);
+        return n;
+    }
+}

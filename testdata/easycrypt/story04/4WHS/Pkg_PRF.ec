@@ -75,7 +75,12 @@ type PRF_pkgstate = {
   PRF_kid_ : int
 }.
 
-op PkgInv_main_of_PRF (s : PRF_pkgstate) : bool =
+type PRF_pkgparams = {
+  PRF_param_prf : bits_n -> (int * int * bits_n * bits_n * bool) -> bits_n;
+  PRF_param_b : bool
+}.
+
+op PkgInv_main_of_PRF (p : PRF_pkgparams) (s : PRF_pkgstate) : bool =
      (forall (kid : int),
            (s.`PRF_kid_ < kid \/ kid <= 0) = (s.`PRF_d_H.[kid] = None)
         /\ (s.`PRF_d_H.[kid] = None) = (s.`PRF_d_LTK.[kid] = None))

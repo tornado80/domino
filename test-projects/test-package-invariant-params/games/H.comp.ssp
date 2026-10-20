@@ -1,0 +1,31 @@
+composition H {
+    const b: Bool;
+    const k: Integer;
+    const f: fn Integer -> Integer;
+
+    instance P = P {
+        params {
+            b: b,
+            k: k,
+            f: f,
+        }
+    }
+
+    instance q = Q {
+    }
+
+    instance r = R {
+        params {
+            c: b,
+        }
+    }
+
+    compose {
+        adversary: {
+            Inc: P,
+            Get: P,
+            Bump: q,
+            Read: r,
+        },
+    }
+}

@@ -5021,3 +5021,73 @@ mod side_invariants_from_package_lemmas {
         );
     }
 }
+
+/// Story 78 (ADR 0019): package invariants that read package parameters.
+mod package_parameters_in_package_invariants {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::easycrypt::session::json_binary_configured;
+    use crate::project::{DirectoryFiles, DirectoryProject};
+    use crate::writers::easycrypt::export::{export_theorem, write_files, ExportedTheorem};
+
+    /// `P` (parameters `b`, `k`, `f`) has the variants `P_v1` (`f1`, in `G`) and `P_v2` (`f2`,
+    /// in `H`); `Q` has no parameter; `R` has a parameter and no state.
+    const PROJECT: &str = "test-projects/test-package-invariant-params";
+
+    fn project() -> DirectoryProject<'static> {
+        let dir = PathBuf::from(PROJECT);
+        let files = Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
+        DirectoryProject::load(dir, files).unwrap()
+    }
+
+    fn exported(project: &DirectoryProject<'static>) -> ExportedTheorem {
+        export_theorem(project.get_theorem("Proof").unwrap(), project).unwrap()
+    }
+
+    fn run_with(options: TacticsOptions) -> Option<TheoremTactics> {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return None;
+        }
+        let project = project();
+        let exported = exported(&project);
+        let out = tempfile::tempdir().unwrap();
+        write_files(out.path(), &exported.files).unwrap();
+        Some(
+            run_tactics(
+                project.get_theorem("Proof").unwrap(),
+                &project,
+                &exported,
+                out.path(),
+                &crate::util::smtsolver::process::IncrementalCvc5Backend,
+                &options,
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn the_package_invariant_job_of_p_proves_every_variant() {
+        let Some(result) = run_with(TacticsOptions {
+            pkg_inv: Some("P".into()),
+            ..TacticsOptions::default()
+        }) else {
+            return;
+        };
+        assert_eq!(result.package_invariants.len(), 2, "{}", result.render());
+        assert_eq!(result.admit_count(), 0, "{}", result.render());
+    }
+
+    #[test]
+    fn the_side_invariant_job_of_a_composition_with_p_has_no_admit() {
+        let Some(result) = run_with(TacticsOptions {
+            side_inv: Some("G".into()),
+            ..TacticsOptions::default()
+        }) else {
+            return;
+        };
+        assert_eq!(result.side_invariants.len(), 1, "{}", result.render());
+        assert_eq!(result.admit_count(), 0, "{}", result.render());
+    }
+}

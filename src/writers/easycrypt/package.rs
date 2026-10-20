@@ -22,7 +22,7 @@ use miette::SourceSpan;
 
 use crate::expressions::{Expression, ExpressionKind};
 use crate::identifier::{pkg_ident::PackageIdentifier, Identifier};
-use crate::package::{Composition, Edge, OracleDef, OracleSig, Package};
+use crate::package::{Composition, Edge, OracleDef, OracleSig, Package, PackageInstance};
 use crate::statement::{
     Assignment, AssignmentRhs, CodeBlock, IfThenElse, InvokeOracle, Pattern, Statement,
 };
@@ -184,6 +184,9 @@ pub struct PackageVariant {
     /// The Domino package the variant specialises.
     pub package: String,
     pub file: EcFile,
+    /// The first instance of the variant in the theorem: its function parameters are the
+    /// variant's (story 78).
+    pub instance: PackageInstance,
 }
 
 /// Computes every package variant reachable from `theorem`, one [`EcFile`]
@@ -221,6 +224,7 @@ pub fn compute_package_variants_observed(
             name,
             package: key.pkg_name.clone(),
             file,
+            instance: comp.pkgs[*idx].clone(),
         });
     }
     scope.finish();

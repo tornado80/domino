@@ -30,7 +30,9 @@ use crate::project::Project;
 
 use super::super::ast::{EcBinop, EcExpr, EcItem, EcType};
 use super::super::game::{below, InstanceWiring};
-use super::super::invariant::{package_invariant_ops, pkg_state_field_name};
+use super::super::invariant::{
+    package_invariant_ops, pkg_param_fields, pkg_params_lit, pkg_state_field_name, template_app,
+};
 use super::super::names::{NameKind, Names};
 use super::super::package::{module_vars, ordered_imports};
 use super::super::render::render_expr;
@@ -66,6 +68,8 @@ impl<'a> BottomUp<'a> {
         let mut vars = Vec::new();
         let mut imports = Vec::new();
         for inst in &comp.pkgs {
+            // fails here, not in `invariants`, on a parameter that does not translate
+            pkg_param_fields(inst)?;
             templates.push(
                 package_invariant_ops(project, inst)
                     .map_err(EcExportError::from)?
@@ -140,22 +144,22 @@ impl<'a> BottomUp<'a> {
         format!("{}.{p}", self.theory)
     }
 
-    /// The package invariants of instance `idx`, with each state field read by `read`.
+    /// The package invariants of instance `idx`, with each state field and each value
+    /// parameter read by `read`.
     fn invariants(&self, idx: usize, read: impl Fn(&str) -> EcExpr) -> EcExpr {
-        let state = EcExpr::RecordLit {
+        let state = (!self.fields[idx].is_empty()).then(|| EcExpr::RecordLit {
             fields: self.fields[idx]
                 .iter()
                 .map(|(field, var)| (field.clone(), read(var)))
                 .collect(),
-        };
+        });
+        let params = pkg_params_lit(&self.comp.pkgs[idx], &read)
+            .expect("the parameters of an instance translated when the composition did");
         EcExpr::right_chain(
             EcBinop::And,
             self.templates[idx]
                 .iter()
-                .map(|t| EcExpr::App {
-                    head: t.clone(),
-                    args: vec![state.clone()],
-                })
+                .map(|t| template_app(t, params.clone(), state.clone()))
                 .collect(),
         )
         .expect("an instance with invariants has a template")

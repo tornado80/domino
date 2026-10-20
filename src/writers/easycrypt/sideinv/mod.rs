@@ -22,8 +22,9 @@
 //! side-invariant job proves it.
 //!
 //! `SideInv_<C>.ec` requires each of them, and the glue of each equivalence with a side of `C`
-//! requires `SideInv_<C>.ec` and joins the lemmas with `conseq`. The lemmas say nothing about
-//! the composition's parameters, so they hold for every value.
+//! requires `SideInv_<C>.ec` and joins the lemmas with `conseq`. The side record reads the
+//! package parameters from the module variables like the state (story 78, ADR 0019), so the
+//! lemmas still hold for every value.
 
 mod bottom_up;
 

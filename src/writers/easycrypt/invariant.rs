@@ -41,7 +41,11 @@ use super::package;
 use super::types::{func_op_name, translate_type};
 use super::EcExportError;
 
+mod params;
 mod side;
+pub(crate) use params::{
+    has_pkg_params, params_field_name, pkg_param_fields, pkg_params_lit, template_app,
+};
 pub use side::SideInvariantError;
 pub(crate) use side::{
     composition_items, game_invariant_names, game_side_inv_op_name, has_side_invariants,
@@ -1746,7 +1750,38 @@ impl<'a> TCtx<'a> {
             return self.translate_proj(n, i, rest, locals, whole);
         }
 
+        if let Some((head_expr, ty @ EcType::Fun(..))) = self.lookup.fields.get(&head).cloned() {
+            return self.translate_field_app(head_expr, ty, rest, locals, whole);
+        }
         self.translate_call(&head, rest, locals, whole)
+    }
+
+    /// `(<f> a …)` where `<f>` is a field of function type (story 78: `(pkg.f a …)` reads
+    /// ``p.`<P>_param_f``): the field applied to the arguments. More arguments than the type
+    /// takes are [`InvariantError::Unsupported`].
+    fn translate_field_app(
+        &mut self,
+        head: EcExpr,
+        mut ty: EcType,
+        rest: &[Sexp],
+        locals: &Locals,
+        whole: &Sexp,
+    ) -> Result<(EcExpr, EcType), InvariantError> {
+        let mut args = Vec::with_capacity(rest.len());
+        for item in rest {
+            let EcType::Fun(_, ret) = ty else {
+                return Err(self.unsupported(format!("too many arguments in `{whole}`")));
+            };
+            args.push(self.translate(item, locals)?.0);
+            ty = *ret;
+        }
+        Ok((
+            EcExpr::App {
+                head: super::render::render_expr(&head),
+                args,
+            },
+            ty,
+        ))
     }
 
     fn translate_quant(

@@ -35,7 +35,7 @@ use super::ast::{
     DeclareModule, EcBinop, EcExpr, EcFile, EcItem, EcLemma, EcModule, EcProc, EcSection, EcStmt,
     EcType, ProcSig, ProofLine, Require, SectionAssumption,
 };
-use super::invariant::{package_invariant_ops, StateOwners};
+use super::invariant::{package_invariant_ops, pkg_params_lit, template_app, StateOwners};
 use super::names::{NameKind, Names};
 use super::package::PackageVariant;
 use super::EcExportError;
@@ -123,8 +123,10 @@ struct VariantCtx<'a> {
     imports: Vec<ProcSig>,
     /// The template operators, file order.
     templates: Vec<String>,
-    /// The state record literal of the variant's state at the one memory.
-    state: EcExpr,
+    /// The state record literal of the variant's state at the one memory; `None` without state.
+    state: Option<EcExpr>,
+    /// The params record literal of the variant (story 78); `None` without a params record.
+    params: Option<EcExpr>,
     requires: Vec<Require>,
 }
 
@@ -185,7 +187,11 @@ impl<'a> VariantCtx<'a> {
             oracles,
             imports,
             templates,
-            state: EcExpr::RecordLit { fields },
+            state: (!fields.is_empty()).then_some(EcExpr::RecordLit { fields }),
+            params: pkg_params_lit(&variant.instance, |var| EcExpr::Qualified {
+                path: vec![variant.name.clone(), var.to_string()],
+                mem: None,
+            })?,
             requires,
         })
     }
@@ -203,16 +209,13 @@ impl<'a> VariantCtx<'a> {
         }
     }
 
-    /// `PkgInv_<N1>_of_<P> {| … |} /\ …`.
+    /// `PkgInv_<N1>_of_<P> {| params |} {| state |} /\ …`.
     fn invariants(&self) -> EcExpr {
         EcExpr::right_chain(
             EcBinop::And,
             self.templates
                 .iter()
-                .map(|t| EcExpr::App {
-                    head: t.clone(),
-                    args: vec![self.state.clone()],
-                })
+                .map(|t| template_app(t, self.params.clone(), self.state.clone()))
                 .collect(),
         )
         .expect("a variant with package lemmas has an invariant")

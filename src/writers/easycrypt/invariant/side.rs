@@ -5,9 +5,10 @@
 //!
 //! Each named invariant gets its own operator (story 73), with the names of ADR 0018:
 //!
-//! - A package invariant `<N>` becomes the template `PkgInv_<N>_of_<Pkg> (s : <Pkg>_pkgstate)`,
-//!   in the file of the package, next to the record type of the package's state
-//!   ([`package_items`]).
+//! - A package invariant `<N>` becomes the template
+//!   `PkgInv_<N>_of_<Pkg> (p : <Pkg>_pkgparams) (s : <Pkg>_pkgstate)`, in the file of the
+//!   package, next to the record types of the package's parameters and state
+//!   ([`package_items`]). Without parameters there is no `p` (story 78, [`super::params`]).
 //! - A composition with a side invariant gets, in its own file, its side record `<C>_side`, a
 //!   wrapper `PkgInv_<N>_of_<Inst>_in_<C>` for each package invariant of each instance, a
 //!   `GameInv_<N>_of_<C>` for each game invariant, and `side_inv_<C>`, which joins them under
@@ -27,6 +28,10 @@ use crate::writers::easycrypt::ast::{EcBinop, EcExpr, EcItem, EcType, EcUnop};
 use crate::writers::easycrypt::names::Names;
 use crate::writers::easycrypt::EcExportError;
 
+use super::params::{
+    has_pkg_params, params_field_name, pkg_param_fields, pkg_params_type_name, template_app,
+    PkgParamField,
+};
 use super::{
     abort_field_name, field_expr, fold_and, game_inv_op_name, instance_field_name, pkg_inv_op_name,
     pkg_inv_template_name, pkg_state_fields, pkg_state_type_name, side_inv_op_name,
@@ -295,10 +300,12 @@ pub(crate) struct SideCtx<'a, P: Project> {
 }
 
 /// What the file of a package declares for the side invariants (story 69, ADR 0014): the
-/// record type of the package's state, `<Pkg>_pkgstate`, when it has state, then the template
-/// of each of its package invariants, `PkgInv_<N>_of_<Pkg>`. `inst` is any instance of the
-/// package. A package invariant of a package without state is
-/// [`SideInvariantError::StatelessPackageInvariant`].
+/// record type of the package's state, `<Pkg>_pkgstate`, when it has state, the record type of
+/// its parameters, `<Pkg>_pkgparams`, when it has one (story 78, [`pkg_param_fields`]), then
+/// the template of each of its package invariants, `PkgInv_<N>_of_<Pkg>`. `inst` is any
+/// instance of the package. A package invariant of a package with neither state nor such
+/// parameters is [`SideInvariantError::StatelessPackageInvariant`]; a params field with the
+/// name of a state field is [`InvariantError::FieldCollision`].
 pub(crate) fn package_items<P: Project>(
     inst: &PackageInstance,
     ctx: &SideCtx<'_, P>,
@@ -313,6 +320,22 @@ pub(crate) fn package_items<P: Project>(
                 .iter()
                 .map(|(_, f, ty)| (f.clone(), ty.clone()))
                 .collect(),
+        });
+    }
+    let params = pkg_param_fields(inst)?;
+    if let Some(dup) = params
+        .iter()
+        .find(|p| fields.iter().any(|(_, f, _)| *f == p.field))
+    {
+        return Err(InvariantError::FieldCollision {
+            field: dup.field.clone(),
+        }
+        .into());
+    }
+    if !params.is_empty() {
+        items.push(EcItem::Record {
+            name: pkg_params_type_name(package),
+            fields: params.into_iter().map(|p| (p.field, p.ty)).collect(),
         });
     }
     if !inst.pkg.invariants.is_empty() {
@@ -332,7 +355,9 @@ pub(crate) fn has_side_invariants(comp: &Composition) -> bool {
 /// EasyCrypt (`Comp_<name>.ec`). In order:
 ///
 /// - the side record `<name>_side`: a field `<name>_pkg_<Inst> : <Pkg>_pkgstate` for each
-///   instance with state, in `ordered_pkgs_idx()` order, then `<name>_abort_flag : bool`;
+///   instance with state, then a field `<name>_params_<Inst> : <Pkg>_pkgparams` for each
+///   instance whose package has a params record (story 78), both in `ordered_pkgs_idx()`
+///   order, then `<name>_abort_flag : bool`;
 /// - `PkgInv_<N>_of_<Inst>_in_<name> (s : <name>_side)` for each package invariant `<N>` of
 ///   each instance: one Domino claim each;
 /// - `GameInv_<N>_of_<name> (g : <name>_side)` for each game invariant `<N>`;
@@ -355,32 +380,7 @@ pub(crate) fn composition_items<P: Project>(
     let prefix = format!("{name}_");
     let record_ty = EcType::Named(side_record_type_name(name));
     let mut ops = OpRegistry::default();
-    let mut fields = Vec::new();
-    let mut seen_fields: Vec<String> = Vec::new();
-    for &idx in &comp.ordered_pkgs_idx() {
-        let inst = &comp.pkgs[idx];
-        let state = pkg_state_fields(inst, &mut Names::new())?;
-        if state.is_empty() {
-            continue;
-        }
-        seen_fields.extend(state.into_iter().map(|(_, f, _)| f));
-        fields.push((
-            instance_field_name(&prefix, inst.name()),
-            EcType::Named(pkg_state_type_name(&inst.pkg.name)),
-        ));
-    }
-    let abort = abort_field_name(&prefix);
-    fields.push((abort.clone(), EcType::Bool));
-    for (field, _) in &fields {
-        if seen_fields.contains(field) {
-            return Err(InvariantError::FieldCollision {
-                field: field.clone(),
-            }
-            .into());
-        }
-        seen_fields.push(field.clone());
-    }
-
+    let (fields, abort) = side_record_fields(comp, &prefix)?;
     let mut items = vec![EcItem::Record {
         name: side_record_type_name(name),
         fields,
@@ -401,10 +401,7 @@ pub(crate) fn composition_items<P: Project>(
                     inst.name()
                 ),
             )?;
-            let body = EcExpr::App {
-                head: template,
-                args: vec![field_expr("s", &instance_field_name(&prefix, inst.name()))],
-            };
+            let body = wrapper_body(inst, &prefix, &template);
             items.push(op_def(&op, "s", record_ty.clone(), body));
             pkg_conjuncts.push(apply(&op, "s"));
         }
@@ -454,6 +451,62 @@ pub(crate) fn composition_items<P: Project>(
     Ok(Some(items))
 }
 
+/// The fields of the side record `<C>_side` (see [`composition_items`]) and the name of its
+/// abort field. A field with the name of a field of a package's state or params record is
+/// [`InvariantError::FieldCollision`].
+fn side_record_fields(
+    comp: &Composition,
+    prefix: &str,
+) -> Result<(Vec<(String, EcType)>, String), EcExportError> {
+    let mut fields = Vec::new();
+    let mut seen_fields: Vec<String> = Vec::new();
+    for &idx in &comp.ordered_pkgs_idx() {
+        let inst = &comp.pkgs[idx];
+        let state = pkg_state_fields(inst, &mut Names::new())?;
+        if state.is_empty() {
+            continue;
+        }
+        seen_fields.extend(state.into_iter().map(|(_, f, _)| f));
+        fields.push((
+            instance_field_name(prefix, inst.name()),
+            EcType::Named(pkg_state_type_name(&inst.pkg.name)),
+        ));
+    }
+    for &idx in &comp.ordered_pkgs_idx() {
+        let inst = &comp.pkgs[idx];
+        if has_pkg_params(&inst.pkg) {
+            seen_fields.extend(pkg_param_fields(inst)?.into_iter().map(|p| p.field));
+            fields.push((
+                params_field_name(prefix, inst.name()),
+                EcType::Named(pkg_params_type_name(&inst.pkg.name)),
+            ));
+        }
+    }
+    let abort = abort_field_name(prefix);
+    fields.push((abort.clone(), EcType::Bool));
+    for (field, _) in &fields {
+        if seen_fields.contains(field) {
+            return Err(InvariantError::FieldCollision {
+                field: field.clone(),
+            }
+            .into());
+        }
+        seen_fields.push(field.clone());
+    }
+    Ok((fields, abort))
+}
+
+/// The body of a wrapper: the template applied to the instance's fields of the side record,
+/// ``s.`<C>_params_<I>`` when its package has parameters and ``s.`<C>_pkg_<I>`` when it has
+/// state.
+fn wrapper_body(inst: &PackageInstance, prefix: &str, template: &str) -> EcExpr {
+    let params =
+        has_pkg_params(&inst.pkg).then(|| field_expr("s", &params_field_name(prefix, inst.name())));
+    let state = (!inst.pkg.state.is_empty())
+        .then(|| field_expr("s", &instance_field_name(prefix, inst.name())));
+    template_app(template, params, state)
+}
+
 /// `pkg_inv_<C>`: the package invariants of the instances of composition `<C>`, under
 /// `!abort`, when it also has game invariants (story 77).
 pub(crate) fn pkg_side_inv_op_name(comp: &str) -> String {
@@ -483,8 +536,9 @@ fn apply(op: &str, arg: &str) -> EcExpr {
     }
 }
 
-/// `op PkgInv_<N>_of_<Pkg> (s : <Pkg>_pkgstate) : bool = <body>.`, one for each named
-/// package invariant `<N>` of the package. Two names that become one operator are
+/// `op PkgInv_<N>_of_<Pkg> (p : <Pkg>_pkgparams) (s : <Pkg>_pkgstate) : bool = <body>.`, one
+/// for each named package invariant `<N>` of the package; without a params record no `p`,
+/// without state no `s` ([`template_args`]). Two names that become one operator are
 /// [`SideInvariantError::OpNameCollision`].
 fn package_templates<P: Project>(
     inst: &PackageInstance,
@@ -494,7 +548,8 @@ fn package_templates<P: Project>(
     let owner = format!("package `{package}`");
     let invariants = named_invariants(ctx.project, &inst.pkg.invariants, &owner, Kind::Package)?;
     let fields = pkg_state_fields(inst, &mut Names::new())?;
-    if fields.is_empty() {
+    let params = pkg_param_fields(inst)?;
+    if fields.is_empty() && params.is_empty() {
         return Err(
             InvariantError::from(SideInvariantError::StatelessPackageInvariant {
                 file: invariants[0].file.clone(),
@@ -503,9 +558,14 @@ fn package_templates<P: Project>(
             .into(),
         );
     }
+    let args = template_args(package, &params, &fields);
     let mut lookup = StateLookup::default();
     for (raw, field, ty) in fields {
         let projection = field_expr("s", &field);
+        lookup.fields.insert(format!("pkg.{raw}"), (projection, ty));
+    }
+    for PkgParamField { raw, field, ty, .. } in params {
+        let projection = field_expr("p", &field);
         lookup.fields.insert(format!("pkg.{raw}"), (projection, ty));
     }
     let mut ops = OpRegistry::default();
@@ -517,14 +577,32 @@ fn package_templates<P: Project>(
             &format!("the package invariant `{}` of `{package}`", invariant.name),
         )?;
         let body = translate(ctx, &invariant.file, &lookup, &invariant.body)?;
-        items.push(op_def(
-            &op,
-            "s",
-            EcType::Named(pkg_state_type_name(package)),
+        items.push(EcItem::OpDef {
+            name: op,
+            args: args.clone(),
+            ret: Some(EcType::Bool),
             body,
-        ));
+        });
     }
     Ok(items)
+}
+
+/// The arguments of a template: `(p : <Pkg>_pkgparams)` when `params` is not empty, then
+/// `(s : <Pkg>_pkgstate)` when `state` is not empty.
+fn template_args(
+    package: &str,
+    params: &[PkgParamField],
+    state: &[(String, String, EcType)],
+) -> Vec<(String, EcType)> {
+    let p = (!params.is_empty()).then(|| {
+        (
+            "p".to_string(),
+            EcType::Named(pkg_params_type_name(package)),
+        )
+    });
+    let s =
+        (!state.is_empty()).then(|| ("s".to_string(), EcType::Named(pkg_state_type_name(package))));
+    p.into_iter().chain(s).collect()
 }
 
 /// `game.<Inst>.<field>` -> ``g.`<prefix>pkg_<Inst>.`<Pkg>_<field>``, for every state field.
@@ -588,6 +666,7 @@ mod tests {
 
     const STORY58: &str = "testdata/easycrypt/story58";
     const STORY69: &str = "testdata/easycrypt/story69";
+    const PARAMS: &str = "test-projects/test-package-invariant-params";
 
     fn export(dir: &str, theorem: &str) -> Result<ExportedTheorem, EcExportError> {
         let files = DirectoryFiles::load(Path::new(dir)).unwrap();
@@ -955,5 +1034,128 @@ mod tests {
         );
         let none = theorem.find_game_instance("Hybrid1").unwrap().game();
         assert!(side_invariant_ops(project, none).unwrap().is_empty());
+    }
+
+    /// Story 78, ADR 0019: package `P` has the parameters `b`, `k` (a value) and `f`; its owner
+    /// declares `P_pkgparams` and the template takes it. `Q` has no parameter and keeps one
+    /// argument.
+    #[test]
+    fn a_package_with_parameters_gets_a_params_record_and_its_template_takes_it() {
+        let exported = export(PARAMS, "Proof").unwrap();
+        let owner = file(&exported, "Pkg_P_v1.ec");
+        assert_eq!(
+            item_text(owner, "type P_pkgparams"),
+            concat!(
+                "type P_pkgparams = {\n",
+                "  P_param_b : bool;\n",
+                "  P_param_k : int;\n",
+                "  P_param_f : int -> int\n",
+                "}."
+            )
+        );
+        let template = item_text(owner, "op PkgInv_main_of_P");
+        assert!(
+            template.starts_with("op PkgInv_main_of_P (p : P_pkgparams) (s : P_pkgstate) : bool ="),
+            "{template}"
+        );
+        for read in ["p.`P_param_k", "p.`P_param_b", "p.`P_param_f s.`P_ctr"] {
+            assert!(template.contains(read), "{read} in:\n{template}");
+        }
+        let with_record: Vec<&PathBuf> = exported
+            .files
+            .iter()
+            .filter(|(_, text)| text.contains("type P_pkgparams"))
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(with_record, [Path::new("Pkg_P_v1.ec")]);
+        let q = file(&exported, "Pkg_Q.ec");
+        assert_eq!(
+            count(q, "op PkgInv_nonneg_of_Q (s : Q_pkgstate) : bool ="),
+            1,
+            "{q}"
+        );
+        assert!(!q.contains("pkgparams"), "{q}");
+    }
+
+    /// Story 78: each variant's package lemma fills the function field with its own operator.
+    #[test]
+    fn each_variants_package_lemma_applies_the_template_to_its_own_function() {
+        let exported = export(PARAMS, "Proof").unwrap();
+        for (variant, own, other) in [
+            ("P_v1", "func_f1", "func_f2"),
+            ("P_v2", "func_f2", "func_f1"),
+        ] {
+            let lemma = file(&exported, &format!("PkgInv_{variant}_Inc.ec"));
+            for read in [
+                format!("P_param_b = {variant}.b"),
+                format!("P_param_k = {variant}.k"),
+                format!("P_param_f = {own}"),
+            ] {
+                assert!(lemma.contains(&read), "{read} in:\n{lemma}");
+            }
+            assert!(!lemma.contains(other), "{other} in:\n{lemma}");
+        }
+    }
+
+    /// Story 78: the side record holds the parameters of `P`, the wrapper passes them, and the
+    /// side lemma reads them from the instance's module variables.
+    #[test]
+    fn the_side_record_holds_the_parameters_and_the_wrapper_passes_them() {
+        let exported = export(PARAMS, "Proof").unwrap();
+        let comp = file(&exported, "Comp_G.ec");
+        let side = item_text(comp, "type G_side");
+        assert!(side.contains("G_params_P : P_pkgparams;"), "{side}");
+        assert!(!side.contains("G_params_q"), "{side}");
+        assert_eq!(
+            item_text(comp, "op PkgInv_main_of_P_in_G"),
+            "op PkgInv_main_of_P_in_G (s : G_side) : bool =\n  PkgInv_main_of_P s.`G_params_P s.`G_pkg_P."
+        );
+        assert_eq!(
+            item_text(comp, "op PkgInv_nonneg_of_q_in_G"),
+            "op PkgInv_nonneg_of_q_in_G (s : G_side) : bool =\n  PkgInv_nonneg_of_Q s.`G_pkg_q."
+        );
+        let lemma = file(&exported, "SideInv_G_Inc.ec");
+        for read in ["Comp_G.Pkg_Inst_P.b", "Comp_G.Pkg_Inst_P.k", "func_f1"] {
+            assert!(lemma.contains(read), "{read} in:\n{lemma}");
+        }
+        assert!(file(&exported, "SideInv_H_Inc.ec").contains("func_f2"));
+    }
+
+    /// Story 78: package `R` has a parameter and no state; its template takes `p` only.
+    #[test]
+    fn a_package_without_state_with_parameters_has_a_template_over_its_parameters() {
+        let exported = export(PARAMS, "Proof").unwrap();
+        let owner = file(&exported, "Pkg_R.ec");
+        assert!(
+            item_text(owner, "op PkgInv_either_of_R")
+                .starts_with("op PkgInv_either_of_R (p : R_pkgparams) : bool ="),
+            "{owner}"
+        );
+        assert_eq!(
+            item_text(file(&exported, "Comp_G.ec"), "op PkgInv_either_of_r_in_G"),
+            "op PkgInv_either_of_r_in_G (s : G_side) : bool =\n  PkgInv_either_of_R s.`G_params_r."
+        );
+        assert!(
+            file(&exported, "SideInv_G_Read.ec").contains("require import Pkg_P_v1 Pkg_Q Pkg_R.")
+        );
+    }
+
+    /// Story 78: the whole tree compiles (skips without `easycrypt`).
+    #[test]
+    fn the_tree_of_the_params_project_compiles() {
+        let exported = export(PARAMS, "Proof").unwrap();
+        let out = tempfile::tempdir().unwrap();
+        crate::writers::easycrypt::export::write_files(out.path(), &exported.files).unwrap();
+        let base = out.path().to_str().unwrap().to_string();
+        for side in &exported.side_invariants {
+            crate::writers::easycrypt::test_support::assert_compiles(
+                &base,
+                &format!("{base}/{}", side.join_file),
+            );
+        }
+        crate::writers::easycrypt::test_support::assert_compiles(
+            &base,
+            &format!("{base}/Eq_left_right.ec"),
+        );
     }
 }
