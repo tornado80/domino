@@ -71,6 +71,9 @@ pub enum Error {
         /// entries in the equivalence block that are not exported oracles
         unknown_oracle_names: Vec<String>,
     },
+    #[error("`--claim {pattern}` is not a valid wildcard pattern")]
+    #[diagnostic(help("a pattern uses `*` and `?`; a `\\` escapes only `*`, `?` or `\\`"))]
+    InvalidClaimPattern { pattern: String },
     #[error(transparent)]
     ClaimTheoremFailed(#[from] ClaimTheoremFailedError),
     #[error("Failed to prove equivalence {left_game_inst_name} = {right_game_inst_name}")]

@@ -37,6 +37,8 @@ const PKG: &str = "testdata/prove-claim/pkg";
 /// `other` (true) and `bad` (false).
 const GAME: &str = "testdata/prove-claim/game";
 const SE25: &str = "testdata/debug/se25";
+/// A theorem with one equivalence and no package invariant.
+const EMPTY_TUPLE: &str = "test-projects/test-empty-tuple";
 
 #[test]
 fn package_claim_selects_one_invariant() {
@@ -128,4 +130,20 @@ fn proof_claim_still_matches_the_equivalence_claims() {
     let text = text(&out);
     assert!(!text.contains("no invariant of"), "{text}");
     assert!(text.contains("package-invariant!main!P!"), "{text}");
+}
+
+#[test]
+fn invalid_claim_pattern_on_an_equivalence_is_an_error() {
+    // the pattern check comes before any solver work, so an empty PATH is sufficient
+    let out = command(EMPTY_TUPLE, &["--claim", r"foo\"])
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    let text = text(&out);
+    assert!(!out.status.success());
+    assert!(!text.contains("panicked"), "{text}");
+    assert!(
+        text.contains(r"`--claim foo\` is not a valid wildcard pattern"),
+        "{text}"
+    );
 }

@@ -23,7 +23,7 @@ pub(crate) struct EquivalenceSmtDriver<'a, Backend: SmtSolverBackend + Sync, Pro
     backend: &'a Backend,
     transcript: bool,
     req_oracle: Option<&'a str>,
-    req_claim: Option<Wildcard<'a>>,
+    req_claim: Option<&'a str>,
     parallel: usize,
     invariant_start: bool,
     injective_randmap: bool,
@@ -99,7 +99,6 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
         invariant_start: bool,
         injective_randmap: bool,
     ) -> Self {
-        let req_claim = req_claim.map(|req| Wildcard::new(req.as_bytes()).unwrap());
         Self {
             eqctx,
             project,
@@ -113,7 +112,14 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
         }
     }
 
+    /// Errors: [`Error::InvalidClaimPattern`] when `--claim` is not a valid wildcard. This
+    /// check comes before any solver work.
     pub(crate) fn verify<UI: TheoremUI + Send>(&mut self, ui: &mut UI) -> Result<()> {
+        if let Some(pattern) = self.req_claim {
+            Wildcard::new(pattern.as_bytes()).map_err(|_| Error::InvalidClaimPattern {
+                pattern: pattern.to_string(),
+            })?;
+        }
         self.eqctx.verify_exports_match()?;
 
         let ui = Arc::new(Mutex::new(ui));
@@ -434,10 +440,10 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
     }
 
     fn is_claim_requested(&self, claim_name: &str) -> bool {
-        match &self.req_claim {
-            Some(req_claim) => req_claim.is_match(claim_name.as_bytes()),
-            None => true,
-        }
+        self.req_claim.is_none_or(|pattern| {
+            Wildcard::new(pattern.as_bytes())
+                .is_ok_and(|wildcard| wildcard.is_match(claim_name.as_bytes()))
+        })
     }
 
     fn verify_with_solver(
