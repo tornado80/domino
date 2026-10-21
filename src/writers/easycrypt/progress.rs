@@ -883,6 +883,7 @@ impl JobProgress for BarJob {
             node_open: false,
             admits: 0,
             lockstep: None,
+            file: None,
         })
     }
 }
@@ -908,6 +909,8 @@ struct BarRow {
     admits: usize,
     /// The `lockstep_summary_line` of the oracle; it prints with the oracle's end.
     lockstep: Option<String>,
+    /// A fixed lemma's file ended: `Some(admitted)` (story 84).
+    file: Option<bool>,
 }
 
 impl BarRow {
@@ -923,7 +926,11 @@ impl BarRow {
 
     /// `done, 2 admits`, or `interrupted at N7` when the row ends on a node whose goal is open.
     /// The router prelude has no goal of its own, so a row never ends `interrupted at router`.
+    /// A fixed lemma's row ends `accepted` or `admitted`.
     fn end_text(&self) -> String {
+        if let Some(admitted) = self.file {
+            return if admitted { "admitted" } else { "accepted" }.to_string();
+        }
         match &self.at {
             Some((node, _)) if self.node_open && node != "router" => {
                 format!("interrupted at {node}")
@@ -958,6 +965,10 @@ impl ExportObserver for BarRow {
             ExportEvent::ItemStarted { name, .. } => {
                 self.bar.set_message(format!("{}  {name}", self.oracle));
                 self.bar.reset_elapsed();
+            }
+            // without a node, the goal is a fixed lemma's whole file (story 84)
+            ExportEvent::GoalFinished { admitted, .. } if self.at.is_none() => {
+                self.file = Some(*admitted);
             }
             ExportEvent::GoalFinished { admitted, .. } => {
                 self.node_open = false;
@@ -1418,6 +1429,37 @@ pub(crate) mod tests {
         assert!(
             raw.lines().nth(1).unwrap().trim_end().ends_with('s'),
             "a timer: {raw}"
+        );
+    }
+
+    /// Story 84: a fixed row ends `done` when its file is accepted and `admitted` when it is
+    /// admitted (its `GoalFinished`), not with an admit count of an oracle.
+    #[test]
+    fn a_fixed_row_ends_accepted_or_admitted() {
+        let _lock = screen_lock();
+        let (board, term) = board_on_screen();
+        let job = board.job("PkgInv_Ctr", 0);
+        for (name, admitted) in [("Frame_Ctr_Peek", false), ("init", true)] {
+            let mut row = job.oracle(name);
+            row.on_event(&ExportEvent::ItemStarted {
+                phase: ExportPhase::Tactics,
+                name: "check file",
+                index: 1,
+            });
+            row.on_event(&ExportEvent::GoalFinished {
+                oracle: name,
+                goal: name,
+                admitted,
+            });
+        }
+        let lines = screen(&board, &term);
+        assert!(
+            lines.contains(&"  Frame_Ctr_Peek  accepted".to_string()),
+            "{lines:#?}"
+        );
+        assert!(
+            lines.contains(&"  init  admitted".to_string()),
+            "{lines:#?}"
         );
     }
 

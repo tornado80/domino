@@ -133,7 +133,8 @@ impl<'a> FixedFiles<'a> {
 /// Each file it checks is a row of `progress` (story 84, ADR 0020 point 6), named by the file
 /// stem without the job's stem (`Frame_Ctr_Peek`, `init`). The row sees `ItemStarted` (`check
 /// file`, or `attempt k/n` for the start lemma) and `SentenceSent` with the first line of the
-/// text before each send, and is dropped when the file is accepted or admitted.
+/// text before each send, then `GoalFinished` (admitted or not) when the file is accepted or
+/// admitted, and is dropped.
 pub(super) fn prove_fixed_lemmas<P: Project, B>(
     job: &EquivalenceJob<'_, P, B>,
     fixed: &FixedFiles<'_>,
@@ -148,12 +149,19 @@ pub(super) fn prove_fixed_lemmas<P: Project, B>(
         let admitted = if is_proved(job, file) {
             None
         } else {
-            let mut row = progress.oracle(row_name(job.stem(), file));
-            if fixed.start == Some(file) {
+            let name = row_name(job.stem(), file);
+            let mut row = progress.oracle(name);
+            let admitted = if fixed.start == Some(file) {
                 check_start(job, fixed.owner, file, tmp_dir, row.as_mut())?
             } else {
                 check_written(job, file, tmp_dir, row.as_mut())?
-            }
+            };
+            row.on_event(&ExportEvent::GoalFinished {
+                oracle: name,
+                goal: name,
+                admitted: admitted.is_some(),
+            });
+            admitted
         };
         out.push(FixedLemma {
             file: file.to_string(),

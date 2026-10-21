@@ -5423,11 +5423,13 @@ mod progress_board {
             let events = &rows[&key(frame)];
             assert_eq!(events[0], "item tactics 1 check file", "{frame}: {events:?}");
             assert!(events[1].starts_with("sentence "), "{frame}: {events:?}");
-            assert_eq!(events.len(), 2, "{frame}: {events:?}");
+            assert_eq!(events[2], format!("goal {frame} {frame} false"));
+            assert_eq!(events.len(), 3, "{frame}: {events:?}");
         }
         let init = &rows[&key("init")];
         let attempts: Vec<&String> = init.iter().filter(|e| e.starts_with("item ")).collect();
         assert!(!attempts.is_empty(), "{init:?}");
+        assert!(init.last().unwrap().starts_with("goal init init "), "{init:?}");
         for (k, item) in attempts.iter().enumerate() {
             assert_eq!(**item, format!("item tactics {} attempt {}/2", k + 1, k + 1));
         }
