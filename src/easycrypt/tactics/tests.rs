@@ -2355,11 +2355,11 @@ wait $ec
         std::fs::write(
             &script,
             format!(
-                // a session kills this script when it is dropped: a watcher logs the end of
-                // the real EasyCrypt, which exits when its input closes
-                "#!/bin/sh\necho start >> '{log}'\n'{real}' \"$@\" <&0 &\nec=$!\n\
-                 ( while kill -0 $ec 2>/dev/null; do sleep 0.05; done; echo end >> '{log}' ) \
-                 </dev/null >/dev/null 2>&1 &\nwait $ec\n",
+                // the script becomes the real EasyCrypt (a background job of dash would read
+                // /dev/null), so the session's kill ends it at once; a watcher logs the end
+                "#!/bin/sh\necho start >> '{log}'\n\
+                 ( while kill -0 $$ 2>/dev/null; do sleep 0.01; done; echo end >> '{log}' ) \
+                 </dev/null >/dev/null 2>&1 &\nexec '{real}' \"$@\"\n",
                 log = log.display(),
                 real = real.display()
             ),
@@ -4533,9 +4533,9 @@ pub(super) mod side_invariant_jobs {
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\necho start >> '{log}'\n'{real}' \"$@\" <&0 &\nec=$!\n\
-                 ( while kill -0 $ec 2>/dev/null; do sleep 0.05; done; echo end >> '{log}' ) \
-                 </dev/null >/dev/null 2>&1 &\nwait $ec\n",
+                "#!/bin/sh\necho start >> '{log}'\n\
+                 ( while kill -0 $$ 2>/dev/null; do sleep 0.01; done; echo end >> '{log}' ) \
+                 </dev/null >/dev/null 2>&1 &\nexec '{real}' \"$@\"\n",
                 log = log.display(),
                 real = locate_binary().display()
             ),
