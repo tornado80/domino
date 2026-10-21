@@ -211,6 +211,9 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 79 | Package parameters and function constants in game invariants (ADR 0019) | `79-package-parameters-in-game-invariants.md` | 78 |
 | 80 | Game constants in game invariants, `links_<C>` (ADR 0019) | `80-game-constants-in-game-invariants.md` | 79 |
 | 81 | Game constants and function parameters in state relations (ADR 0019) | `81-game-constants-in-state-relations.md` | — |
+| 82 | The progress board, and plain progress for parallel jobs (ADR 0020) | `82-the-progress-board-and-plain-progress.md` | — |
+| 83 | One bar row for each running oracle (ADR 0020) | `83-one-bar-row-for-each-running-oracle.md` | 82 |
+| 84 | Rows for the fixed lemmas (ADR 0020) | `84-rows-for-the-fixed-lemmas.md` | 82 |
 
 Stories 71–77 and symbolic-execution 26–29 come from the grilling of 2026-10-12/20. The merges land
 in the order 71 → symbolic-execution 26 → 74. Not merged: the rest of Christoph Egger's stack (not
@@ -219,6 +222,11 @@ EasyCrypt translation of type parameters, once they are on `main`.
 
 Stories 78–81 come from the grilling of 2026-10-20/21: since merge `3662315a` the prover binds
 parameters and game constants in invariant files, and translation did not follow (ADR 0019).
+
+Stories 82–84 come from the grilling of 2026-10-21: since stories 68 and 69 the parallel oracle
+workers and the side-invariant chain report to `NopExportObserver`, so the terminal is silent while
+they prove (ADR 0020). They change progress only: the export tree, the records and the reports do
+not change.
 
 Stories 48–52 come from the owner's review of the debug and progress pages. They are UI-only:
 translation does not change, and the export tree is byte-identical before and after each one. 48

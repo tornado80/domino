@@ -299,6 +299,15 @@ which is what lets several proof jobs of one theorem run at once. Two proof jobs
 same oracle at the same time: the oracle is the unit of parallelism, inside one proof job as well as
 between proof jobs.
 
+**Progress board** — the one live display on the terminal of an EasyCrypt command run. It shows
+each running proof job, and under each job the progress rows of its running lemmas. All messages of
+the run print above it. In plain mode it is a log, and each line names its job and lemma.
+_Avoid_: progress bar (for the whole display).
+
+**Progress row** — what one oracle lemma, or one frame or start lemma, of a running proof job does
+now: lockstep execution, or the joint node, the tactic sent to EasyCrypt and how long it waits for
+the answer. A row exists only while its lemma runs; when it ends, a summary line stays.
+
 **Oracle lemma** — the proof that one oracle of an equivalence keeps equal outputs and the
 invariant, as a lemma of its own in a file of its own. It assumes the side invariants of both sides
 but does not prove them. The equivalence's own proof only joins its oracle lemmas with the
