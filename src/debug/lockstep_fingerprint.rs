@@ -12,8 +12,9 @@
 //! - `constants`: both game instances' types and constants.
 //! - `randomness`: the oracle's randomness mapping: its kind and the SMT of its conditions.
 //! - `invariants`: the SMT of every loaded state relation, invariant and lemma.
-//! - `claims`: the names of the claims and sub-verdicts that lockstep execution on the
-//!   EasyCrypt listing checks for the oracle (story 58). A tree saved without this part is stale.
+//! - `claims`: the claims, each with its dependencies, and the sub-verdicts that lockstep
+//!   execution on the EasyCrypt listing checks for the oracle (stories 58 and 87). A tree saved
+//!   without this part, or with the names alone, is stale.
 //!
 //! The hash is FNV-1a over 128 bits: stable across runs and platforms, and no dependency.
 
@@ -96,7 +97,7 @@ impl Fingerprint {
             smt(&eqctx.emit_auto_randomness(oracle))
         );
         let invariants = smt(&eqctx.emit_invariant());
-        let claims = crate::debug::lockstep_run::easycrypt_check_names(&eqctx).join("\n");
+        let claims = crate::debug::lockstep_run::easycrypt_checks(&eqctx, oracle).join("\n");
 
         Ok(Fingerprint::from_parts([
             code, constants, randomness, invariants, claims,
@@ -246,7 +247,7 @@ mod tests {
         assert_eq!(a, fingerprint(Path::new(PROJECT)));
         // the same in every process and build profile: no hash seed, no pointer, no `HashMap`
         // order (a change to the project or to what is hashed changes it, and that is all)
-        assert_eq!(a.hex, "e81558bf382ba51a83ecd56076e9d689");
+        assert_eq!(a.hex, "32c75f1e48035e56cdde5a964b5ffc48");
         assert_eq!(
             a.parts.keys().collect::<Vec<_>>(),
             ["claims", "code", "constants", "invariants", "randomness"]
@@ -257,6 +258,20 @@ mod tests {
                 .replace("        ctr  <- (ctr + 1);", "  ctr <- (ctr + 1);")
         });
         assert_eq!(fingerprint(moved.path()).hex, a.hex);
+    }
+
+    #[test]
+    fn the_claims_part_hashes_each_check_with_its_dependencies() {
+        let now = fingerprint(Path::new(PROJECT));
+        // what story 58 hashed: the names of the checks alone (the fixture has no state
+        // relation but `invariant`, so there are no parts)
+        let names = "equal-output\ninvariant";
+        let mut saved = now.parts.clone();
+        saved.insert("claims".into(), hex(fnv1a(names.as_bytes())));
+        assert_ne!(saved["claims"], now.parts["claims"]);
+        let stale = now.changed_from(&saved);
+        assert_eq!(stale, ["claims"]);
+        assert_eq!(describe_part(stale[0]), "the claims checked");
     }
 
     #[test]

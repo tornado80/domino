@@ -217,20 +217,27 @@ fn a_state_relation_starts_a_part_and_a_helper_stays_inside_one() {
 }
 
 #[test]
-fn an_invariant_failure_where_a_side_aborts_is_not_held_against_easycrypt() {
-    // story 23: Domino's invariant verdict is stricter than EasyCrypt's `inv` at abort pairs
+fn an_aborting_pair_with_an_unreachable_invariant_is_domino_verified() {
+    // story 87: `invariant` is checked under `no-abort`, so an aborting pair reads unreachable
+    let unreachable = Verdict::Unreachable {
+        reason: crate::debug::driver::Unreachability::DependencyFalse {
+            dependency: "no-abort".into(),
+        },
+    };
+    let p = pair(Verdict::Verified, unreachable, &[], true);
+    assert_eq!(pair_view_for_tests(&p, &Part::Invariant), "verified");
+    assert_eq!(
+        pair_view_for_tests(&p, &Part::Relation("a".into())),
+        "verified"
+    );
+    // the old exemption is gone: a failure is a failure, also where a side aborts
     let p = pair(
         Verdict::Verified,
         fails(),
         &[("StateRelation_a", fails())],
         true,
     );
-    assert_eq!(pair_view_for_tests(&p, &Part::Invariant), "inconclusive");
-    assert_eq!(
-        pair_view_for_tests(&p, &Part::Relation("a".into())),
-        "inconclusive"
-    );
-    // equal-output has no such exemption
+    assert_eq!(pair_view_for_tests(&p, &Part::Invariant), "fails");
     let p = pair(fails(), Verdict::Verified, &[], true);
     assert_eq!(pair_view_for_tests(&p, &Part::EqualOutput), "fails");
 }
@@ -3496,14 +3503,14 @@ fn a_one_sided_invariant_part_has_the_view_of_its_own_part_verdict() {
     assert_eq!(pair_view_for_tests(&p, &left), "fails");
     assert_eq!(pair_view_for_tests(&p, &right), "verified");
 
-    // a pair where a side aborts: a failure counts as inconclusive
+    // a pair where a side aborts: a failure is a failure (story 87)
     let aborting = pair(
         Verdict::Verified,
         fails(),
         &[("PkgInv_l_Prf", fails())],
         true,
     );
-    assert_eq!(pair_view_for_tests(&aborting, &left), "inconclusive");
+    assert_eq!(pair_view_for_tests(&aborting, &left), "fails");
 
     // a part verdict that is not there (a tree saved before story 21)
     let old = pair(Verdict::Verified, fails(), &[], false);

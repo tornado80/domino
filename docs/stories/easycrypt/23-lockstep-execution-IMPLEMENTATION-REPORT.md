@@ -129,6 +129,8 @@ relation's goal is `(<name> <new left state> <new right state>)`, negated.
 
 ## Invariant vs abort (open difference, `prove` untouched)
 
+**Closed by story 87:** the EasyCrypt claim set now checks `invariant` under `no-abort`.
+
 Domino's abort return carries the state the side had reached (`OracleContext::smt_construct_abort`
 keeps the game state), so on a pair where a side aborts the `invariant` claim compares the states
 at the abort, including writes made before it. EasyCrypt's `inv` is

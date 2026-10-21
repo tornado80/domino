@@ -179,9 +179,10 @@ pub(crate) fn obligations(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<R
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClaimSet {
     /// The EasyCrypt claim set: `equal-output` (the conjunction of the `equal-aborts` and
-    /// `same-output` goals) and `invariant`, none with a dependency. EasyCrypt has neither
-    /// `no-abort` nor project lemmas, and `prove` is built on exactly this set. Lockstep only.
-    NoDependencies,
+    /// `same-output` goals, no dependency) and `invariant` under `no-abort`, as EasyCrypt's
+    /// `inv` guards its relations under `¬abort_flag`. No project lemma is assumed. `prove` is
+    /// built on exactly this set. Lockstep only.
+    EasyCrypt,
     /// The oracle's obligation set, each claim with its own declared dependencies, narrowed to
     /// one claim by name.
     Obligations { only: Option<String> },
@@ -194,7 +195,7 @@ pub enum ClaimSet {
 /// The claims of a run: what the engine checks, and what the reports say about them.
 pub(crate) struct ResolvedClaims {
     /// The declared claims the set holds, with the dependencies they keep. Empty for
-    /// [`ClaimSet::NoDependencies`], whose checks are not declared claims.
+    /// [`ClaimSet::EasyCrypt`], whose checks are not declared claims.
     pub claims: Vec<ResolvedClaim>,
     pub queries: Vec<ClaimQuery>,
     pub infos: Vec<ClaimInfo>,
@@ -218,7 +219,7 @@ impl ClaimSet {
     /// The claim this set is narrowed to, if any.
     pub fn only(&self) -> Option<&str> {
         match self {
-            ClaimSet::NoDependencies => None,
+            ClaimSet::EasyCrypt => None,
             ClaimSet::Obligations { only } | ClaimSet::Core { only } => only.as_deref(),
         }
     }
@@ -239,7 +240,7 @@ impl ClaimSet {
         oracle: &str,
     ) -> Result<ResolvedClaims, DebugError> {
         let declared = match self {
-            ClaimSet::NoDependencies => {
+            ClaimSet::EasyCrypt => {
                 let queries = crate::debug::lockstep_run::easycrypt_queries(eqctx, oracle);
                 return Ok(ResolvedClaims {
                     claims: Vec::new(),
@@ -247,7 +248,7 @@ impl ClaimSet {
                         .iter()
                         .map(|q| ClaimInfo {
                             name: q.name.clone(),
-                            dependencies: Vec::new(),
+                            dependencies: q.dependencies.iter().map(|(d, _)| d.clone()).collect(),
                             admitted: false,
                         })
                         .collect(),

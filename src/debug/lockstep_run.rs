@@ -17,18 +17,18 @@
 //!   constants on both sides. What a claim adds — its own declared dependencies — is asserted
 //!   at the terminal pair.
 //! - The claims checked ([`ClaimSet`]) differ by listing. **On the EasyCrypt listing** there
-//!   are two, with no dependencies (EasyCrypt has neither `no-abort` nor project lemmas):
+//!   are two, and no project lemma is assumed (EasyCrypt does not have them):
 //!   *equal-output*, the conjunction of the `equal-aborts` and `same-output` goals — a
 //!   grouping that only makes sense with the empty dependency set they share — and
-//!   *invariant*, the `invariant` claim's goal on the new states. **On the Domino listing**
+//!   *invariant*, the `invariant` claim's goal on the new states, under `no-abort`. **On the Domino listing**
 //!   the claims are the oracle's obligation set, each with its own declared dependencies, so a
 //!   verdict is comparable to `domino prove`'s; `equal-aborts` and `same-output` are two claims,
 //!   because under `prove` semantics their dependency sets differ.
 //! - `smt_construct_abort` (`oracle.rs`) threads the game state through, so on a side that
 //!   aborts the new state is the state reached at the abort. EasyCrypt's `inv` instead guards
 //!   the relations under `!abort_flag`; the two differ at pairs where a side aborts, which is
-//!   why `prove` grants `invariant` the `no-abort` dependency and the EasyCrypt claim set,
-//!   which cannot, does not.
+//!   why `prove` and the EasyCrypt claim set (story 87) both give `invariant` the `no-abort`
+//!   dependency.
 //! - The per-relation sub-verdicts use the names of the `define-state-relation`s
 //!   ([`EquivalenceContext::state_relation_names`]), the list the EasyCrypt
 //!   `inv` operator conjoins (`writers::easycrypt::invariant`).
@@ -65,7 +65,7 @@ use crate::debug::render;
 use crate::debug::smtout::SmtOut;
 use crate::debug::sweep::{SweepEntry, Target};
 use crate::project::Project;
-use crate::theorem::{BuiltInFact, ClaimKind};
+use crate::theorem::{BuiltInFact, ClaimKind, ResolvedClaim, ResolvedDependency};
 use crate::transforms::theorem_transforms::{
     DebugTransform, EasyCryptTransform, EquivalenceTransform,
 };
@@ -414,9 +414,9 @@ pub(crate) fn rank(v: &Verdict) -> usize {
 // Terms
 // ---------------------------------------------------------------------------
 
-/// The checks of lockstep execution on the EasyCrypt listing ([`ClaimSet::NoDependencies`]):
-/// `equal-output`, the conjunction of the `equal-aborts` and `same-output` goals, and
-/// `invariant`, both with no dependency.
+/// The checks of lockstep execution on the EasyCrypt listing ([`ClaimSet::EasyCrypt`]):
+/// `equal-output`, the conjunction of the `equal-aborts` and `same-output` goals with no
+/// dependency, and `invariant` under `no-abort`.
 pub(crate) fn easycrypt_queries(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<ClaimQuery> {
     let goal_of = |fact: BuiltInFact| {
         let claim = no_dependency_claim(fact.name(), ClaimKind::BuiltIn(fact));
@@ -458,37 +458,43 @@ fn lockstep_terms(
 /// The `invariant` check of the EasyCrypt listing. Its goal is what `inv` says after story 69:
 /// the invariant relation on the new states. The package and game invariants are not in `inv`
 /// any more: the oracle lemma assumes them, and the side-invariant lemmas of the compositions
-/// prove them (ADR 0014). Its parts are the state relations but `invariant`.
+/// prove them (ADR 0014). Its parts are the state relations but `invariant`. It has the one
+/// dependency `no-abort` (story 87), as `inv` guards its relations under `!abort_flag`: on a
+/// pair where a side aborts, the check is `unreachable (dependency-false: no-abort)`.
 pub(crate) fn easycrypt_invariant_query(
     eqctx: &EquivalenceContext<'_>,
     oracle: &str,
 ) -> ClaimQuery {
-    let goal = eqctx
-        .claim_assumptions_and_goal(
-            &no_dependency_claim("invariant", ClaimKind::StateRelation),
-            oracle,
-        )
-        .1;
+    let claim = ResolvedClaim {
+        name: "invariant".to_string(),
+        kind: ClaimKind::StateRelation,
+        dependencies: vec![ResolvedDependency {
+            name: BuiltInFact::NoAbort.name().to_string(),
+            kind: ClaimKind::BuiltIn(BuiltInFact::NoAbort),
+        }],
+        admitted: false,
+    };
     ClaimQuery {
         parts: state_relation_parts(eqctx, oracle, state_relation_op_name),
-        ..ClaimQuery::without_dependencies("invariant", SmtAssert(SmtNot(goal)).into())
+        ..ClaimQuery::of(eqctx, &claim, oracle)
     }
 }
 
-/// The names of the checks that lockstep execution on the EasyCrypt listing makes for an
-/// oracle: `equal-output`, `invariant`, then the parts of `invariant` in the order of
-/// [`easycrypt_invariant_query`].
-pub(crate) fn easycrypt_check_names(eqctx: &EquivalenceContext<'_>) -> Vec<String> {
-    [EQUAL_OUTPUT.to_string(), "invariant".to_string()]
-        .into_iter()
-        .chain(
-            eqctx
-                .state_relation_names()
-                .into_iter()
-                .filter(|name| name != "invariant")
-                .map(|name| state_relation_op_name(&name)),
-        )
-        .collect()
+/// The checks that lockstep execution on the EasyCrypt listing makes for `oracle`, one line
+/// each: `equal-output` and `invariant` with their dependencies (`invariant [no-abort]`), then
+/// the parts of `invariant` in the order of [`easycrypt_invariant_query`]. The `claims` part
+/// of the joint-tree fingerprint hashes these lines, so a change of a dependency makes a saved
+/// tree stale.
+pub(crate) fn easycrypt_checks(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<String> {
+    let queries = easycrypt_queries(eqctx, oracle);
+    let claims = queries.iter().map(|q| {
+        let dependencies: Vec<&str> = q.dependencies.iter().map(|(d, _)| d.as_str()).collect();
+        format!("{} [{}]", q.name, dependencies.join(", "))
+    });
+    let parts = queries
+        .iter()
+        .flat_map(|q| q.parts.iter().map(|(name, _)| name.clone()));
+    claims.chain(parts).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -623,7 +629,7 @@ where
 {
     run_lockstep_on(
         ListingKind::EasyCrypt,
-        ClaimSet::NoDependencies,
+        ClaimSet::EasyCrypt,
         project,
         req_proof,
         req_proofstep,
@@ -1025,7 +1031,7 @@ mod tests {
         let out = out.unwrap_or_else(|| tempfile::tempdir().unwrap().keep());
         run_lockstep_on(
             ListingKind::Domino,
-            ClaimSet::NoDependencies,
+            ClaimSet::EasyCrypt,
             &project,
             "T",
             0,
@@ -1267,7 +1273,7 @@ mod tests {
         let opts = LockstepDebugOptions::default();
         let run = run_lockstep_on(
             ListingKind::EasyCrypt,
-            ClaimSet::NoDependencies,
+            ClaimSet::EasyCrypt,
             &project,
             "OneSided",
             0,
@@ -1399,12 +1405,10 @@ mod tests {
     }
 
     #[test]
-    fn the_invariant_is_checked_on_the_state_at_the_abort() {
-        // Domino's abort return carries the state the side had reached, so the
-        // `invariant` claim compares those states. EasyCrypt's `inv` guards its
-        // relations under `!abort_flag` and would not ask this of the pair. The
-        // engine reports Domino's answer; the difference is in the story-23
-        // report.
+    fn the_invariant_is_not_asked_of_a_pair_that_aborts() {
+        // EasyCrypt's `inv` guards its relations under `!abort_flag`, so the
+        // EasyCrypt claim set checks `invariant` under `no-abort` (story 87).
+        // Without an abort the counters differ, and the claim fails.
         let run = run_rules("AbortState");
         let by_abort: Vec<_> = run
             .outcome
@@ -1419,7 +1423,42 @@ mod tests {
                 )
             })
             .collect();
-        assert_eq!(by_abort, [(false, false, 0, 2), (true, true, 0, 2)]);
+        assert_eq!(by_abort, [(false, false, 0, 2), (true, true, 0, 1)]);
+        assert_no_abort_scope(invariant(&run.outcome.pairs[1]));
+        assert!(run.outcome.pairs[1].parts().is_empty());
+    }
+
+    fn assert_no_abort_scope(v: &Verdict) {
+        assert!(
+            matches!(
+                v,
+                Verdict::Unreachable {
+                    reason: Unreachability::DependencyFalse { dependency }
+                } if dependency == "no-abort"
+            ),
+            "{v:?}"
+        );
+    }
+
+    #[test]
+    fn the_invariant_is_unreachable_where_exactly_one_side_aborts() {
+        let run = run_rules("AbortDiff");
+        let p = run
+            .outcome
+            .pairs
+            .iter()
+            .find(|p| p.left.terminal.is_abort != p.right.terminal.is_abort)
+            .unwrap();
+        assert_eq!(rank(equal_output(p)), 2);
+        assert_no_abort_scope(invariant(p));
+    }
+
+    #[test]
+    fn the_invariant_is_unreachable_where_both_sides_abort() {
+        let run = run_rules("AbortBoth");
+        let p = &run.outcome.pairs[1];
+        assert_eq!(rank(equal_output(p)), 0);
+        assert_no_abort_scope(invariant(p));
     }
 
     #[test]
@@ -1493,7 +1532,7 @@ mod tests {
         let stop = AtomicBool::new(true);
         let run = run_lockstep_on(
             ListingKind::Domino,
-            ClaimSet::NoDependencies,
+            ClaimSet::EasyCrypt,
             &project,
             "T",
             0,
@@ -1592,7 +1631,7 @@ mod tests {
         let terms = lockstep_terms(
             &eqctx,
             "StuckOrder",
-            ClaimSet::NoDependencies
+            ClaimSet::EasyCrypt
                 .resolve(&eqctx, "StuckOrder")
                 .unwrap()
                 .queries,
@@ -2093,7 +2132,7 @@ mod tests {
         let mut events = Events::default();
         run_lockstep_on(
             ListingKind::Domino,
-            ClaimSet::NoDependencies,
+            ClaimSet::EasyCrypt,
             &project,
             "T",
             0,
@@ -2130,7 +2169,7 @@ mod tests {
         let stop = AtomicBool::new(true);
         run_lockstep_on(
             ListingKind::Domino,
-            ClaimSet::NoDependencies,
+            ClaimSet::EasyCrypt,
             &project,
             "T",
             0,
@@ -2247,6 +2286,10 @@ mod tests {
                     .map(|v| match v {
                         Verdict::Verified => SmtSolverResponse::Unsat,
                         Verdict::GoalFails { .. } => SmtSolverResponse::Sat,
+                        // the file asserts the false `no-abort` before the goal (story 87)
+                        Verdict::Unreachable {
+                            reason: Unreachability::DependencyFalse { .. },
+                        } => SmtSolverResponse::Unsat,
                         other => panic!("unexpected {other:?}"),
                     })
                     .collect();
@@ -2384,10 +2427,10 @@ mod tests {
         }
     }
 
-    /// `prove` is frozen: the EasyCrypt listing checks the same two claims with no
-    /// dependencies as ever, into the same file names.
+    /// The EasyCrypt listing checks the same two claims as ever, into the same file names:
+    /// `equal-output` with no dependency, and `invariant` under `no-abort` (story 87).
     #[test]
-    fn the_easycrypt_listing_keeps_its_two_dependency_free_claims_and_plain_names() {
+    fn the_easycrypt_listing_checks_invariant_under_no_abort_with_plain_names() {
         let (_, project) = deps_project();
         let out = tempfile::tempdir().unwrap();
         let run = run_lockstep_command(
@@ -2405,7 +2448,19 @@ mod tests {
         assert_eq!(run.meta.listing, "easycrypt");
         let names: Vec<_> = run.meta.claims.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["equal-output", "invariant"]);
-        assert!(run.meta.claims.iter().all(|c| c.dependencies.is_empty()));
+        let dependencies: Vec<_> = run.meta.claims.iter().map(|c| &c.dependencies).collect();
+        assert_eq!(
+            dependencies,
+            [&Vec::<String>::new(), &vec!["no-abort".to_string()]]
+        );
+        let trace: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(out.path().join("trace.json")).unwrap())
+                .unwrap();
+        let text = trace.to_string();
+        assert!(text.contains(r#""dependencies":["no-abort"]"#), "{text}");
+        let goals = &run.meta.goals.claims;
+        assert!(goals[0].dependencies.is_empty());
+        assert_eq!(goals[1].dependencies.len(), 1, "the no-abort assertion");
         for file in [
             "trace.json",
             "summary.txt",
@@ -2563,7 +2618,7 @@ mod tests {
     #[test]
     fn the_easycrypt_listing_assumes_no_project_lemma() {
         let out = tempfile::tempdir().unwrap();
-        let run = story23_lockstep(ListingKind::EasyCrypt, ClaimSet::NoDependencies, out.path());
+        let run = story23_lockstep(ListingKind::EasyCrypt, ClaimSet::EasyCrypt, out.path());
         assert!(
             run.meta.base_frame_smt.contains(MY_LEMMA),
             "the lemma is defined"

@@ -476,26 +476,14 @@ fn view_of_verdict(verdict: &Verdict) -> DominoView {
     }
 }
 
-fn pair_aborts(pair: &PairRecord) -> bool {
-    pair.left.terminal.is_abort || pair.right.terminal.is_abort
-}
-
-/// What Domino says about `part` on one pair. On a pair where a side aborts, an invariant
-/// failure is not held against EasyCrypt (story 23's note: Domino's verdict is stricter there
-/// than EasyCrypt's `inv`), so it counts as inconclusive.
+/// What Domino says about `part` on one pair.
 pub(super) fn pair_view(pair: &PairRecord, part: &Part) -> DominoView {
     if pair.verdict_of(EQUAL_OUTPUT).is_none() {
         return side_pair_view(pair, part);
     }
-    let invariant = |v: &Verdict| {
-        let view = view_of_verdict(v);
-        if view == DominoView::Fails && pair_aborts(pair) {
-            DominoView::Inconclusive
-        } else {
-            view
-        }
-    };
-    // the EasyCrypt claim set: `equal-output` and `invariant`, neither with a dependency
+    let invariant = view_of_verdict;
+    // the EasyCrypt claim set: `equal-output` with no dependency, and `invariant` under
+    // `no-abort` (an aborting pair reads `unreachable`)
     let claim = |name: &str| {
         pair.verdict_of(name)
             .expect("a lockstep run on the EasyCrypt listing checks equal-output and invariant")
