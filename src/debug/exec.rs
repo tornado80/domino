@@ -989,11 +989,7 @@ impl<'a> Executor<'a> {
                 // constant with no definition.
                 InlStmt::OpenCall { label, bind, ty } => {
                     st.visited.push(*label);
-                    // easycryptify binds every import call to an `ec_r<N>` local
-                    if let Some(place @ Place::Local { .. }) = bind {
-                        let id = self.fresh(st, place_basename(place), ty);
-                        st.rebind(place, id);
-                    }
+                    self.bind_unknown(st, bind.as_ref(), ty);
                 }
 
                 InlStmt::Call {
@@ -1036,30 +1032,47 @@ impl<'a> Executor<'a> {
                             value: value.clone(),
                         });
                     }
-                    // resume the nearest enclosing call
-                    let ret_val = value.as_ref().map(|e| to_smt(st, e));
-                    loop {
-                        let popped = frames.pop().expect("a Call frame is on the stack");
-                        if let FrameKind::Call { bind, close_label } = popped.kind {
-                            // lazy: the frame's closing `}` only runs when the
-                            // call actually completes (a `return` resuming the
-                            // caller) — not when it aborts inside.
-                            st.visited.push(close_label);
-                            if let Some(place) = bind {
-                                let value = ret_val
-                                    .clone()
-                                    .unwrap_or_else(|| SmtExpr::Atom("mk-empty".to_string()));
-                                self.bind_fresh(st, &place, value);
-                            }
-                            break;
-                        }
-                    }
+                    self.resume_caller(frames, st, value.as_ref());
                 }
 
                 InlStmt::Abort { label } => {
                     st.visited.push(*label);
                     return Head::Terminal(Terminal::Abort { label: *label });
                 }
+            }
+        }
+    }
+
+    /// The bind of an open call (ADR 0017) gets a fresh constant with no definition: nothing is
+    /// known about the outcome. easycryptify binds every import call to an `ec_r<N>` local; on
+    /// the Domino listing (story 33) the bind can also be a state field.
+    fn bind_unknown(&mut self, st: &mut SymState, bind: Option<&Place>, ty: &Type) {
+        if let Some(place @ (Place::Local { .. } | Place::State { .. })) = bind {
+            let id = self.fresh(st, place_basename(place), ty);
+            st.rebind(place, id);
+        }
+    }
+
+    /// A `return` inside a call frame: pop the frames up to the nearest enclosing call and bind
+    /// `value` to the call's bind.
+    fn resume_caller(
+        &mut self,
+        frames: &mut Vec<Cursor<'a>>,
+        st: &mut SymState,
+        value: Option<&Expression>,
+    ) {
+        let ret_val = value.map(|e| to_smt(st, e));
+        loop {
+            let popped = frames.pop().expect("a Call frame is on the stack");
+            if let FrameKind::Call { bind, close_label } = popped.kind {
+                // lazy: the frame's closing `}` only runs when the call actually completes (a
+                // `return` resuming the caller) — not when it aborts inside.
+                st.visited.push(close_label);
+                if let Some(place) = bind {
+                    let value = ret_val.unwrap_or_else(|| SmtExpr::Atom("mk-empty".to_string()));
+                    self.bind_fresh(st, &place, value);
+                }
+                break;
             }
         }
     }

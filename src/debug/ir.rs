@@ -171,11 +171,12 @@ pub enum InlStmt {
         /// oracle.
         arg_lines: Option<(Label, Label)>,
     },
-    /// An **open call** (ADR 0017): an import call of a package walked on its own (the package
-    /// tree, symbolic-execution story 29), which nothing inlines. Its outcome is unknown: `bind`
-    /// gets a fresh value of `ty` (the import's `Maybe` result), and the call-result guard after
-    /// it decides `None` and `Some`. Only the EasyCrypt lowering produces it, for an `invoke`
-    /// with no edge; it is not a decision point.
+    /// An **open call** (ADR 0017): an import call of a package walked on its own, which nothing
+    /// inlines. Its outcome is unknown: `bind` gets a fresh value of `ty`. The EasyCrypt lowering
+    /// (story 29) gives `ty` the import's `Maybe` result, and the call-result guard after it
+    /// decides `None` and `Some`. The Domino inliner (story 33) gives `ty` the import's return
+    /// type and has no guard: an abort of the call is not a path. Both produce it for an
+    /// `invoke` with no edge; it is not a decision point.
     OpenCall {
         label: Label,
         bind: Option<Place>,
@@ -344,6 +345,10 @@ pub enum InlineError {
     )]
     NonUnrolledLoop { oracle: String, pkg_inst: String },
 }
+
+/// The mark on the listing line of an open call ([`InlStmt::OpenCall`]) of the Domino listing.
+pub const OPEN_CALL_MARK: &str =
+    "open call: it can also abort; an abort ends the oracle and has nothing to check";
 
 /// Inline `oracle_name` (an *exported* name) of `game_inst`, which must already
 /// have been run through
@@ -828,10 +833,17 @@ impl<'c> Inliner<'c> {
         depth: usize,
         indent: usize,
     ) -> Result<InlStmt, InlineError> {
-        let edge = edge.ok_or_else(|| InlineError::UnresolvedEdge {
-            oracle: oracle_name.to_string(),
-            pkg_inst: caller.pkg_inst_name.clone(),
-        })?;
+        let Some(edge) = edge else {
+            return self.render_open_call(
+                bind_pattern,
+                oracle_name,
+                args,
+                span,
+                caller,
+                depth,
+                indent,
+            );
+        };
 
         let target_pkg_inst = &self.comp.pkgs[edge.to()];
         let target_sig = edge.sig();
@@ -938,6 +950,59 @@ impl<'c> Inliner<'c> {
             body,
             frame_lines: (open_label, close_label),
             arg_lines,
+        })
+    }
+
+    /// An `invoke` with no edge: an import that the composition does not wire, so an **open
+    /// call** (ADR 0017; `domino debug --package`, symbolic-execution story 33). The line is the
+    /// call as written, with the mark "open call". `bind` gets a fresh value of the import's
+    /// return type; there is no `Maybe` result and no call-result guard. The call can also
+    /// abort, but an abort ends the oracle and has nothing to check, so it is not a path.
+    ///
+    /// Errors: [`InlineError::UnresolvedEdge`] when the caller does not import `oracle_name`.
+    #[allow(clippy::too_many_arguments)]
+    fn render_open_call(
+        &mut self,
+        bind_pattern: Option<&Pattern>,
+        oracle_name: &str,
+        args: &[Expression],
+        span: SourceSpan,
+        caller: &Frame,
+        depth: usize,
+        indent: usize,
+    ) -> Result<InlStmt, InlineError> {
+        let ty = self
+            .comp
+            .pkgs
+            .iter()
+            .find(|inst| inst.name == caller.pkg_inst_name)
+            .and_then(|inst| {
+                inst.pkg
+                    .imports
+                    .iter()
+                    .find(|(sig, _)| sig.name == oracle_name)
+            })
+            .map(|(sig, _)| sig.ty.clone())
+            .ok_or_else(|| InlineError::UnresolvedEdge {
+                oracle: oracle_name.to_string(),
+                pkg_inst: caller.pkg_inst_name.clone(),
+            })?;
+        let args_txt = args
+            .iter()
+            .map(|a| self.expr(a))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let call = match bind_pattern {
+            Some(p) => format!("{} <- invoke {oracle_name}({args_txt})", self.pattern(p)),
+            None => format!("invoke {oracle_name}({args_txt})"),
+        };
+        let content = format!("{call}      // {OPEN_CALL_MARK}");
+        let label = self.emit(indent, &content);
+        self.record_site(label, SiteKind::Call, &content, span, caller, depth);
+        Ok(InlStmt::OpenCall {
+            label,
+            bind: bind_pattern.map(|p| self.place_from_pattern(p, caller)),
+            ty,
         })
     }
 

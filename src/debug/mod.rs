@@ -22,6 +22,7 @@ pub mod lockstep_fingerprint;
 pub mod lockstep_report;
 pub mod lockstep_run;
 pub mod lockstep_viewer;
+pub mod package_run;
 pub mod pkg_run;
 pub mod progress;
 pub mod render;

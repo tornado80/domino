@@ -60,6 +60,23 @@ pub fn game_run_dir(root: &Path, composition: &str, oracle: &str, claim: Option<
         .join(claim_dir(claim, false))
 }
 
+/// The directory under the debug root that holds the runs of `domino debug --package`
+/// (story 33). As [`GAME_DIR`], it cannot clash with a theorem name.
+pub const PACKAGE_DIR: &str = "!package!";
+
+/// The directory of the package-invariant runs of package `package`: `<root>/!package!/<P>/`.
+pub fn package_dir(root: &Path, package: &str) -> PathBuf {
+    root.join(PACKAGE_DIR).join(package)
+}
+
+/// The directory of one run of `domino debug --package`:
+/// `<root>/!package!/<P>/<O>/<claim-dir>/`, as [`game_run_dir`].
+pub fn package_run_dir(root: &Path, package: &str, oracle: &str, claim: Option<&str>) -> PathBuf {
+    package_dir(root, package)
+        .join(oracle)
+        .join(claim_dir(claim, false))
+}
+
 /// The directory of one Domino-listing run: `<root>/<theorem>/<left>-<right>/<oracle>/<claim>/`.
 pub fn run_dir(root: &Path, target: &Target, claim_label: &str) -> PathBuf {
     proofstep_dir(root, &target.theorem, &target.left, &target.right)
@@ -159,6 +176,19 @@ mod tests {
         assert_eq!(
             game_run_dir(root, "S", "O", Some("main")),
             Path::new("/x/!game!/S/O/main")
+        );
+    }
+
+    #[test]
+    fn a_package_run_directory_is_below_the_package_directory() {
+        let root = Path::new("/x");
+        assert_eq!(
+            package_run_dir(root, "Ctr", "Bad", None),
+            Path::new("/x/!package!/Ctr/Bad/!all-claims!")
+        );
+        assert_eq!(
+            package_run_dir(root, "Ctr", "Bad", Some("nonneg")),
+            Path::new("/x/!package!/Ctr/Bad/nonneg")
         );
     }
 

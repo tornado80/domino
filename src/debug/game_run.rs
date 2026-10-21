@@ -182,6 +182,11 @@ mod tests {
         let run = game_run(&project_in("testdata/debug/se25"), None, root.path());
         assert_eq!(run.meta.listing, "domino");
         assert_eq!(run.meta.subject, "game invariants of S");
+        // every `invoke` of a composition has an edge: no open call (story 33)
+        assert!(!run
+            .meta
+            .left_listing
+            .contains(crate::debug::ir::OPEN_CALL_MARK));
         assert_eq!(run.outcome.tree.nodes[0].kind, NodeKind::Split);
         assert_eq!(run.outcome.pairs.len(), 4);
         // the two terminals with x < 0 fail `main`, the other two verify

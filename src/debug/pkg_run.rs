@@ -28,12 +28,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
+use crate::debug::claims::ClaimQuery;
 use crate::debug::driver::{ClaimInfo, DebugError};
-use crate::debug::ir::InlinedOracle;
+use crate::debug::ir::{inline_oracle, InlinedOracle};
 use crate::debug::lockstep_fingerprint::Fingerprint;
 use crate::debug::lockstep_run::{ListingKind, LockstepDebugOptions, LockstepRun};
 use crate::debug::progress::DebugObserver;
 use crate::debug::side_run::{execute_one_sided, OneSidedInputs, StateOwner};
+use crate::invariant_claim::select_exact;
 use crate::package::Package;
 use crate::package_invariant::PackageInvariantContext;
 use crate::project::Project;
@@ -78,8 +80,7 @@ pub fn pkg_listing<P: Project>(
     package: &str,
     oracle: &str,
 ) -> Result<InlinedOracle, DebugError> {
-    let pkg = package_of(project, package)?;
-    let ctx = PackageInvariantContext::new(pkg, project).map_err(Box::new)?;
+    let ctx = pkg_context(project, package)?;
     listing_of(&ctx.open_theorem(), oracle)
 }
 
@@ -126,32 +127,114 @@ where
             theorem: theorem_name.to_string(),
         });
     }
-    let pkg = package_of(project, package)?;
-    let ctx = PackageInvariantContext::new(pkg, project).map_err(Box::new)?;
-    let oracles = ctx.oracle_names();
-    if !oracles.iter().any(|o| o == oracle) {
-        return Err(DebugError::PackageInvariant(Box::new(
-            crate::package_invariant::error::Error::UnknownOracle {
-                pkg_name: package.to_string(),
-                oracle_name: oracle.to_string(),
-                known_oracle_names: oracles,
-            },
-        )));
-    }
+    let ctx = pkg_context(project, package)?;
+    check_oracle(&ctx, package, oracle)?;
+    execute_pkg(
+        PkgRun {
+            ctx: &ctx,
+            theorem: theorem_name.to_string(),
+            package,
+            oracle,
+            listing: ListingKind::EasyCrypt,
+            claim: None,
+        },
+        opts,
+        backend,
+        out,
+        observer,
+        stop,
+        started,
+    )
+}
 
+/// The package context of `package` for a run: [`DebugError::PackageInvariant`] with
+/// `UnknownPackage`, `NoInvariant` or `OpenCallInLoop` when there is no run to make.
+pub(crate) fn pkg_context<'p, P: Project>(
+    project: &'p P,
+    package: &str,
+) -> Result<PackageInvariantContext<'p>, DebugError> {
+    let pkg = package_of(project, package)?;
+    Ok(PackageInvariantContext::new(pkg, project).map_err(Box::new)?)
+}
+
+/// [`DebugError::PackageInvariant`] with `UnknownOracle` when `package` has no oracle `oracle`.
+pub(crate) fn check_oracle(
+    ctx: &PackageInvariantContext<'_>,
+    package: &str,
+    oracle: &str,
+) -> Result<(), DebugError> {
+    let oracles = ctx.oracle_names();
+    if oracles.iter().any(|o| o == oracle) {
+        return Ok(());
+    }
+    Err(DebugError::PackageInvariant(Box::new(
+        crate::package_invariant::error::Error::UnknownOracle {
+            pkg_name: package.to_string(),
+            oracle_name: oracle.to_string(),
+            known_oracle_names: oracles,
+        },
+    )))
+}
+
+/// One package tree: what the EasyCrypt package tree (story 29) and `domino debug --package`
+/// (story 33) give to [`execute_pkg`].
+pub(crate) struct PkgRun<'r> {
+    pub ctx: &'r PackageInvariantContext<'r>,
+    /// The theorem name in the result record.
+    pub theorem: String,
+    pub package: &'r str,
+    /// An oracle of `package` ([`check_oracle`]).
+    pub oracle: &'r str,
+    /// The listing that the engine walks. Only the inlined oracle depends on it.
+    pub listing: ListingKind,
+    /// The declared name of the one package invariant to check; `None` for all.
+    pub claim: Option<&'r str>,
+}
+
+/// Run one-sided execution of `run.oracle` of the package alone, with its import calls open,
+/// on `run.listing`, and write its artifacts and result record into `out`. The base frame and
+/// the fingerprint do not depend on the listing or on the claim.
+///
+/// Errors: [`DebugError::NoInvariantMatches`] when no package invariant has the name
+/// `run.claim` (its help lists the package invariants); it comes before any solver work.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn execute_pkg<B: SmtSolverBackend>(
+    run: PkgRun<'_>,
+    opts: &LockstepDebugOptions,
+    backend: &B,
+    out: PathBuf,
+    observer: &mut dyn DebugObserver,
+    stop: Option<&AtomicBool>,
+    started: Instant,
+) -> Result<LockstepRun, DebugError> {
+    let PkgRun {
+        ctx,
+        theorem,
+        package,
+        oracle,
+        listing,
+        claim,
+    } = run;
+    let claims = select_exact(ctx.invariant_claims(), claim, package)?;
+    let queries: Vec<ClaimQuery> = ctx
+        .tree_claim_queries(oracle)
+        .into_iter()
+        .filter(|q| claims.iter().any(|c| c.name() == q.name))
+        .collect();
     let open = ctx.open_theorem();
     let (theorem_dbg, auxs_dbg) = DebugTransform.transform_theorem(&open)?;
-    let inlined = listing_of(&open, oracle)?;
-    let claims = ctx.invariant_claims();
-    let queries = ctx.tree_claim_queries(oracle);
-    let fingerprint = fingerprint_of(&ctx, package, &theorem_dbg, &inlined);
+    let inlined = match listing {
+        ListingKind::EasyCrypt => listing_of(&open, oracle)?,
+        ListingKind::Domino => inline_oracle(&theorem_dbg.instances[0], oracle)?,
+    };
+    let fingerprint = fingerprint_of(ctx, package, &theorem_dbg, &inlined);
 
     execute_one_sided(
         OneSidedInputs {
-            theorem: theorem_name.to_string(),
+            theorem,
             owner: StateOwner::Package(package.to_string()),
-            listing: ListingKind::EasyCrypt,
-            claim: None,
+            listing,
+            claim: claim.map(str::to_string),
             oracle,
             inlined: &inlined,
             game_inst: &theorem_dbg.instances[0],
@@ -185,8 +268,7 @@ pub fn pkg_fingerprint<P: Project>(
     package: &str,
     oracle: &str,
 ) -> Result<Fingerprint, DebugError> {
-    let pkg = package_of(project, package)?;
-    let ctx = PackageInvariantContext::new(pkg, project).map_err(Box::new)?;
+    let ctx = pkg_context(project, package)?;
     let open = ctx.open_theorem();
     let (theorem_dbg, _) = DebugTransform.transform_theorem(&open)?;
     let inlined = listing_of(&open, oracle)?;

@@ -339,13 +339,7 @@ fn stage_line(mode: ProgressMode, line: &str) {
 
 #[cfg(feature = "cvc5-lib")]
 fn debug(d: &Debug) -> Result<(), Error> {
-    use sspverif::debug::claims::ClaimSet;
-    use sspverif::debug::driver::{run_debug_command, DebugError, DebugOptions};
-    use sspverif::debug::index::{self, Level};
-    use sspverif::debug::layout::{self, DOMINO_DEBUG_DIR};
-    use sspverif::debug::lockstep_report::render_summary as render_lockstep_summary;
-    use sspverif::debug::lockstep_run::{run_lockstep_domino, LockstepDebugOptions};
-    use sspverif::debug::sweep::{self, SweepEntry};
+    use sspverif::debug::layout::DOMINO_DEBUG_DIR;
 
     if d.proofstep.is_some() && d.proof.is_none() {
         return Err(IncompatibleArguments.into());
@@ -366,10 +360,27 @@ fn debug(d: &Debug) -> Result<(), Error> {
     if let Some(composition) = &d.game {
         return debug_game(d, &project, &root, composition);
     }
+    if let Some(package) = &d.package {
+        return debug_package(d, &project, &root, package);
+    }
+    debug_proofsteps(d, &project, &root)
+}
+
+/// The two-sided runs of `domino debug`: each equivalence proofstep oracle that the filters
+/// select, one after another; then the failures and the indexes.
+#[cfg(feature = "cvc5-lib")]
+fn debug_proofsteps<P: project::Project>(
+    d: &Debug,
+    project: &P,
+    root: &std::path::Path,
+) -> Result<(), Error> {
+    use sspverif::debug::claims::ClaimSet;
+    use sspverif::debug::driver::DebugError;
+    use sspverif::debug::sweep::{self, SweepEntry};
 
     // Every filter is optional: omitted means all, given means only that (as in `prove`).
     let plan = sweep::plan(
-        &project,
+        project,
         d.proof.as_deref(),
         d.proofstep,
         d.oracle.as_deref(),
@@ -381,32 +392,10 @@ fn debug(d: &Debug) -> Result<(), Error> {
         eprintln!("debug: the project has no equivalence proofstep to debug");
         return Ok(());
     }
-    let claim_set = ClaimSet::of(d.claim_set == ClaimSetArg::Core, d.claim.as_deref());
-    let claim_label = claim_set.dir();
     // One oracle: today's concise report on stdout. Several: one line per oracle as it
     // finishes, then the failures of the whole project.
     let single = plan.targets.len() == 1;
-
-    let smt_out = smt_out_of(d.smt);
-    let opts = DebugOptions {
-        check_left: !d.no_check_left,
-        check_right: !d.no_check_right,
-        timeout_ms: d.timeout,
-        max_paths: d.max_paths,
-        smt_out,
-        transcript: d.transcript,
-        first_failure_per_claim: d.first_failure_per_claim,
-    };
-    let lockstep_opts = LockstepDebugOptions {
-        timeout_ms: d.timeout,
-        max_paths: d.max_paths,
-        smt_out,
-        transcript: d.transcript,
-    };
-
-    let backend = sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.timeout);
-
-    let make_observer = || debug_observer(d.progress);
+    let claim_set = ClaimSet::of(d.claim_set == ClaimSetArg::Core, d.claim.as_deref());
 
     // Best-effort Ctrl-C handling. The first press sets a flag the driver checks
     // at every fork (inside branch-pruning sweeps too) and at every pair
@@ -419,67 +408,28 @@ fn debug(d: &Debug) -> Result<(), Error> {
         "debug: interrupt — finishing the current solver query, then writing partial results \
          (Ctrl-C again to abort now)",
     );
+    let runner = TargetRunner {
+        d,
+        project,
+        root,
+        claim_label: claim_set.dir(),
+        claim_set,
+        backend: sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.timeout),
+        stop: &stop,
+        single,
+    };
 
     let mut entries: Vec<SweepEntry> = Vec::new();
     let mut claim_not_found: Option<DebugError> = None;
     for target in &plan.targets {
-        let mut observer = make_observer();
-        let entry = if d.lockstep {
-            match run_lockstep_domino(
-                &project,
-                &target.theorem,
-                target.proofstep,
-                &target.oracle,
-                claim_set.clone(),
-                &lockstep_opts,
-                &backend,
-                Some(layout::run_dir(&root, target, &claim_label)),
-                observer.as_mut(),
-                Some(&stop),
-            ) {
-                Ok(run) => {
-                    if single {
-                        print!("{}", render_lockstep_summary(&run));
-                    }
-                    SweepEntry::from_lockstep(target.clone(), &run)
-                }
-                Err(e @ DebugError::ClaimNotFound { .. }) if !single => {
-                    claim_not_found = Some(e);
-                    continue;
-                }
-                Err(e) => return Err(e.into()),
+        let entry = match runner.run(target) {
+            Ok(entry) => entry,
+            Err(e @ DebugError::ClaimNotFound { .. }) if !single => {
+                claim_not_found = Some(e);
+                continue;
             }
-        } else {
-            match run_debug_command(
-                &project,
-                &target.theorem,
-                target.proofstep,
-                &target.oracle,
-                claim_set.clone(),
-                &opts,
-                &backend,
-                Some(layout::run_dir(&root, target, &claim_label)),
-                observer.as_mut(),
-                Some(&stop),
-            ) {
-                Ok(run) => {
-                    // Story 17: the concise report goes to stdout; the full per-left-path
-                    // tree is in the summary file (its `artifacts` block points at that and
-                    // every other file). The `Finished` event already cleared the progress
-                    // bar inside `run_debug_command`, so this never lands in a redrawn line.
-                    if single {
-                        print!("{}", sspverif::debug::report::render_summary(&run));
-                    }
-                    SweepEntry::from_sequential(target.clone(), &run)
-                }
-                Err(e @ DebugError::ClaimNotFound { .. }) if !single => {
-                    claim_not_found = Some(e);
-                    continue;
-                }
-                Err(e) => return Err(e.into()),
-            }
+            Err(e) => return Err(e.into()),
         };
-        drop(observer);
         if !single {
             println!("{}", entry.one_line());
         }
@@ -493,44 +443,163 @@ fn debug(d: &Debug) -> Result<(), Error> {
     // `--claim` names a claim only some oracles have: those that lack it are skipped, unless
     // none has it.
     if entries.is_empty() {
-        if let Some(e) = claim_not_found {
-            return Err(e.into());
-        }
+        return match claim_not_found {
+            Some(e) => Err(e.into()),
+            None => Ok(()),
+        };
     }
+    finish_proofsteps(d, root, &plan.targets[0], &entries, single)
+}
 
-    if !single && !entries.is_empty() {
-        let table = sweep::failure_table(&entries);
+/// After the two-sided runs (`entries`, not empty): the failures of the whole project (when
+/// there are several oracles) and the indexes. Exits non-zero when a check fails or a run
+/// stops early.
+#[cfg(feature = "cvc5-lib")]
+fn finish_proofsteps(
+    d: &Debug,
+    root: &std::path::Path,
+    first: &sspverif::debug::sweep::Target,
+    entries: &[sspverif::debug::sweep::SweepEntry],
+    single: bool,
+) -> Result<(), Error> {
+    if !single {
+        let table = sspverif::debug::sweep::failure_table(entries);
         if !table.is_empty() {
             println!("\n{table}");
         }
     }
-    if !entries.is_empty() {
-        let first = &plan.targets[0];
-        let level = Level::of_filters(
-            d.proof.as_deref(),
-            d.proofstep
-                .map(|_| (first.left.as_str(), first.right.as_str())),
-        );
-        // A run of one oracle writes no index of its own; it keeps the ones above it current.
-        let written = if d.oracle.is_some() && d.proofstep.is_some() {
-            index::update_indexes(&root, &level)
-        } else {
-            index::refresh_indexes(&root, &level)
-        }
-        .map_err(DebugIo)?;
-        if !written.is_empty() {
-            println!();
-        }
-        for w in written {
-            let updated = if w.updated { "      (updated)" } else { "" };
-            println!("index    {}{updated}", w.path.display());
-        }
-    }
-
+    write_proofstep_indexes(d, root, first)?;
     if entries.iter().any(|entry| !entry.ok) {
         return Err(DebugNotVerified.into());
     }
     Ok(())
+}
+
+/// What each two-sided run of [`debug_proofsteps`] shares.
+#[cfg(feature = "cvc5-lib")]
+struct TargetRunner<'r, P> {
+    d: &'r Debug,
+    project: &'r P,
+    root: &'r std::path::Path,
+    claim_set: sspverif::debug::claims::ClaimSet,
+    claim_label: String,
+    backend: sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend,
+    stop: &'r std::sync::atomic::AtomicBool,
+    /// One oracle only: the concise report of the run goes to stdout.
+    single: bool,
+}
+
+#[cfg(feature = "cvc5-lib")]
+impl<P: project::Project> TargetRunner<'_, P> {
+    /// Run `target` with lockstep execution or with the sequential driver, as `--lockstep`
+    /// selects, into its run directory.
+    fn run(
+        &self,
+        target: &sspverif::debug::sweep::Target,
+    ) -> Result<sspverif::debug::sweep::SweepEntry, sspverif::debug::driver::DebugError> {
+        use sspverif::debug::driver::{run_debug_command, DebugOptions};
+        use sspverif::debug::layout;
+        use sspverif::debug::lockstep_report::render_summary as render_lockstep_summary;
+        use sspverif::debug::lockstep_run::{run_lockstep_domino, LockstepDebugOptions};
+        use sspverif::debug::sweep::SweepEntry;
+
+        let d = self.d;
+        let smt_out = smt_out_of(d.smt);
+        let out = Some(layout::run_dir(self.root, target, &self.claim_label));
+        let mut observer = debug_observer(d.progress);
+        if d.lockstep {
+            let opts = LockstepDebugOptions {
+                timeout_ms: d.timeout,
+                max_paths: d.max_paths,
+                smt_out,
+                transcript: d.transcript,
+            };
+            let run = run_lockstep_domino(
+                self.project,
+                &target.theorem,
+                target.proofstep,
+                &target.oracle,
+                self.claim_set.clone(),
+                &opts,
+                &self.backend,
+                out,
+                observer.as_mut(),
+                Some(self.stop),
+            )?;
+            drop(observer);
+            if self.single {
+                print!("{}", render_lockstep_summary(&run));
+            }
+            return Ok(SweepEntry::from_lockstep(target.clone(), &run));
+        }
+        let opts = DebugOptions {
+            check_left: !d.no_check_left,
+            check_right: !d.no_check_right,
+            timeout_ms: d.timeout,
+            max_paths: d.max_paths,
+            smt_out,
+            transcript: d.transcript,
+            first_failure_per_claim: d.first_failure_per_claim,
+        };
+        let run = run_debug_command(
+            self.project,
+            &target.theorem,
+            target.proofstep,
+            &target.oracle,
+            self.claim_set.clone(),
+            &opts,
+            &self.backend,
+            out,
+            observer.as_mut(),
+            Some(self.stop),
+        )?;
+        drop(observer);
+        // Story 17: the concise report goes to stdout; the full per-left-path tree is in the
+        // summary file (its `artifacts` block points at that and every other file). The
+        // `Finished` event already cleared the progress bar inside `run_debug_command`, so
+        // this never lands in a redrawn line.
+        if self.single {
+            print!("{}", sspverif::debug::report::render_summary(&run));
+        }
+        Ok(SweepEntry::from_sequential(target.clone(), &run))
+    }
+}
+
+/// Write the index of the level that the filters select (`first` is the first target), each
+/// index below it, and each index above it that exists. A run of one oracle of one proofstep
+/// writes no index of its own; it keeps the ones above it current.
+#[cfg(feature = "cvc5-lib")]
+fn write_proofstep_indexes(
+    d: &Debug,
+    root: &std::path::Path,
+    first: &sspverif::debug::sweep::Target,
+) -> Result<(), Error> {
+    use sspverif::debug::index::{self, Level};
+
+    let level = Level::of_filters(
+        d.proof.as_deref(),
+        d.proofstep
+            .map(|_| (first.left.as_str(), first.right.as_str())),
+    );
+    let written = if d.oracle.is_some() && d.proofstep.is_some() {
+        index::update_indexes(root, &level)
+    } else {
+        index::refresh_indexes(root, &level)
+    }
+    .map_err(DebugIo)?;
+    if !written.is_empty() {
+        println!();
+    }
+    print_written(written);
+    Ok(())
+}
+
+#[cfg(feature = "cvc5-lib")]
+fn print_written(written: Vec<sspverif::debug::index::WrittenIndex>) {
+    for w in written {
+        let updated = if w.updated { "      (updated)" } else { "" };
+        println!("index    {}{updated}", w.path.display());
+    }
 }
 
 #[cfg(feature = "cvc5-lib")]
@@ -545,8 +614,7 @@ fn smt_out_of(arg: SmtOutArg) -> sspverif::debug::smtout::SmtOut {
 }
 
 /// `domino debug --game C` (symbolic-execution story 32): one-sided execution of each oracle of
-/// `C` (or of `--oracle`) on the Domino listing, one after another, into `<root>/!game!/<C>/`.
-/// Exits non-zero when a check fails or a run stops early.
+/// `C` (or of `--oracle`) on the Domino listing, into `<root>/!game!/<C>/`.
 #[cfg(feature = "cvc5-lib")]
 fn debug_game<P: project::Project>(
     d: &Debug,
@@ -555,12 +623,98 @@ fn debug_game<P: project::Project>(
     composition: &str,
 ) -> Result<(), Error> {
     use sspverif::debug::game_run::{assumption_line, game_oracles, run_game_command};
-    use sspverif::debug::index::{self, Level};
-    use sspverif::debug::lockstep_run::LockstepDebugOptions;
-    use sspverif::debug::side_run::{one_sided_entry, StateOwner};
-    use sspverif::debug::sweep;
+    use sspverif::debug::index::Level;
+    use sspverif::debug::side_run::StateOwner;
 
     let oracles = game_oracles(project, composition, d.oracle.as_deref())?;
+    if let Some(line) = assumption_line(project, composition) {
+        println!("{line}");
+    }
+    let level = Level::Game {
+        composition: composition.to_string(),
+    };
+    let owner = StateOwner::Composition(composition.to_string());
+    debug_free(d, root, &owner, &oracles, &level, |run| {
+        run_game_command(
+            project,
+            composition,
+            run.oracle,
+            d.claim.as_deref(),
+            run.opts,
+            run.backend,
+            root,
+            run.observer,
+            Some(run.stop),
+        )
+    })
+}
+
+/// `domino debug --package P` (symbolic-execution story 33): one-sided execution of each oracle
+/// of `P` (or of `--oracle`) on the Domino listing, with each import call an open call, into
+/// `<root>/!package!/<P>/`.
+#[cfg(feature = "cvc5-lib")]
+fn debug_package<P: project::Project>(
+    d: &Debug,
+    project: &P,
+    root: &std::path::Path,
+    package: &str,
+) -> Result<(), Error> {
+    use sspverif::debug::index::Level;
+    use sspverif::debug::package_run::{package_oracles, run_package_command};
+    use sspverif::debug::side_run::StateOwner;
+
+    let oracles = package_oracles(project, package, d.oracle.as_deref())?;
+    let level = Level::Package {
+        package: package.to_string(),
+    };
+    let owner = StateOwner::Package(package.to_string());
+    debug_free(d, root, &owner, &oracles, &level, |run| {
+        run_package_command(
+            project,
+            package,
+            run.oracle,
+            d.claim.as_deref(),
+            run.opts,
+            run.backend,
+            root,
+            run.observer,
+            Some(run.stop),
+        )
+    })
+}
+
+/// What [`debug_free`] gives to the run of one oracle.
+#[cfg(feature = "cvc5-lib")]
+struct FreeOracle<'r> {
+    oracle: &'r str,
+    opts: &'r sspverif::debug::lockstep_run::LockstepDebugOptions,
+    backend: &'r sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend,
+    observer: &'r mut dyn sspverif::debug::progress::DebugObserver,
+    stop: &'r std::sync::atomic::AtomicBool,
+}
+
+/// The runs with no theorem (`--game`, `--package`): `run` for each of `oracles`, one after
+/// another, with one line for each; then the index of `level`. With `--oracle`, it updates
+/// only the indexes that exist. Exits non-zero when a check fails or a run stops early.
+#[cfg(feature = "cvc5-lib")]
+fn debug_free(
+    d: &Debug,
+    root: &std::path::Path,
+    owner: &sspverif::debug::side_run::StateOwner,
+    oracles: &[String],
+    level: &sspverif::debug::index::Level,
+    mut run: impl FnMut(
+        FreeOracle<'_>,
+    ) -> Result<
+        sspverif::debug::lockstep_run::LockstepRun,
+        sspverif::debug::driver::DebugError,
+    >,
+) -> Result<(), Error> {
+    use sspverif::debug::index;
+    use sspverif::debug::lockstep_run::LockstepDebugOptions;
+    use sspverif::debug::side_run::one_sided_entry;
+    use sspverif::debug::sweep;
+
     let opts = LockstepDebugOptions {
         timeout_ms: d.timeout,
         max_paths: d.max_paths,
@@ -572,26 +726,18 @@ fn debug_game<P: project::Project>(
         "debug: interrupt — finishing the current solver query, then writing partial results \
          (Ctrl-C again to abort now)",
     );
-    if let Some(line) = assumption_line(project, composition) {
-        println!("{line}");
-    }
-    let owner = StateOwner::Composition(composition.to_string());
     let mut entries = Vec::new();
-    for oracle in &oracles {
+    for oracle in oracles {
         let mut observer = debug_observer(d.progress);
-        let run = run_game_command(
-            project,
-            composition,
+        let result = run(FreeOracle {
             oracle,
-            d.claim.as_deref(),
-            &opts,
-            &backend,
-            root,
-            observer.as_mut(),
-            Some(&stop),
-        )?;
+            opts: &opts,
+            backend: &backend,
+            observer: observer.as_mut(),
+            stop: &stop,
+        })?;
         drop(observer);
-        let entry = one_sided_entry(&run, &owner);
+        let entry = one_sided_entry(&result, owner);
         println!("{}", entry.one_line());
         let interrupted = sweep::is_interrupted(&entry);
         entries.push(entry);
@@ -600,19 +746,13 @@ fn debug_game<P: project::Project>(
         }
     }
 
-    let level = Level::Game {
-        composition: composition.to_string(),
-    };
     let written = if d.oracle.is_some() {
-        index::update_indexes(root, &level)
+        index::update_indexes(root, level)
     } else {
-        index::refresh_indexes(root, &level)
+        index::refresh_indexes(root, level)
     }
     .map_err(DebugIo)?;
-    for w in written {
-        let updated = if w.updated { "      (updated)" } else { "" };
-        println!("index    {}{updated}", w.path.display());
-    }
+    print_written(written);
     if entries.iter().any(|entry| !entry.ok) {
         return Err(DebugNotVerified.into());
     }

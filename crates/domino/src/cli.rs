@@ -376,6 +376,20 @@ pub(crate) struct Debug {
         "first_failure_per_claim",
     ])]
     pub(crate) game: Option<String>,
+    /// One-sided execution of each oracle of this package on the Domino listing, with its
+    /// parameters free and each import call an open call. Needs no theorem. The start check is
+    /// `domino prove --package P --invariant-start`.
+    #[clap(long, conflicts_with_all = [
+        "game",
+        "proof",
+        "proofstep",
+        "claim_set",
+        "lockstep",
+        "no_check_left",
+        "no_check_right",
+        "first_failure_per_claim",
+    ])]
+    pub(crate) package: Option<String>,
     /// Index (starting at 0) of the equivalence proofstep, as printed by `domino proofsteps`.
     /// Without it, every equivalence proofstep is debugged; reductions and conjectures are
     /// skipped with a note. Needs `--proof`.
@@ -387,7 +401,8 @@ pub(crate) struct Debug {
     /// Claim to debug. Without it, the oracle's whole obligation set (what `domino prove`
     /// discharges) is checked on one exploration: an all-claim run. With it, that claim's
     /// dependencies stay in the base frame and prune, as before. With `--game C`: the exact
-    /// declared name of one game invariant of `C`.
+    /// declared name of one game invariant of `C`; with `--package P`, of one package invariant
+    /// of `P`.
     #[clap(long)]
     pub(crate) claim: Option<String>,
     /// Which claims to check. `obligations` (the default): every claim of the proofstep, each
