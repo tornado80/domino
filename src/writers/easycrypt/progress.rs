@@ -593,6 +593,7 @@ impl ProgressBoard for PlainProgressBoard {
         Box::new(PlainJob(Arc::new(PlainCounts {
             stem: stem.to_string(),
             total: oracles,
+            made: AtomicUsize::new(0),
             done: AtomicUsize::new(0),
         })))
     }
@@ -603,12 +604,15 @@ struct PlainJob(Arc<PlainCounts>);
 struct PlainCounts {
     stem: String,
     total: usize,
+    /// The rows made: more than `total` when the job checks fixed lemmas (story 84).
+    made: AtomicUsize,
     /// The oracle rows that were dropped.
     done: AtomicUsize,
 }
 
 impl JobProgress for PlainJob {
     fn oracle(&self, name: &str) -> Box<dyn ExportObserver> {
+        self.0.made.fetch_add(1, Ordering::SeqCst);
         Box::new(PlainRow {
             key: format!("{}/{name}", self.0.stem),
             job: self.0.clone(),
@@ -636,7 +640,8 @@ impl ExportObserver for PlainRow {
 impl Drop for PlainRow {
     fn drop(&mut self) {
         let done = self.job.done.fetch_add(1, Ordering::SeqCst) + 1;
-        write_stderr_line(&job_line(&self.job.stem, done, self.job.total));
+        let total = self.job.total.max(self.job.made.load(Ordering::SeqCst));
+        write_stderr_line(&job_line(&self.job.stem, done, total));
     }
 }
 
@@ -864,6 +869,10 @@ impl BarJobState {
 impl JobProgress for BarJob {
     fn oracle(&self, name: &str) -> Box<dyn ExportObserver> {
         let (id, bar) = self.0.add_row();
+        // the rows of the fixed lemmas come after the oracles (story 84): the bar counts them
+        if id as u64 >= self.0.header.length().unwrap_or(0) {
+            self.0.header.inc_length(1);
+        }
         self.0.show_counts();
         Box::new(BarRow {
             job: self.0.clone(),
@@ -902,12 +911,14 @@ struct BarRow {
 }
 
 impl BarRow {
+    /// The proving line of the current node; without a node (a fixed lemma, story 84) the
+    /// row keeps its text and only its timer starts again.
     fn show_proving(&self, sentence: &str) {
         if let Some((node, total)) = &self.at {
             self.bar
                 .set_message(proving_message(&self.oracle, node, *total, sentence));
-            self.bar.reset_elapsed();
         }
+        self.bar.reset_elapsed();
     }
 
     /// `done, 2 admits`, or `interrupted at N7` when the row ends on a node whose goal is open.
@@ -943,6 +954,11 @@ impl ExportObserver for BarRow {
                 self.show_proving("");
             }
             ExportEvent::SentenceSent { sentence } => self.show_proving(sentence),
+            // a fixed lemma's step (story 84): `check file`, `attempt 2/2`
+            ExportEvent::ItemStarted { name, .. } => {
+                self.bar.set_message(format!("{}  {name}", self.oracle));
+                self.bar.reset_elapsed();
+            }
             ExportEvent::GoalFinished { admitted, .. } => {
                 self.node_open = false;
                 self.admits += usize::from(*admitted);
@@ -1403,6 +1419,51 @@ pub(crate) mod tests {
             raw.lines().nth(1).unwrap().trim_end().ends_with('s'),
             "a timer: {raw}"
         );
+    }
+
+    /// Story 84: after the oracles, a frame lemma's row shows `check file` under the job's
+    /// header, and the start lemma's row shows its attempt; the bar counts both rows.
+    #[test]
+    fn fixed_lemma_rows_show_their_step_under_the_header() {
+        let _lock = screen_lock();
+        let (board, term) = board_on_screen();
+        let job = board.job("PkgInv_Ctr", 1);
+        drop(job.oracle("Peek"));
+        let mut frame = job.oracle("Frame_Ctr_Peek");
+        frame.on_event(&ExportEvent::ItemStarted {
+            phase: ExportPhase::Tactics,
+            name: "check file",
+            index: 1,
+        });
+        frame.on_event(&ExportEvent::SentenceSent {
+            sentence: "require import AllCore.",
+        });
+        let mut init = job.oracle("init");
+        init.on_event(&ExportEvent::ItemStarted {
+            phase: ExportPhase::Tactics,
+            name: "attempt 2/2",
+            index: 2,
+        });
+        let lines = screen(&board, &term);
+        let rows: Vec<&str> = lines
+            .iter()
+            .map(String::as_str)
+            .filter(|l| !l.contains("done,") || l.starts_with("PkgInv_Ctr"))
+            .collect();
+        let header = rows
+            .iter()
+            .position(|l| l.starts_with("PkgInv_Ctr tactics"))
+            .unwrap();
+        assert!(
+            rows[header].ends_with("1/3  done 1, running 2"),
+            "{lines:#?}"
+        );
+        assert_eq!(
+            rows[header + 1],
+            "  Frame_Ctr_Peek  check file",
+            "{lines:#?}"
+        );
+        assert_eq!(rows[header + 2], "  init  attempt 2/2", "{lines:#?}");
     }
 
     /// Story 83: the row of an oracle in lockstep shows the node and the pair tally, and the same

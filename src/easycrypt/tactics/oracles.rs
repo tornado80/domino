@@ -66,7 +66,7 @@ pub(super) struct EquivalenceJob<'a, P, B> {
 
 impl<P, B> EquivalenceJob<'_, P, B> {
     /// The glue's name without `.ec`: `Eq_<L>_<R>`.
-    fn stem(&self) -> &str {
+    pub(super) fn stem(&self) -> &str {
         self.eq.proof_file.trim_end_matches(".ec")
     }
 
@@ -166,18 +166,27 @@ where
             s.spawn(|| work(job, &setup, &board, &translation, &dir, progress.as_ref()));
         }
     });
+    // the job progress ends after the fixed lemmas, whose rows are under it (story 84)
+    let tactics = finish(
+        job,
+        board.into_inner().unwrap(),
+        fixed.as_ref(),
+        &dir,
+        progress.as_ref(),
+    );
     drop(progress);
-    finish(job, board.into_inner().unwrap(), fixed.as_ref(), &dir).map(Some)
+    tactics.map(Some)
 }
 
 /// Ends the job after its workers: the first error of a worker, else the fixed lemmas (once every
 /// oracle is done and nothing stopped the job), the tactics, and the page and report written
-/// for the last time.
+/// for the last time. The fixed lemmas report their rows to `progress`.
 fn finish<P, B>(
     job: &EquivalenceJob<'_, P, B>,
     mut board: Board,
     fixed: Option<&FixedFiles>,
     dir: &Path,
+    progress: &dyn JobProgress,
 ) -> Result<EquivalenceTactics, TacticsError>
 where
     P: Project + Sync,
@@ -193,7 +202,7 @@ where
     // the lemmas without a tree, once every oracle is done
     if let Some(fixed) = fixed {
         if board.interrupted.is_none() {
-            board.fixed = super::fixed::prove_fixed_lemmas(job, fixed, dir)?;
+            board.fixed = super::fixed::prove_fixed_lemmas(job, fixed, dir, progress)?;
         }
     }
     let tactics = board.tactics(job);

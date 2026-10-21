@@ -43,7 +43,7 @@ Rejected (ADR 0020): a `FixedLemma { file, attempt }` event; no progress for the
 - [ ] Event level (`RecordingBoard`, `FakeEasyCrypt`): a package-invariant job with a frame lemma and
       a start lemma gives a row for each file, with `ItemStarted` and `SentenceSent`; the start lemma
       has one `ItemStarted` for each attempt.
-- [ ] Render level (`InMemoryTerm`): the frame row shows `check file` under the job's header.
+- [x] Render level (`InMemoryTerm`): the frame row shows `check file` under the job's header.
 - [ ] A rerun that skips files already accepted (`37780a22`) makes no row for them.
 
 ## 4. Acceptance criteria

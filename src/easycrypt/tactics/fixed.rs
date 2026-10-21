@@ -28,6 +28,7 @@ use crate::easycrypt::session::{split_sentences, Want};
 use crate::project::Project;
 use crate::writers::easycrypt::invariant::{game_invariant_names, package_invariant_ops};
 use crate::writers::easycrypt::pkginv::INIT;
+use crate::writers::easycrypt::progress::{ExportEvent, ExportObserver, ExportPhase, JobProgress};
 use crate::writers::easycrypt::EcExportError;
 use crate::writers::smt::contexts::game_invariant_claim_name;
 
@@ -126,12 +127,18 @@ impl<'a> FixedFiles<'a> {
 }
 
 /// Checks the files of `fixed`: those whose proof translation wrote, then the start lemma. A
-/// file that is proved already is not checked again. Stops, with what it has, when the run is
-/// asked to stop.
+/// file that is proved already is not checked again and has no row. Stops, with what it has,
+/// when the run is asked to stop.
+///
+/// Each file it checks is a row of `progress` (story 84, ADR 0020 point 6), named by the file
+/// stem without the job's stem (`Frame_Ctr_Peek`, `init`). The row sees `ItemStarted` (`check
+/// file`, or `attempt k/n` for the start lemma) and `SentenceSent` with the first line of the
+/// text before each send, and is dropped when the file is accepted or admitted.
 pub(super) fn prove_fixed_lemmas<P: Project, B>(
     job: &EquivalenceJob<'_, P, B>,
     fixed: &FixedFiles<'_>,
     tmp_dir: &Path,
+    progress: &dyn JobProgress,
 ) -> Result<Vec<FixedLemma>, TacticsError> {
     let mut out = Vec::new();
     for file in fixed.files() {
@@ -140,10 +147,13 @@ pub(super) fn prove_fixed_lemmas<P: Project, B>(
         }
         let admitted = if is_proved(job, file) {
             None
-        } else if fixed.start == Some(file) {
-            check_start(job, fixed.owner, file, tmp_dir)?
         } else {
-            check_written(job, file, tmp_dir)?
+            let mut row = progress.oracle(row_name(job.stem(), file));
+            if fixed.start == Some(file) {
+                check_start(job, fixed.owner, file, tmp_dir, row.as_mut())?
+            } else {
+                check_written(job, file, tmp_dir, row.as_mut())?
+            }
         };
         out.push(FixedLemma {
             file: file.to_string(),
@@ -153,28 +163,36 @@ pub(super) fn prove_fixed_lemmas<P: Project, B>(
     Ok(out)
 }
 
+/// The row name of lemma file `file` in job `stem`: the file stem without `<stem>_`
+/// (`PkgInv_Ctr_init.ec` → `init`, `Frame_Ctr_Peek.ec` → `Frame_Ctr_Peek`).
+fn row_name<'f>(stem: &str, file: &'f str) -> &'f str {
+    let name = file.strip_suffix(".ec").unwrap_or(file);
+    name.strip_prefix(stem)
+        .and_then(|rest| rest.strip_prefix('_'))
+        .unwrap_or(name)
+}
+
 /// Checks the lemma in `file` as translation wrote it; when EasyCrypt refuses it, its proof
 /// becomes `admit.`, and the result says why.
 fn check_written<P: Project, B>(
     job: &EquivalenceJob<'_, P, B>,
     file: &str,
     tmp_dir: &Path,
+    row: &mut dyn ExportObserver,
 ) -> Result<Option<String>, TacticsError> {
     let source = job.exported_file(file)?;
-    Ok(
-        match first_accepted(job, std::iter::once(source.to_string()))? {
-            Ok(text) => {
-                write_atomically(&job.out_dir.join(file), tmp_dir, &(text + CHECKED))?;
-                None
-            }
-            Err(refused) => {
-                write_atomically(&job.out_dir.join(file), tmp_dir, &admitted_proof(source))?;
-                Some(format!(
-                    "the proof translation wrote was refused: {refused}"
-                ))
-            }
-        },
-    )
+    Ok(match first_accepted(job, vec![source.to_string()], row)? {
+        Ok(text) => {
+            write_atomically(&job.out_dir.join(file), tmp_dir, &(text + CHECKED))?;
+            None
+        }
+        Err(refused) => {
+            write_atomically(&job.out_dir.join(file), tmp_dir, &admitted_proof(source))?;
+            Some(format!(
+                "the proof translation wrote was refused: {refused}"
+            ))
+        }
+    })
 }
 
 /// Checks the start lemma in `file` with each of [`start_proofs`]; when none is accepted, it
@@ -184,11 +202,12 @@ fn check_start<P: Project, B>(
     owner: Owner<'_>,
     file: &str,
     tmp_dir: &Path,
+    row: &mut dyn ExportObserver,
 ) -> Result<Option<String>, TacticsError> {
     let source = job.exported_file(file)?;
     let candidates =
         start_proofs(&job.options.smt_hints).map(|proof| with_script(source, INIT, &proof));
-    Ok(match first_accepted(job, candidates.into_iter())? {
+    Ok(match first_accepted(job, candidates.into(), row)? {
         Ok(text) => {
             write_atomically(&job.out_dir.join(file), tmp_dir, &(text + CHECKED))?;
             None
@@ -211,13 +230,17 @@ fn check_start<P: Project, B>(
 }
 
 /// The first of `candidates`, whole lemma files, that a fresh EasyCrypt accepts sentence by
-/// sentence; else the last refusal, as `` `<sentence>`: <message> ``.
+/// sentence; else the last refusal, as `` `<sentence>`: <message> ``. Before each candidate,
+/// `row` sees `ItemStarted` and `SentenceSent` (see [`announce`]).
 fn first_accepted<P, B>(
     job: &EquivalenceJob<'_, P, B>,
-    candidates: impl Iterator<Item = String>,
+    candidates: Vec<String>,
+    row: &mut dyn ExportObserver,
 ) -> Result<Result<String, String>, TacticsError> {
     let mut refused = String::from("no proof was tried");
-    for text in candidates {
+    let total = candidates.len();
+    for (k, text) in candidates.into_iter().enumerate() {
+        announce(row, k + 1, total, &text);
         #[cfg(test)]
         let mut session = spawn_easycrypt(job.out_dir, job.fake.as_ref())?;
         #[cfg(not(test))]
@@ -244,6 +267,25 @@ fn first_accepted<P, B>(
         }
     }
     Ok(Err(refused))
+}
+
+/// Tells `row` that candidate `index` of `total` is sent: `ItemStarted` named `check file` when
+/// there is one candidate, else `attempt <index>/<total>`; then `SentenceSent` with the first
+/// line of `text`, so the row's timer starts again.
+fn announce(row: &mut dyn ExportObserver, index: usize, total: usize, text: &str) {
+    let name = if total == 1 {
+        "check file".to_string()
+    } else {
+        format!("attempt {index}/{total}")
+    };
+    row.on_event(&ExportEvent::ItemStarted {
+        phase: ExportPhase::Tactics,
+        name: &name,
+        index,
+    });
+    row.on_event(&ExportEvent::SentenceSent {
+        sentence: text.lines().next().unwrap_or(""),
+    });
 }
 
 /// `source`, one lemma file, with the lemma's proof `admit.`.
@@ -298,6 +340,36 @@ fn start_claims<P: Project, B>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::writers::easycrypt::progress::tests::Recorder;
+
+    #[test]
+    fn a_fixed_row_is_named_by_the_file_stem_without_the_job_stem() {
+        assert_eq!(row_name("PkgInv_Ctr", "PkgInv_Ctr_init.ec"), "init");
+        assert_eq!(
+            row_name("PkgInv_Ctr", "Frame_Ctr_Peek.ec"),
+            "Frame_Ctr_Peek"
+        );
+    }
+
+    #[test]
+    fn a_frame_file_is_one_check_and_a_start_lemma_one_item_for_each_attempt() {
+        let mut frame = Recorder::default();
+        announce(
+            &mut frame,
+            1,
+            1,
+            "require import AllCore.\nlemma L : true.\n",
+        );
+        let mut start = Recorder::default();
+        announce(&mut start, 1, 2, "a.\n");
+        announce(&mut start, 2, 2, "b.\n");
+        assert_eq!(frame.0.len(), 2);
+        assert!(frame.0[0].contains("check file"), "{:?}", frame.0);
+        assert_eq!(frame.0[1], "sentence require import AllCore.");
+        assert!(start.0[0].contains("attempt 1/2"), "{:?}", start.0);
+        assert!(start.0[2].contains("attempt 2/2"), "{:?}", start.0);
+        assert_eq!(start.0[3], "sentence b.");
+    }
 
     #[test]
     fn an_admitted_proof_keeps_the_section_and_the_statement() {

@@ -5377,6 +5377,76 @@ mod progress_board {
         assert_rows_are_not_silent(&rows);
     }
 
+    /// Story 84: proves the package invariants of `Ctr` once in `out` and returns the rows the
+    /// board recorded.
+    fn pkg_inv_rows(out: &Path) -> BTreeMap<(String, String), Vec<String>> {
+        let dir = PathBuf::from("test-projects/test-package-invariant-imports");
+        let files = DirectoryFiles::load(&dir).unwrap();
+        let project = DirectoryProject::load(dir, &files).unwrap();
+        let theorem = project.get_theorem("Proof").unwrap();
+        let exported = export_theorem(theorem, &project).unwrap();
+        if !out.join("PkgInv_Ctr.ec").exists() {
+            write_files(out, &exported.files).unwrap();
+        }
+        let board = RecordingBoard::default();
+        let options = TacticsOptions {
+            pkg_inv: Some("Ctr".into()),
+            ..TacticsOptions::default()
+        };
+        run_tactics_observed(
+            theorem,
+            &project,
+            &exported,
+            out,
+            &crate::util::smtsolver::process::IncrementalCvc5Backend,
+            &options,
+            &board,
+        )
+        .unwrap();
+        let records = board.0.lock().unwrap().clone();
+        by_row(&records)
+    }
+
+    /// Story 84: each frame file and the start lemma has a row under the job, with
+    /// `ItemStarted` and `SentenceSent`; the start lemma has one item for each attempt. A rerun
+    /// makes rows only for files that are not accepted yet.
+    #[test]
+    fn the_fixed_lemmas_have_rows_and_a_rerun_skips_the_accepted_files() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let out = tempfile::tempdir().unwrap();
+        let rows = pkg_inv_rows(out.path());
+        let key = |o: &str| ("PkgInv_Ctr".to_string(), o.to_string());
+        for frame in ["Frame_Ctr_Step", "Frame_Ctr_Peek", "Frame_Ctr_Get"] {
+            let events = &rows[&key(frame)];
+            assert_eq!(events[0], "item tactics 1 check file", "{frame}: {events:?}");
+            assert!(events[1].starts_with("sentence "), "{frame}: {events:?}");
+            assert_eq!(events.len(), 2, "{frame}: {events:?}");
+        }
+        let init = &rows[&key("init")];
+        let attempts: Vec<&String> = init.iter().filter(|e| e.starts_with("item ")).collect();
+        assert!(!attempts.is_empty(), "{init:?}");
+        for (k, item) in attempts.iter().enumerate() {
+            assert_eq!(**item, format!("item tactics {} attempt {}/2", k + 1, k + 1));
+        }
+        assert_eq!(
+            init.iter().filter(|e| e.starts_with("sentence ")).count(),
+            attempts.len(),
+            "{init:?}"
+        );
+        // a rerun: every file is accepted, so no row
+        assert!(pkg_inv_rows(out.path()).is_empty());
+        // one frame file as translation wrote it: only its row
+        let source = std::fs::read_to_string(out.path().join("Frame_Ctr_Peek.ec")).unwrap();
+        let unchecked = source.trim_end_matches("(* EasyCrypt accepted this file. *)\n");
+        std::fs::write(out.path().join("Frame_Ctr_Peek.ec"), unchecked).unwrap();
+        let rows = pkg_inv_rows(out.path());
+        let keys: Vec<&String> = rows.keys().map(|(_, o)| o).collect();
+        assert_eq!(keys, ["Frame_Ctr_Peek"], "{rows:?}");
+    }
+
     #[test]
     fn each_oracle_has_the_same_events_with_one_job_and_with_two() {
         if !json_binary_configured() {
