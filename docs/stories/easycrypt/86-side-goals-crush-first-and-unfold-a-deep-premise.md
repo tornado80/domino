@@ -113,6 +113,45 @@ In the leaves the same function works, because there `auto => &1 &2 hpre.` has c
 equalities and `inv` is near the root of `hpre`. Thus the fault shows only in side goals. Fallbacks 2
 and 4 are then fallbacks 1 and 3 with an extra `move`, so they can never close more than 1 and 3.
 
+### 2.3 What each fallback closes today
+
+Counted in the transcripts (`progress/<job>/<oracle>/ec-transcript.jsonl`) of the current `ec4whs`
+runs (commit `952a168`: the 9 hops and the 5 side-invariant jobs). A fallback "closes" when its
+`smt` sentence is accepted.
+
+The side-goal ladder (`close_side_goal`, after a failed quick close):
+
+| k | Sentence | Hops: closed / failed | Side invariants: closed / failed |
+|---|---|---|---|
+| 1 | `smt().` | 2 / 115 | 0 / 11 |
+| 2 | `move => <binders> hpre.`, unfold (not sent), `smt().` | **0** / 115 | **0** / 11 |
+| 3 | `smt(<hints>).` | 20 / 95 | 7 / 4 |
+| 4 | `move => <binders> hpre.`, unfold (not sent), `smt(<hints>).` | **0** / 95 | **0** / 4 |
+
+- Hops: 117 side goals reach the ladder, 22 are closed and 95 admitted (the admits of §1). Fallback
+  1 closes 2 in H6_1_1 ~ H7_0. Fallback 3 closes 20: 8 in H6_1_0 ~ H6_1_1, 8 in H6_1_1 ~ H7_0 and 4
+  in H7_1_1_0 ~ H7_1_1_1.
+- Side invariants: 11 side goals reach the ladder. Fallback 3 closes 7 (SideInv_H6 4, SideInv_H7 3)
+  and 4 are admitted.
+- No transcript contains a `rewrite /inv … in hpre.` (§2.2). Fallbacks 2 and 4 fail on every goal
+  where fallbacks 1 and 3 failed.
+
+For comparison, the leaf part ladder (`part-fallback`), which already has a crush:
+
+| k | Sentence | Hops: closed / failed | Side invariants: closed / failed |
+|---|---|---|---|
+| 1 | `smt().` | 4,846 / 379 | 1,470 / 2,486 |
+| 2 | `smt(<hints>).` | 254 / 125 | 1,863 / 623 |
+| 3 | `move: hpre => />; smt(<hints>).` | 60 / 65 | 515 / 108 |
+| 4 | `case (…) => [->\|?].`, then `smt(<hints>).` | 0 / 12 | not reached |
+
+Its fallback 3 is the `/>` crush that §3.1 adds to the side-goal ladder. It closes 575 parts that
+`smt(<hints>)` alone did not.
+
+The quick close `auto => /#.` closes 709 goals in the hops and 93 in the side invariants. It fails
+1,952 and 849 times. The transcript's `ctx` does not say whether a quick close was on a side goal
+or on a leaf, so these counts cover both.
+
 Note: §1.1 shows that the unfold alone would not have closed these goals (row 4). The fix of §3.2 is
 needed for the ladder to do what it says, and for side goals whose guard needs an unfolded
 relation inside a small premise. The goals of §1 are closed by §3.1.
