@@ -435,6 +435,28 @@ pub trait Project {
         Ok(f)
     }
 
+    /// The transcript file for one claim of a game invariant proof (`domino prove --game`).
+    fn get_game_invariant_smt_file(
+        &self,
+        composition: &str,
+        claim_name: &str,
+    ) -> Result<std::fs::File> {
+        let mut path = self.get_root_dir();
+
+        path.push("_build/code_game/");
+        path.push(composition);
+        std::fs::create_dir_all(&path)?;
+
+        path.push(format!("{claim_name}.smt2"));
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
+
+        Ok(f)
+    }
+
     fn get_smt_file(
         &self,
         theorem_name: &str,

@@ -97,6 +97,16 @@ pub struct TheoremNotFound(pub String);
 pub struct PackageWithProof;
 
 #[derive(Error, Diagnostic, Debug)]
+#[error("--game cannot be used with --proof or --proofstep")]
+#[diagnostic(help(
+    "the game invariants of a composition are proved on their own, for every value of its \
+        parameters, so no theorem changes the check (ADR 0021). Drop --proof/--proofstep to \
+        check just the composition, or drop --game to prove the theorem (it proves the game \
+        invariants only inside its equivalences)."
+))]
+pub struct GameWithProof;
+
+#[derive(Error, Diagnostic, Debug)]
 #[error("--oracle and --invariant-start cannot be used together")]
 #[diagnostic(help(
     "--invariant-start restricts verification to the invariant start, which \
@@ -179,6 +189,12 @@ enum Error {
     #[error(transparent)]
     #[diagnostic(transparent)]
     PackageWithProof(#[from] PackageWithProof),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    GameWithProof(#[from] GameWithProof),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    GameInvariant(#[from] sspverif::game_invariant::error::Error),
 }
 
 fn proofsteps(p: &Proofsteps) -> Result<(), Error> {
@@ -193,13 +209,12 @@ fn proofsteps(p: &Proofsteps) -> Result<(), Error> {
     Ok(())
 }
 
-fn prove(p: &Prove) -> Result<(), Error> {
-    let project_root = match &p.path {
-        Some(path) => path.clone(),
-        None => project::directory::find_project_root()?,
-    };
-    let files = project::DirectoryFiles::load(&project_root)?;
-    let project = project::DirectoryProject::load(project_root, &files)?;
+/// The refusals of `domino prove` that clap does not give: each pair of flags that cannot be
+/// used together, with a help that says why.
+fn check_prove_args(p: &Prove) -> Result<(), Error> {
+    if p.game.is_some() && (p.proof.is_some() || p.proofstep.is_some()) {
+        return Err(GameWithProof.into());
+    }
 
     if p.proofstep.is_some() && p.proof.is_none() {
         return Err(IncompatibleArguments.into());
@@ -212,8 +227,32 @@ fn prove(p: &Prove) -> Result<(), Error> {
     if p.package.is_some() && (p.proof.is_some() || p.proofstep.is_some()) {
         return Err(PackageWithProof.into());
     }
+    Ok(())
+}
+
+fn prove(p: &Prove) -> Result<(), Error> {
+    let project_root = match &p.path {
+        Some(path) => path.clone(),
+        None => project::directory::find_project_root()?,
+    };
+    let files = project::DirectoryFiles::load(&project_root)?;
+    let project = project::DirectoryProject::load(project_root, &files)?;
+
+    check_prove_args(p)?;
 
     let smtsolver = sspverif::util::smtsolver::process::ProcessSmtSolverBackend::new(p.smtsolver);
+
+    if let Some(composition) = &p.game {
+        let req = sspverif::game_invariant::GameRequest {
+            composition,
+            oracle: p.oracle.as_deref(),
+            invariant_start: p.invariant_start,
+            transcript: p.transcript,
+            parallel: p.parallel,
+        };
+        sspverif::game_invariant::prove_game(&project, &smtsolver, &req)?;
+        return Ok(());
+    }
 
     if let Some(package) = &p.package {
         project.prove_package(

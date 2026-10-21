@@ -1,0 +1,11 @@
+composition Bare {
+    instance x = X {
+        params {}
+    }
+
+    compose {
+        adversary: {
+            O: x,
+        },
+    }
+}

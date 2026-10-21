@@ -364,7 +364,7 @@ mod tests {
             let files = DirectoryFiles::load(Path::new(FOUR_WHS)).unwrap();
             let project = DirectoryProject::load(PathBuf::from(FOUR_WHS), &files).unwrap();
             let comp = project.get_game("Hybrid2").unwrap();
-            let (free, _) = crate::debug::side_run::free_theorem(theorem, comp);
+            let (free, _) = crate::game_invariant::free_theorem(theorem, comp);
             let (ec, _) = EasyCryptTransform.transform_theorem(&free).unwrap();
             let inlined =
                 inline_oracle_ec(ec.find_game_instance("Hybrid2").unwrap(), "Send2").unwrap();

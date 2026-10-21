@@ -18,6 +18,7 @@ pub mod debug;
 pub mod easycrypt;
 pub mod expressions;
 pub mod format;
+pub mod game_invariant;
 pub mod gamehops;
 pub mod identifier;
 pub mod package;

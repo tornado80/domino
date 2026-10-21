@@ -480,6 +480,12 @@ pub(crate) struct Prove {
     /// Cannot be combined with --proof or --proofstep.
     #[clap(long)]
     pub(crate) package: Option<String>,
+    /// Only prove the game invariants of this composition (as in `games/C.comp.ssp`; not a
+    /// game instance), for every value of its parameters. Needs no theorem. It assumes the
+    /// package invariants of its instances: prove them with `--package`. Plain `domino prove`
+    /// does not run this check.
+    #[clap(long, conflicts_with_all = ["package", "injective_randmap", "claim"])]
+    pub(crate) game: Option<String>,
     /// Only prove the claims of this oracle. Package invariants are then only checked for
     /// packages that have an oracle of this name, and only for that oracle.
     #[clap(long)]

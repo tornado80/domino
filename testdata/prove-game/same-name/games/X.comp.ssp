@@ -1,0 +1,13 @@
+composition X {
+    invariant: [ ./games/X.smt2 ]
+
+    instance x = X {
+        params {}
+    }
+
+    compose {
+        adversary: {
+            O: x,
+        },
+    }
+}

@@ -5,7 +5,7 @@
 //!
 //! # The composition with free parameters
 //!
-//! No game instance fixes the parameters of `C`. [`free_theorem`] makes a copy of the theorem
+//! No game instance fixes the parameters of `C`. [`free_theorem`] (in [`crate::game_invariant`]) makes a copy of the theorem
 //! whose only game instances are `C` and its copy `C$side` (the theorem's own instances, game
 //! hops and proofs are dropped, so a theorem instance named `C` does not clash). Every parameter
 //! of `C` is a theorem constant that nothing constrains: the theorem's own constant of that name
@@ -46,22 +46,15 @@ use crate::debug::lockstep_run::{
 use crate::debug::progress::{DebugEvent, DebugObserver};
 use crate::debug::side::{run_side, SideOptions};
 use crate::debug::sweep::{SweepEntry, Target};
-use crate::gamehops::equivalence::Equivalence;
-use crate::identifier::game_ident::{GameConstIdentifier, GameIdentifier};
-use crate::identifier::theorem_ident::{TheoremConstIdentifier, TheoremIdentifier};
-use crate::identifier::Identifier;
+use crate::game_invariant::{base_frame, claims, free_theorem};
 use crate::package::Composition;
 use crate::project::Project;
-use crate::theorem::{
-    BuiltInFact, ClaimKind, GameInstance, InvariantSide, RandomnessType, ResolvedClaim,
-    ResolvedDependency, Theorem,
-};
+use crate::theorem::{GameInstance, Theorem};
 use crate::transforms::samplify::SampleInfo;
 use crate::transforms::theorem_transforms::{
     DebugTransform, EasyCryptTransform, EquivalenceTransform,
 };
 use crate::transforms::TheoremTransform;
-use crate::types::{CountSpec, Type, TypeKind};
 use crate::util::smtsolver::{SmtSolver, SmtSolverBackend};
 use crate::writers::easycrypt::lower::inline_oracle_ec;
 use crate::writers::smt::contexts::EquivalenceContext;
@@ -71,9 +64,6 @@ use crate::writers::smt::exprs::SmtExpr;
 
 /// The strategy name of one-sided execution: [`LockstepMeta::mode`] and the result record's.
 pub const ONE_SIDED: &str = "one-sided";
-
-/// The dependency of every side-invariant claim: the side invariant holds under `!abort`.
-const NO_ABORT: BuiltInFact = BuiltInFact::LeftNoAbort;
 
 /// `<theorem_out>/!debug!/SideInv_<C>/<O>/`.
 pub fn side_debug_dir(theorem_out: &Path, composition: &str, oracle: &str) -> PathBuf {
@@ -98,127 +88,6 @@ fn composition_of<'p, P: Project>(
         .ok_or_else(|| DebugError::CompositionNotFound {
             name: name.to_string(),
         })
-}
-
-/// The name of the copy of `C` that completes the [`EquivalenceContext`].
-fn copy_name(composition: &str) -> String {
-    format!("{composition}$side")
-}
-
-/// The theorem that one-sided execution of `comp` reads: `theorem` with only two game instances
-/// of `comp`, `C` and `C$side`, whose parameters are free theorem constants, and the equivalence
-/// of the two that gives the SMT vocabulary. It keeps the name, the constants, the packages and
-/// the assumptions of `theorem`, and drops its game instances, game hops and proofs: one-sided
-/// execution reads none of them, and a theorem instance named `C` cannot clash (story 85).
-pub(crate) fn free_theorem<'a>(
-    theorem: &Theorem<'a>,
-    comp: &Composition,
-) -> (Theorem<'a>, Equivalence) {
-    let name = comp.name.clone();
-    let copy = copy_name(&name);
-    let mut theorem = Theorem {
-        instances: Vec::new(),
-        game_hops: Vec::new(),
-        proofs: Vec::new(),
-        ..theorem.clone()
-    };
-    let params = free_params(&mut theorem, comp);
-    for inst_name in [&name, &copy] {
-        let inst = GameInstance::new(
-            inst_name.clone(),
-            theorem.name.clone(),
-            comp.clone(),
-            Vec::new(),
-            params
-                .iter()
-                .map(|(id, value)| {
-                    let id = GameConstIdentifier {
-                        game_inst_name: Some(inst_name.clone()),
-                        ..id.clone()
-                    };
-                    (id, value.clone())
-                })
-                .collect(),
-        );
-        theorem.instances.push(inst);
-    }
-    let randomness = comp
-        .exports
-        .iter()
-        .map(|e| (e.name().to_string(), RandomnessType::None))
-        .collect();
-    let eq = Equivalence::new(
-        theorem.name.clone(),
-        name,
-        copy,
-        Vec::new(),
-        Vec::new(),
-        randomness,
-    );
-    (theorem, eq)
-}
-
-/// One free theorem constant for each parameter of `comp`, added to `theorem` where it has none
-/// of that name and type. Integer parameters come first, so `Bits(<param>)` in the type of
-/// another parameter is rewritten to `Bits(<constant>)`, as the theorem parser does.
-fn free_params(
-    theorem: &mut Theorem<'_>,
-    comp: &Composition,
-) -> Vec<(GameConstIdentifier, crate::expressions::Expression)> {
-    let (ints, others): (Vec<_>, Vec<_>) = comp
-        .consts
-        .iter()
-        .partition(|(_, ty)| matches!(ty.kind(), TypeKind::Integer));
-    let mut rules = Vec::new();
-    let mut params = Vec::new();
-    for (param, ty) in ints.into_iter().chain(others) {
-        let ty = ty.rewrite_type(&rules);
-        let const_name = match theorem.consts.iter().find(|(n, _)| n == param) {
-            Some((_, existing)) if *existing == ty => param.clone(),
-            Some(_) => format!("{}_{param}", comp.name),
-            None => param.clone(),
-        };
-        if !theorem.consts.iter().any(|(n, _)| *n == const_name) {
-            theorem.consts.push((const_name.clone(), ty.clone()));
-        }
-        let ident =
-            Identifier::TheoremIdentifier(TheoremIdentifier::Const(TheoremConstIdentifier {
-                theorem_name: theorem.name.clone(),
-                name: const_name,
-                ty: ty.clone(),
-                inst_info: None,
-            }));
-        if matches!(ty.kind(), TypeKind::Integer) {
-            rules.push((
-                Type::bits(CountSpec::Identifier(Box::new(Identifier::GameIdentifier(
-                    GameIdentifier::Const(GameConstIdentifier {
-                        game_name: comp.name.clone(),
-                        name: param.clone(),
-                        ty: Type::integer(),
-                        game_inst_name: None,
-                        theorem_name: None,
-                        inst_info: None,
-                        assigned_value: None,
-                    }),
-                )))),
-                Type::bits(CountSpec::Identifier(Box::new(ident.clone()))),
-            ));
-        }
-        let value: crate::expressions::Expression = ident.into();
-        params.push((
-            GameConstIdentifier {
-                game_name: comp.name.clone(),
-                name: param.clone(),
-                ty,
-                assigned_value: Some(Box::new(value.clone())),
-                inst_info: None,
-                game_inst_name: None,
-                theorem_name: Some(theorem.name.clone()),
-            },
-            value,
-        ));
-    }
-    params
 }
 
 /// The fingerprint of the side tree of `oracle` of composition `composition` (ADR 0008), as
@@ -258,10 +127,7 @@ fn fingerprint_of(
     composition: &str,
     inlined: &crate::debug::ir::InlinedOracle,
 ) -> Fingerprint {
-    let names: Vec<String> = side_claims(eqctx)
-        .iter()
-        .map(|c| c.name().to_string())
-        .collect();
+    let names: Vec<String> = claims(eqctx).iter().map(|c| c.name().to_string()).collect();
     Fingerprint::of_side(
         theorem
             .find_game_instance(composition)
@@ -273,45 +139,6 @@ fn fingerprint_of(
         &eqctx.emit_invariant(),
         &names,
     )
-}
-
-/// The claims of a side tree: each game invariant of `C` on the new state, under
-/// `left-no-abort`. The package invariants are not claims (story 77, ADR 0016): the package
-/// tree checks each package once, and `SideInv_<C>_<O>` takes them from the package lemmas.
-fn side_claims(eqctx: &EquivalenceContext<'_>) -> Vec<ResolvedClaim> {
-    eqctx
-        .generate_game_invariant_claims()
-        .into_iter()
-        .filter(|c| c.kind().invariant_side() == Some(InvariantSide::Left))
-        .map(|c| ResolvedClaim {
-            dependencies: vec![ResolvedDependency {
-                name: NO_ABORT.name().to_string(),
-                kind: ClaimKind::BuiltIn(NO_ABORT),
-            }],
-            ..c
-        })
-        .collect()
-}
-
-/// The base frame of a side tree: the declarations and definitions `prove` uses (both sides',
-/// the copy's never read), and then each invariant of `C` on the old state, the package
-/// invariants too: the side tree assumes them, and checks only the game invariants.
-fn side_base_frame(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<SmtExpr> {
-    let mut base = vec![SmtExpr::Comment(
-        " domino easycrypt debug --side-inv — base frame ".to_string(),
-    )];
-    base.extend(eqctx.emit_base_declarations());
-    base.extend(eqctx.emit_theorem_paramfuncs());
-    base.extend(eqctx.emit_game_definitions());
-    base.extend(eqctx.emit_constant_declarations(Some(oracle)));
-    base.extend(eqctx.emit_auto_randomness(oracle));
-    base.extend(eqctx.emit_invariant());
-    base.extend(eqctx.emit_return_value_helpers(oracle));
-    base.push(SmtExpr::Comment(
-        " the side invariants on the old state ".to_string(),
-    ));
-    base.extend(eqctx.emit_left_side_invariants_old(oracle));
-    base
 }
 
 /// Run one-sided execution of `oracle` of composition `composition` (of theorem
@@ -370,7 +197,7 @@ where
         oracle,
     )?;
 
-    let claims = side_claims(&eqctx);
+    let claims = claims(&eqctx);
     if claims.is_empty() {
         return Err(DebugError::NoGameInvariants {
             composition: composition.to_string(),
@@ -398,7 +225,7 @@ where
                 .collect(),
             queries,
             fingerprint: fingerprint_of(&theorem, &eqctx, composition, &inlined),
-            base: side_base_frame(&eqctx, oracle),
+            base: base_frame(&eqctx, oracle),
         },
         opts,
         backend,
@@ -866,11 +693,11 @@ mod tests {
         let (theorem_eq, auxs_eq) = EquivalenceTransform.transform_theorem(&theorem).unwrap();
         let mut eqctx = EquivalenceContext::new(&eq, &theorem_eq, &auxs_eq);
         eqctx.load_invariants(project).unwrap();
-        let names = side_claims(&eqctx)
+        let names = claims(&eqctx)
             .iter()
             .map(|c| c.name().to_string())
             .collect();
-        let base = side_base_frame(&eqctx, "O")
+        let base = base_frame(&eqctx, "O")
             .into_iter()
             .map(|e| format!("{e}\n"))
             .collect();
@@ -915,6 +742,61 @@ mod tests {
         let taken = side_inputs(&project_in("testdata/debug/se25-name-taken"));
         assert_eq!(plain.0, [GAME]);
         assert_eq!(plain, taken);
+    }
+
+    /// Story 30: the oracles that fail `domino prove --game S` are the oracles whose side tree
+    /// has a failing terminal.
+    #[test]
+    fn prove_game_fails_the_oracles_whose_side_tree_fails() {
+        use crate::game_invariant::{prove_game, GameRequest};
+        use crate::util::smtsolver::process::{ProcessSmtSolverBackend, SolverVariant};
+        let project = project();
+        for oracle in side_oracles(&project, "S").unwrap() {
+            let out = tempfile::tempdir().unwrap();
+            let run = run_side_command(
+                &project,
+                "T",
+                "S",
+                &oracle,
+                &LockstepDebugOptions::easycrypt(Some(10_000)),
+                &IncrementalCvc5Backend,
+                out.path().to_path_buf(),
+                &mut NopObserver,
+                None,
+            )
+            .unwrap();
+            let side_fails = run
+                .outcome
+                .pairs
+                .iter()
+                .any(|p| matches!(p.verdict_of(GAME), Some(Verdict::GoalFails { .. })));
+            let req = GameRequest {
+                composition: "S",
+                oracle: Some(&oracle),
+                invariant_start: false,
+                transcript: false,
+                parallel: 0,
+            };
+            let backend = ProcessSmtSolverBackend::new(SolverVariant::Cvc5);
+            let prove_fails = prove_game(&project, &backend, &req).is_err();
+            assert_eq!(prove_fails, side_fails, "{oracle}");
+            assert!(side_fails, "the path with x < 0 breaks main");
+        }
+    }
+
+    /// Story 30: the move of the free composition to `game_invariant` changes nothing. The
+    /// golden files were written from the code before the move.
+    #[test]
+    fn the_side_inputs_match_the_golden_from_before_the_move() {
+        for dir in ["testdata/debug/se25", "testdata/debug/se25-name-taken"] {
+            let (names, base, fingerprint) = side_inputs(&project_in(dir));
+            let got = format!("{names:?}\n{base}\n{fingerprint:?}\n");
+            let golden = Path::new(dir).join("side_inputs.golden");
+            if std::env::var_os("WRITE_GOLDEN").is_some() {
+                std::fs::write(&golden, &got).unwrap();
+            }
+            assert_eq!(got, std::fs::read_to_string(&golden).unwrap(), "{dir}");
+        }
     }
 
     #[test]

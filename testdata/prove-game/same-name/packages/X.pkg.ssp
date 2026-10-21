@@ -1,0 +1,12 @@
+package X {
+    invariant: [ ./packages/X.smt2 ]
+
+    state {
+        k: Integer,
+    }
+
+    oracle O(x: Integer) -> Integer {
+        k <- 0;
+        return x;
+    }
+}
