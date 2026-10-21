@@ -883,7 +883,7 @@ impl JobProgress for BarJob {
             node_open: false,
             admits: 0,
             lockstep: None,
-            file: None,
+            fixed_admitted: None,
         })
     }
 }
@@ -910,11 +910,11 @@ struct BarRow {
     /// The `lockstep_summary_line` of the oracle; it prints with the oracle's end.
     lockstep: Option<String>,
     /// A fixed lemma's file ended: `Some(admitted)` (story 84).
-    file: Option<bool>,
+    fixed_admitted: Option<bool>,
 }
 
 impl BarRow {
-    /// The proving line of the current node; without a node (a fixed lemma, story 84) the
+    /// The proving line of the current node; without a node (a fixed lemma, story 84, or an oracle before its first node) the
     /// row keeps its text and only its timer starts again.
     fn show_proving(&self, sentence: &str) {
         if let Some((node, total)) = &self.at {
@@ -928,7 +928,7 @@ impl BarRow {
     /// The router prelude has no goal of its own, so a row never ends `interrupted at router`.
     /// A fixed lemma's row ends `accepted` or `admitted`.
     fn end_text(&self) -> String {
-        if let Some(admitted) = self.file {
+        if let Some(admitted) = self.fixed_admitted {
             return if admitted { "admitted" } else { "accepted" }.to_string();
         }
         match &self.at {
@@ -968,7 +968,7 @@ impl ExportObserver for BarRow {
             }
             // without a node, the goal is a fixed lemma's whole file (story 84)
             ExportEvent::GoalFinished { admitted, .. } if self.at.is_none() => {
-                self.file = Some(*admitted);
+                self.fixed_admitted = Some(*admitted);
             }
             ExportEvent::GoalFinished { admitted, .. } => {
                 self.node_open = false;
@@ -1432,7 +1432,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// Story 84: a fixed row ends `done` when its file is accepted and `admitted` when it is
+    /// Story 84: a fixed row ends `accepted` when its file is accepted and `admitted` when it is
     /// admitted (its `GoalFinished`), not with an admit count of an oracle.
     #[test]
     fn a_fixed_row_ends_accepted_or_admitted() {

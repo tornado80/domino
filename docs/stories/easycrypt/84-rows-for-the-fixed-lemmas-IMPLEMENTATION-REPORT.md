@@ -82,18 +82,52 @@ each function body.
 
 No touched function has CC ≥ 15.
 
-## Code review
+## Follow-up: the end line of a fixed row
 
-Self-review of the diff from `cea84c6e` (the deterministic scan has the same sandbox problem).
-Left open, with reasons:
+- `prove_fixed_lemmas` sends `GoalFinished { oracle: <row>, goal: <row>, admitted }` to the
+  row before it drops the row. This is an existing event kind.
+- `BarRow` records a `GoalFinished` that comes before any node in `fixed_admitted`. The row
+  then ends `  Frame_Ctr_Peek  accepted` or `  init  admitted`, not `done, 0 admits`.
+- New test (ran, green): `progress::tests::a_fixed_row_ends_accepted_or_admitted`
+  (`InMemoryTerm`). The event test with EasyCrypt now also expects the `GoalFinished`
+  (written, not run).
+- Filtered run after the follow-up: 20 passed, 0 failed. `cargo clippy --workspace
+  --all-targets`: clean.
+- CC after the follow-up: `prove_fixed_lemmas` 5, `BarRow::on_event` 9, `BarRow::end_text` 6.
+  All below 15.
 
-- An oracle row now also shows its `ItemStarted` (`PKENC  Eq_H4_H5 PKENC`) for the short time
-  before `LockstepStarted` replaces it.
-- The end line of a fixed row on the bar board is `  Frame_Ctr_Peek  done, 0 admits`, also when
-  the file was admitted. The page and the report say which file is admitted.
+## Code review (`/code-review`, fixed point `cea84c6e`)
+
+- Deterministic Scan: **UNMEASURED**. `sdlc deterministic-scan . --since-ref cea84c6e` fails:
+  the sandbox cannot resolve the ref. No scan ran.
+- Complexity: **UNMEASURED** (same cause). CC is below 15 for every touched function (see the
+  tables above).
+- Standards (sub-agent). One hard finding: the doc comment of the new test said `done`, but the
+  test checks `accepted`. Fixed. Judgement calls:
+  - Fixed: the field `file: Option<bool>` is renamed to `fixed_admitted`. The
+    `show_proving` comment now also names an oracle row that has no node yet.
+  - Left open: `BarRow` finds out that a row is a fixed row because it has no node
+    (`at.is_none()`). A row-kind enum, set when the row is made, would need a change to the
+    `JobProgress` interface. Not done in this story.
+  - Left open: the plain board (`max(total, made)`) and the bar board (`inc_length`) each
+    increase their total in their own way.
+  - Left open: ADR 0020 point 6 says rows have "the file's name". The code removes the job
+    stem (`init`), as the story says.
+- Spec (sub-agent). Findings:
+  - Left open: the event test uses a real EasyCrypt, not `FakeEasyCrypt`. It does not run
+    without `DOMINO_EASYCRYPT`.
+  - Left open: no test compares the bytes of the files before and after the change. The code
+    that writes the files did not change.
+  - Not in the spec, kept: the `GoalFinished` of a fixed row (requested by the coordinator for
+    the end line), and the header count that includes the fixed rows.
+  - `announce` uses `check file` when there is one candidate. `start_proofs` always gives two
+    candidates, so a start lemma always shows `attempt k/2`.
+- Left open: an oracle row shows its own `ItemStarted` text (`PKENC  Eq_H4_H5 PKENC`) for a
+  short time, until `LockstepStarted` replaces it. A fix needs a way to tell oracle items from
+  fixed-lemma items, which is the same row-kind question as above.
 
 ## Not done
 
 - The event-level test with EasyCrypt: written, not run (owner's rule).
-- `--features cvc5-lib` build and clippy: no `cmake` in this environment.
+- `--features cvc5-lib` build and clippy: not run. `cmake` is not on PATH in this shell. This is a gap in the environment, not a fault in the code.
 - CRAP gate: UNMEASURED (see above).
