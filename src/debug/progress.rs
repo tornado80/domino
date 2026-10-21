@@ -355,8 +355,9 @@ impl DebugObserver for PlainObserver {
 // BarObserver — indicatif
 // ---------------------------------------------------------------------------
 
+/// The verdicts of the pairs checked so far: `✓2 ·68 ✗1 ?0 ✂12`.
 #[derive(Default, Clone, Copy)]
-struct Tally {
+pub(crate) struct Tally {
     verified: usize,
     unreachable: usize,
     goal_fails: usize,
@@ -365,7 +366,7 @@ struct Tally {
 }
 
 impl Tally {
-    fn bump(&mut self, v: &Verdict) {
+    pub(crate) fn bump(&mut self, v: &Verdict) {
         match v {
             Verdict::Verified => self.verified += 1,
             Verdict::Unreachable { .. } => self.unreachable += 1,
@@ -374,7 +375,7 @@ impl Tally {
         }
     }
 
-    fn render(&self) -> String {
+    pub(crate) fn render(&self) -> String {
         format!(
             "✓{} ·{} ✗{} ?{} ✂{}",
             self.verified, self.unreachable, self.goal_fails, self.inconclusive, self.pruned
@@ -403,10 +404,30 @@ pub struct BarObserver {
     tally: Tally,
 }
 
-/// The display of the [`BarObserver`] on screen, if any (at most one at a time). A Ctrl-C handler
-/// prints its message through [`eprintln_above_bars`], which needs to reach it from another
-/// thread.
+/// The screen of bars, if any: the display of a [`BarObserver`] or of the progress board of
+/// `easycrypt prove` (story 83). At most one at a time. A Ctrl-C handler prints its message
+/// through [`eprintln_above_bars`], which needs to reach it from another thread.
 static ACTIVE_BARS: Mutex<Option<MultiProgress>> = Mutex::new(None);
+
+/// Makes `mp` the screen of bars. In a debug build, it fails when another screen is active:
+/// two screens on one stderr overwrite each other's lines.
+pub(crate) fn register_screen(mp: &MultiProgress) {
+    let mut active = ACTIVE_BARS.lock().unwrap_or_else(|e| e.into_inner());
+    debug_assert!(
+        active.is_none(),
+        "a second screen of bars while one is active"
+    );
+    *active = Some(mp.clone());
+}
+
+/// The screen of bars is gone: [`eprintln_above_bars`] prints plain lines again.
+pub(crate) fn clear_screen() {
+    *ACTIVE_BARS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// Tests that make a screen of bars hold this lock: there is one screen for each process.
+#[cfg(test)]
+pub(crate) static SCREEN_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Prints `message` to stderr without tearing the bars of a running [`BarObserver`]: they are
 /// wiped for the line and drawn again below it. Plain `eprintln!` when none is on screen.
@@ -452,9 +473,7 @@ impl BarObserver {
         let logger = env_logger::Builder::from_default_env().build();
         let _ = LogWrapper::new(mp.clone(), logger).try_init();
 
-        if let Ok(mut active) = ACTIVE_BARS.lock() {
-            *active = Some(mp.clone());
-        }
+        register_screen(&mp);
 
         Self {
             mp,
@@ -469,9 +488,7 @@ impl BarObserver {
         self.left.finish_and_clear();
         self.pairs.finish_and_clear();
         let _ = self.mp.clear();
-        if let Ok(mut active) = ACTIVE_BARS.lock() {
-            *active = None;
-        }
+        clear_screen();
     }
 
     /// Keep the bar from looking stuck if a `Prune`-free re-entry ever pushes

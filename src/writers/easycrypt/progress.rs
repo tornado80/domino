@@ -43,13 +43,16 @@
 //! theorem's directory (`Full4WHS/Comp_H5.ec`).
 
 use std::io::Write as _;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 
-use crate::debug::progress::{BarObserver, DebugObserver, NopObserver};
+use crate::debug::driver::Verdict;
+use crate::debug::progress::{
+    clear_screen, register_screen, BarObserver, DebugEvent, DebugObserver, NopObserver, Tally,
+};
 
 /// The phases of one export, in the order they run. `Write` runs once at the end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -668,8 +671,10 @@ fn keyed_line(key: &str, event: &ExportEvent<'_>) -> Option<String> {
 /// One observer for the whole job, as before story 82: it sees one `tactics` phase with one item
 /// for each oracle, and the phase ends when the job progress is dropped. The rows of the job
 /// take turns on it, under a lock.
+#[cfg(test)]
 pub(crate) struct OneObserverJob(Arc<Mutex<OneObserver>>);
 
+#[cfg(test)]
 struct OneObserver {
     inner: Box<dyn ExportObserver + Send>,
     /// The oracles the job proves.
@@ -678,6 +683,7 @@ struct OneObserver {
     items: usize,
 }
 
+#[cfg(test)]
 impl OneObserverJob {
     pub(crate) fn new(inner: Box<dyn ExportObserver + Send>, oracles: usize) -> Self {
         Self(Arc::new(Mutex::new(OneObserver {
@@ -689,12 +695,14 @@ impl OneObserverJob {
     }
 }
 
+#[cfg(test)]
 impl JobProgress for OneObserverJob {
     fn oracle(&self, _: &str) -> Box<dyn ExportObserver> {
         Box::new(OneObserverRow(self.0.clone()))
     }
 }
 
+#[cfg(test)]
 impl Drop for OneObserverJob {
     fn drop(&mut self) {
         let mut s = self.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -706,8 +714,10 @@ impl Drop for OneObserverJob {
     }
 }
 
+#[cfg(test)]
 struct OneObserverRow(Arc<Mutex<OneObserver>>);
 
+#[cfg(test)]
 impl ExportObserver for OneObserverRow {
     fn on_event(&mut self, event: &ExportEvent<'_>) {
         let mut s = self.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -739,64 +749,286 @@ impl ExportObserver for OneObserverRow {
     }
 }
 
-/// `--progress bar` until story 83: each job has one [`BarExportObserver`], and **one** running
-/// oracle of the whole board at a time reports to it; the other oracles report to nothing. With
-/// `--jobs 1` and no side-invariant chain, the screen is the one from before story 82.
-#[derive(Default)]
+/// `--progress bar` (story 83, ADR 0020 point 3): one screen for the whole command run, with a
+/// header row for each running job and one row for each running oracle under it:
+///
+/// ```text
+/// Eq_H4_H5  tactics ███░░░ 3/7  done 2, running 2
+///   PKENC  lockstep  node 40 sync-branch  pairs 23 ✓21 ·0 ✗0 ?2 ✂0      41s
+///   DEC  N7/23  smt(dec_enc).                                            12s
+/// ```
+///
+/// The board is the only screen of bars while it lives: making it registers its screen for
+/// [`eprintln_above_bars`](crate::debug::progress::eprintln_above_bars) (a debug build fails if
+/// another screen is active), dropping it clears the screen. A row leaves when its oracle or job
+/// ends; the lines it leaves print above the live rows.
 pub struct BarProgressBoard {
-    /// An oracle row has the screen.
-    busy: Arc<AtomicBool>,
+    mp: MultiProgress,
 }
 
-impl ProgressBoard for BarProgressBoard {
-    fn job(&self, _: &str, oracles: usize) -> Box<dyn JobProgress> {
-        Box::new(BarJob {
-            one: OneObserverJob::new(Box::new(BarExportObserver::new()), oracles),
-            busy: self.busy.clone(),
-        })
+impl BarProgressBoard {
+    /// The board on stderr. Draws nothing when stderr is not a terminal.
+    pub fn new() -> Self {
+        Self::with_target(ProgressDrawTarget::stderr())
+    }
+
+    fn with_target(target: ProgressDrawTarget) -> Self {
+        let mp = MultiProgress::with_draw_target(target);
+        register_screen(&mp);
+        Self { mp }
     }
 }
 
-struct BarJob {
-    one: OneObserverJob,
-    busy: Arc<AtomicBool>,
+impl Default for BarProgressBoard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for BarProgressBoard {
+    fn drop(&mut self) {
+        let _ = self.mp.clear();
+        clear_screen();
+    }
+}
+
+const JOB_ROW: &str = "{prefix} tactics {bar:12.cyan/blue} {pos}/{len}  {msg}";
+const ORACLE_ROW: &str = "  {wide_msg} {elapsed:>4}";
+
+fn row_style(template: &str) -> ProgressStyle {
+    ProgressStyle::with_template(template).unwrap_or_else(|_| ProgressStyle::default_bar())
+}
+
+impl ProgressBoard for BarProgressBoard {
+    fn job(&self, stem: &str, oracles: usize) -> Box<dyn JobProgress> {
+        let header = self.mp.add(ProgressBar::new(oracles as u64));
+        header.set_style(row_style(JOB_ROW));
+        header.set_prefix(stem.to_string());
+        let job = Arc::new(BarJobState {
+            mp: self.mp.clone(),
+            header,
+            rows: Mutex::new(Vec::new()),
+            next: AtomicUsize::new(0),
+        });
+        job.show_counts();
+        Box::new(BarJob(job))
+    }
+}
+
+/// A job on the bar board. Dropping it takes its header off the screen.
+struct BarJob(Arc<BarJobState>);
+
+struct BarJobState {
+    mp: MultiProgress,
+    header: ProgressBar,
+    /// The rows of the running oracles with their numbers, in the order they started.
+    rows: Mutex<Vec<(usize, ProgressBar)>>,
+    /// The number of the next row.
+    next: AtomicUsize,
+}
+
+impl BarJobState {
+    /// `done <d>, running <r>`: the position of the header is the count of dropped rows.
+    fn show_counts(&self) {
+        let running = self.rows.lock().unwrap_or_else(|e| e.into_inner()).len();
+        let done = self.header.position();
+        self.header
+            .set_message(format!("done {done}, running {running}"));
+    }
+
+    /// A new oracle row and its number, under the header and the rows already there.
+    fn add_row(&self) -> (usize, ProgressBar) {
+        let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+        let after = rows.last().map_or(&self.header, |(_, r)| r).clone();
+        let row = self.mp.insert_after(&after, ProgressBar::new_spinner());
+        row.set_style(row_style(ORACLE_ROW));
+        row.enable_steady_tick(Duration::from_secs(1));
+        let id = self.next.fetch_add(1, Ordering::SeqCst);
+        rows.push((id, row.clone()));
+        (id, row)
+    }
+
+    /// The oracle of `row` ended: its row leaves, the header counts it as done.
+    fn remove_row(&self, id: usize, row: &ProgressBar) {
+        row.finish_and_clear();
+        self.mp.remove(row);
+        self.rows
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(i, _)| *i != id);
+        self.header.inc(1);
+        self.show_counts();
+    }
 }
 
 impl JobProgress for BarJob {
     fn oracle(&self, name: &str) -> Box<dyn ExportObserver> {
-        if self
-            .busy
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return Box::new(NopExportObserver);
-        }
-        Box::new(ScreenRow {
-            inner: self.one.oracle(name),
-            busy: self.busy.clone(),
+        let (id, bar) = self.0.add_row();
+        self.0.show_counts();
+        Box::new(BarRow {
+            job: self.0.clone(),
+            id,
+            bar,
+            oracle: name.to_string(),
+            at: None,
+            node_open: false,
+            admits: 0,
+            lockstep: None,
         })
     }
 }
 
-/// The oracle row that has the screen; dropping it gives the screen back.
-struct ScreenRow {
-    inner: Box<dyn ExportObserver>,
-    busy: Arc<AtomicBool>,
+impl Drop for BarJob {
+    fn drop(&mut self) {
+        self.0.header.finish_and_clear();
+        self.0.mp.remove(&self.0.header);
+    }
 }
 
-impl ExportObserver for ScreenRow {
+/// The row of one running oracle on the bar board.
+struct BarRow {
+    job: Arc<BarJobState>,
+    /// The number of the row in its job.
+    id: usize,
+    bar: ProgressBar,
+    oracle: String,
+    /// The node and the tree size of the proving line.
+    at: Option<(String, usize)>,
+    /// The goal of the current node is not closed or admitted yet.
+    node_open: bool,
+    admits: usize,
+    /// The `lockstep_summary_line` of the oracle; it prints with the oracle's end.
+    lockstep: Option<String>,
+}
+
+impl BarRow {
+    fn show_proving(&self, sentence: &str) {
+        if let Some((node, total)) = &self.at {
+            self.bar
+                .set_message(proving_message(&self.oracle, node, *total, sentence));
+            self.bar.reset_elapsed();
+        }
+    }
+
+    /// `done, 2 admits`, or `interrupted at N7` when the row ends on a node whose goal is open.
+    /// The router prelude has no goal of its own, so a row never ends `interrupted at router`.
+    fn end_text(&self) -> String {
+        match &self.at {
+            Some((node, _)) if self.node_open && node != "router" => {
+                format!("interrupted at {node}")
+            }
+            _ if self.admits == 1 => "done, 1 admit".to_string(),
+            _ => format!("done, {} admits", self.admits),
+        }
+    }
+}
+
+impl ExportObserver for BarRow {
+    #[allow(unreachable_patterns)]
     fn on_event(&mut self, event: &ExportEvent<'_>) {
-        self.inner.on_event(event);
+        match event {
+            ExportEvent::LockstepStarted { .. } => {
+                self.bar.set_message(format!("{}  lockstep", self.oracle));
+                self.bar.reset_elapsed();
+            }
+            ExportEvent::LockstepFinished {
+                oracle,
+                found,
+                elapsed,
+                stopped,
+            } => self.lockstep = Some(lockstep_summary_line(oracle, *found, *elapsed, *stopped)),
+            ExportEvent::NodeStarted { node, total, .. } => {
+                self.at = Some((node.to_string(), *total));
+                self.node_open = true;
+                self.show_proving("");
+            }
+            ExportEvent::SentenceSent { sentence } => self.show_proving(sentence),
+            ExportEvent::GoalFinished { admitted, .. } => {
+                self.node_open = false;
+                self.admits += usize::from(*admitted);
+            }
+            _ => {}
+        }
     }
 
     fn lockstep_observer(&mut self) -> Box<dyn DebugObserver> {
-        self.inner.lockstep_observer()
+        Box::new(LockstepRow {
+            mp: self.job.mp.clone(),
+            bar: self.bar.clone(),
+            oracle: self.oracle.clone(),
+            node: String::new(),
+            pairs: 0,
+            tally: Tally::default(),
+        })
     }
 }
 
-impl Drop for ScreenRow {
+impl Drop for BarRow {
     fn drop(&mut self) {
-        self.busy.store(false, Ordering::SeqCst);
+        let line = match self.lockstep.take() {
+            Some(lockstep) => format!("{lockstep}; {}", self.end_text()),
+            None => format!("  {}  {}", self.oracle, self.end_text()),
+        };
+        let _ = self.job.mp.println(line);
+        self.job.remove_row(self.id, &self.bar);
+    }
+}
+
+/// Lockstep execution of one oracle, on the oracle's own row: `PKENC  lockstep  node 40
+/// sync-branch  pairs 23 ✓21 ·0 ✗0 ?2 ✂0`. Failing goals and stuck points print above the rows,
+/// as in [`BarObserver`](crate::debug::progress::BarObserver).
+struct LockstepRow {
+    mp: MultiProgress,
+    bar: ProgressBar,
+    oracle: String,
+    node: String,
+    pairs: usize,
+    tally: Tally,
+}
+
+impl LockstepRow {
+    fn show(&self) {
+        self.bar.set_message(format!(
+            "{}  lockstep  {}  pairs {} {}",
+            self.oracle,
+            self.node,
+            self.pairs,
+            self.tally.render()
+        ));
+    }
+}
+
+impl DebugObserver for LockstepRow {
+    #[allow(unreachable_patterns)]
+    fn on_event(&mut self, ev: &DebugEvent<'_>) {
+        match ev {
+            DebugEvent::JointNode { index, kind } => {
+                self.node = format!("node {index} {kind}");
+                self.show();
+            }
+            DebugEvent::JointPairChecked { id, claims, .. } => {
+                claims.iter().for_each(|c| self.tally.bump(&c.verdict));
+                self.pairs += 1;
+                self.show();
+                if claims
+                    .iter()
+                    .any(|c| matches!(c.verdict, Verdict::GoalFails { .. }))
+                {
+                    let _ = self.mp.println(format!("⚠ GOAL FAILS at {id}"));
+                }
+            }
+            DebugEvent::StuckPointFound {
+                id,
+                side,
+                label,
+                reason,
+            } => {
+                let _ = self
+                    .mp
+                    .println(format!("stuck point {id} ({side} L{label}): {reason}"));
+            }
+            _ => {}
+        }
     }
 }
 
@@ -807,6 +1039,7 @@ impl Drop for ScreenRow {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::debug::driver::ClaimVerdict;
 
     /// Records every event as one line: a compact, comparable rendering.
     #[derive(Default)]
@@ -988,6 +1221,7 @@ pub(crate) mod tests {
     /// summary line printed in between (a hidden draw target: nothing is drawn, nothing panics).
     #[test]
     fn the_bar_observer_survives_a_lockstep_interlude() {
+        let _lock = screen_lock();
         let mut bars = BarExportObserver::new();
         bars.on_event(&ExportEvent::PhaseStarted {
             phase: ExportPhase::Tactics,
@@ -1101,16 +1335,171 @@ pub(crate) mod tests {
         );
     }
 
-    /// Story 82: the temporary bar board gives the screen to one running oracle at a time.
+    /// The board of story 83 drawn on a terminal in memory, and the terminal.
+    fn board_on_screen() -> (BarProgressBoard, indicatif::InMemoryTerm) {
+        let term = indicatif::InMemoryTerm::new(20, 100);
+        let board = BarProgressBoard::with_target(ProgressDrawTarget::term_like_with_hz(
+            Box::new(term.clone()),
+            255,
+        ));
+        (board, term)
+    }
+
+    /// The lines of `term` without the timers (`12s` at the end of a row), as `strip_timings`
+    /// does for pages.
+    fn screen(board: &BarProgressBoard, term: &indicatif::InMemoryTerm) -> Vec<String> {
+        // a redraw now, not at the next tick
+        board.mp.suspend(|| {});
+        term.contents()
+            .lines()
+            .map(|l| {
+                let l = l.trim_end();
+                match l.rsplit_once(' ') {
+                    Some((head, t))
+                        if t.ends_with('s') && t[..t.len() - 1].parse::<u64>().is_ok() =>
+                    {
+                        head.trim_end().to_string()
+                    }
+                    _ => l.to_string(),
+                }
+            })
+            .filter(|l| !l.is_empty())
+            .collect()
+    }
+
+    fn screen_lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::debug::progress::SCREEN_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn prove(row: &mut dyn ExportObserver, oracle: &str, node: &str, sentence: &str) {
+        row.on_event(&ExportEvent::NodeStarted {
+            oracle,
+            node,
+            total: 23,
+        });
+        row.on_event(&ExportEvent::SentenceSent { sentence });
+    }
+
+    /// Story 83: two oracle rows under one header, each with its node, tactic and timer.
     #[test]
-    fn the_bar_board_gives_the_screen_to_one_row_at_a_time() {
-        let board = BarProgressBoard::default();
+    fn two_oracle_rows_under_one_header() {
+        let _lock = screen_lock();
+        let (board, term) = board_on_screen();
+        let job = board.job("Eq_H4_H5", 7);
+        let mut enc = job.oracle("PKENC");
+        let mut dec = job.oracle("DEC");
+        prove(enc.as_mut(), "PKENC", "N3", "proc; inline.");
+        prove(dec.as_mut(), "DEC", "N7", "smt(dec_enc).\nmore");
+        let lines = screen(&board, &term);
+        assert_eq!(lines.len(), 3, "{lines:#?}");
+        assert!(lines[0].starts_with("Eq_H4_H5 tactics"), "{lines:#?}");
+        assert!(lines[0].ends_with("0/7  done 0, running 2"), "{lines:#?}");
+        assert_eq!(lines[1], "  PKENC  N3/23  proc; inline.");
+        assert_eq!(lines[2], "  DEC  N7/23  smt(dec_enc).");
+        let raw = term.contents();
+        assert!(
+            raw.lines().nth(1).unwrap().trim_end().ends_with('s'),
+            "a timer: {raw}"
+        );
+    }
+
+    /// Story 83: the row of an oracle in lockstep shows the node and the pair tally, and the same
+    /// row then shows the proving line.
+    #[test]
+    fn a_row_goes_from_lockstep_to_proving() {
+        let _lock = screen_lock();
+        let (board, term) = board_on_screen();
+        let job = board.job("Eq_A_B", 1);
+        let mut row = job.oracle("PKENC");
+        row.on_event(&ExportEvent::LockstepStarted { oracle: "PKENC" });
+        let mut lockstep = row.lockstep_observer();
+        lockstep.on_event(&DebugEvent::JointNode {
+            index: 40,
+            kind: "sync-branch",
+        });
+        let claims = [ClaimVerdict {
+            claim: "same-output".to_string(),
+            verdict: Verdict::Verified,
+            model: None,
+            parts: Vec::new(),
+        }];
+        lockstep.on_event(&DebugEvent::JointPairChecked {
+            id: "J1",
+            claims: &claims,
+            elapsed: Duration::from_secs(1),
+        });
+        assert_eq!(
+            screen(&board, &term)[1],
+            "  PKENC  lockstep  node 40 sync-branch  pairs 1 ✓1 ·0 ✗0 ?0 ✂0"
+        );
+        drop(lockstep);
+        prove(row.as_mut(), "PKENC", "N7", "auto.");
+        assert_eq!(screen(&board, &term)[1], "  PKENC  N7/23  auto.");
+    }
+
+    /// Story 83: a finished row leaves, and its lines are above the live rows.
+    #[test]
+    fn a_finished_row_leaves_and_its_summary_is_above() {
+        let _lock = screen_lock();
+        let (board, term) = board_on_screen();
         let job = board.job("Eq_A_B", 2);
-        let first = job.oracle("A");
-        assert!(board.busy.load(Ordering::SeqCst));
-        drop(job.oracle("B"));
-        assert!(board.busy.load(Ordering::SeqCst), "a second row does not take it");
-        drop(first);
-        assert!(!board.busy.load(Ordering::SeqCst));
+        let mut enc = job.oracle("PKENC");
+        let mut dec = job.oracle("DEC");
+        enc.on_event(&ExportEvent::LockstepFinished {
+            oracle: "PKENC",
+            found: Some((23, 1)),
+            elapsed: Duration::from_millis(41_240),
+            stopped: false,
+        });
+        prove(enc.as_mut(), "PKENC", "N1", "auto.");
+        enc.on_event(&ExportEvent::GoalFinished {
+            oracle: "PKENC",
+            goal: "N1",
+            admitted: true,
+        });
+        prove(dec.as_mut(), "DEC", "N7", "auto.");
+        drop(enc);
+        let lines = screen(&board, &term);
+        assert_eq!(
+            lines[0],
+            "  PKENC  lockstep: 23 joint paths, 1 stuck point in 41.2s; done, 1 admit",
+        );
+        assert!(lines[1].ends_with("1/2  done 1, running 1"), "{lines:#?}");
+        assert_eq!(lines[2], "  DEC  N7/23  auto.");
+        assert_eq!(lines.len(), 3, "{lines:#?}");
+        drop(dec);
+        assert_eq!(screen(&board, &term)[1], "  DEC  interrupted at N7");
+    }
+
+    /// Story 83: a line printed while rows are live goes above them; the rows stay whole.
+    #[test]
+    fn a_line_above_the_rows_tears_no_row() {
+        let _lock = screen_lock();
+        let (board, term) = board_on_screen();
+        let job = board.job("Eq_A_B", 1);
+        let mut row = job.oracle("PKENC");
+        prove(row.as_mut(), "PKENC", "N7", "auto.");
+        let before = screen(&board, &term);
+        crate::debug::progress::eprintln_above_bars("warning: something");
+        assert_eq!(screen(&board, &term), before);
+        drop(board);
+        crate::debug::progress::eprintln_above_bars("no screen now");
+    }
+
+    /// Story 83: one screen of bars at a time.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn a_second_screen_fails_the_debug_assertion() {
+        let _lock = screen_lock();
+        let (board, _term) = board_on_screen();
+        let second =
+            std::panic::catch_unwind(
+                || BarProgressBoard::with_target(ProgressDrawTarget::hidden()),
+            );
+        assert!(second.is_err());
+        drop(board);
+        let _alone = BarProgressBoard::with_target(ProgressDrawTarget::hidden());
     }
 }

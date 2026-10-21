@@ -66,13 +66,13 @@ Enable indicatif's `in_memory` feature for tests only (`[dev-dependencies]`). Th
 board on `InMemoryTerm` and compare the screen with the times taken out (as `strip_timings` does
 for pages).
 
-- [ ] Two oracle rows under one header: each shows its node, tactic and timer; the header says
+- [x] Two oracle rows under one header: each shows its node, tactic and timer; the header says
       `done 0, running 2`.
-- [ ] An oracle row in lockstep shows `node <i> <kind>` and the pair tally; when it goes to
+- [x] An oracle row in lockstep shows `node <i> <kind>` and the pair tally; when it goes to
       proving, the same row shows `N<i>/<n>  <tactic>`.
-- [ ] A finished row leaves, and its summary line is above the live rows.
-- [ ] `eprintln_above_bars` while rows are live prints above them and tears no row.
-- [ ] Making a second screen while the board is active fails the debug assertion.
+- [x] A finished row leaves, and its summary line is above the live rows.
+- [x] `eprintln_above_bars` while rows are live prints above them and tears no row.
+- [x] Making a second screen while the board is active fails the debug assertion.
 
 ## 4. Acceptance criteria
 

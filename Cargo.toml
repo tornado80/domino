@@ -71,3 +71,5 @@ clap = { version = "4.0", features = ["derive"], optional = true }
 
 [dev-dependencies]
 mockall = "0.13"
+# story 83: the bar board is drawn on an `InMemoryTerm` in tests
+indicatif = { version = "0.18", features = ["in_memory"] }
