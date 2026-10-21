@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::{
+    invariant_claim::select,
     project::Project,
+    theorem::ResolvedClaim,
     ui::TheoremUI,
     util::smtsolver::{SmtSolver, SmtSolverBackend, SmtSolverResponse},
     writers::smt::exprs::SmtExpr,
@@ -59,6 +61,7 @@ pub(crate) struct PackageInvariantSmtDriver<
     backend: &'a Backend,
     transcript: bool,
     req_oracle: Option<&'a str>,
+    req_claim: Option<&'a str>,
     parallel: usize,
     invariant_start_only: bool,
 }
@@ -66,12 +69,16 @@ pub(crate) struct PackageInvariantSmtDriver<
 impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
     PackageInvariantSmtDriver<'a, Backend, Proj>
 {
+    /// `req_claim` is the `--claim` pattern on the declared invariant names
+    /// ([`crate::invariant_claim`]); `None` checks every invariant.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         ctx: &'a PackageInvariantContext<'a>,
         project: &'a Proj,
         backend: &'a Backend,
         transcript: bool,
         req_oracle: Option<&'a str>,
+        req_claim: Option<&'a str>,
         parallel: usize,
         invariant_start_only: bool,
     ) -> Self {
@@ -81,6 +88,7 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
             backend,
             transcript,
             req_oracle,
+            req_claim,
             parallel,
             invariant_start_only,
         }
@@ -120,6 +128,7 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
     pub(crate) fn verify<UI: TheoremUI + Send>(&self, ui: &mut UI) -> Result<()> {
         let pkg_name = self.ctx.pkg_name();
         let claim_groups = self.claim_groups()?;
+        let claims = select(self.ctx.invariant_claims(), self.req_claim, pkg_name)?;
 
         log::info!("verify: package invariant of {pkg_name}");
 
@@ -148,7 +157,9 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
             .install(|| {
                 claim_groups
                     .par_iter()
-                    .map(|claim_group| self.verify_claim_group(ui.clone(), &base_smt, claim_group))
+                    .map(|claim_group| {
+                        self.verify_claim_group(ui.clone(), &base_smt, &claims, claim_group)
+                    })
                     .collect()
             });
 
@@ -163,16 +174,17 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
         Ok(())
     }
 
-    /// Checks each named invariant of the package in `claim_group`, one solver query each.
+    /// Checks each selected invariant `claims` of the package in `claim_group`, one solver
+    /// query each. Each query assumes all invariants of the package, selected or not.
     fn verify_claim_group<UI: TheoremUI + Send>(
         &self,
         ui: Arc<Mutex<&mut UI>>,
         base_smt: &[SmtExpr],
+        claims: &[ResolvedClaim],
         claim_group: &ClaimGroup,
     ) -> Result<()> {
         let pkg_name = self.ctx.pkg_name();
         let group_name = claim_group.ui_name();
-        let claims = self.ctx.invariant_claims();
 
         ui.lock().unwrap().start_claim_group(
             UI_SECTION_NAME,
@@ -182,7 +194,7 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
         );
 
         let mut result = Ok(());
-        for claim in &claims {
+        for claim in claims {
             ui.lock()
                 .unwrap()
                 .start_claim(UI_SECTION_NAME, pkg_name, group_name, claim.name());

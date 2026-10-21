@@ -1,0 +1,13 @@
+package Q {
+    state {
+        a: Integer,
+        b: Integer,
+        c: Integer,
+    }
+
+    /* `main` (a >= 0) is preserved only when `other` (b >= 0) is assumed */
+    oracle O() -> Integer {
+        a <- b;
+        return 0;
+    }
+}

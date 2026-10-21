@@ -7,6 +7,7 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::{
     debug::claims::ClaimQuery,
+    invariant_claim::select,
     package::Composition,
     project::Project,
     theorem::ResolvedClaim,
@@ -83,6 +84,7 @@ pub(crate) struct GameInvariantSmtDriver<'a, Backend: SmtSolverBackend + Sync, P
     backend: &'a Backend,
     transcript: bool,
     req_oracle: Option<&'a str>,
+    req_claim: Option<&'a str>,
     parallel: usize,
     invariant_start_only: bool,
 }
@@ -90,6 +92,8 @@ pub(crate) struct GameInvariantSmtDriver<'a, Backend: SmtSolverBackend + Sync, P
 impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
     GameInvariantSmtDriver<'a, Backend, Proj>
 {
+    /// `req_claim` is the `--claim` pattern on the declared game invariant names
+    /// ([`crate::invariant_claim`]); `None` proves every game invariant.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         eqctx: &'a EquivalenceContext<'a>,
@@ -98,6 +102,7 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
         backend: &'a Backend,
         transcript: bool,
         req_oracle: Option<&'a str>,
+        req_claim: Option<&'a str>,
         parallel: usize,
         invariant_start_only: bool,
     ) -> Self {
@@ -108,6 +113,7 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
             backend,
             transcript,
             req_oracle,
+            req_claim,
             parallel,
             invariant_start_only,
         }
@@ -147,12 +153,13 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
             .collect())
     }
 
-    /// Verifies each claim group. The caller has made sure that the composition has a game
-    /// invariant.
+    /// Verifies each claim group for the game invariants that `--claim` selects. Each query
+    /// still assumes all package and game invariants on the old state. The caller has made
+    /// sure that the composition has a game invariant.
     pub(crate) fn verify<UI: TheoremUI + Send>(&self, ui: &mut UI) -> Result<()> {
         let composition = self.comp.name.as_str();
         let claim_groups = self.claim_groups()?;
-        let claims = claims(self.eqctx);
+        let claims = select(claims(self.eqctx), self.req_claim, composition)?;
         log::info!("verify: game invariants of {composition}");
 
         let ui = Arc::new(Mutex::new(ui));

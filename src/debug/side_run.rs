@@ -774,6 +774,7 @@ mod tests {
                 composition: "S",
                 oracle: Some(&oracle),
                 invariant_start: false,
+                claim: None,
                 transcript: false,
                 parallel: 0,
             };

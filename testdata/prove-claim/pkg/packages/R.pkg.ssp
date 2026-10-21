@@ -1,0 +1,11 @@
+package R {
+    invariant: [ ./packages/R.smt2 ]
+
+    params {
+        c: Bool,
+    }
+
+    oracle Read() -> Bool {
+        return c;
+    }
+}

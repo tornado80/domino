@@ -56,6 +56,10 @@ pub enum Error {
     InvariantRewrite(#[from] Box<crate::gamehops::equivalence::error::Error>),
 
     #[error(transparent)]
+    #[diagnostic(transparent)]
+    NoInvariantMatches(#[from] crate::invariant_claim::NoInvariantMatches),
+
+    #[error(transparent)]
     ClaimFailed(#[from] ClaimFailedError),
 
     #[error("failed to prove the invariant of package {pkg_name}")]

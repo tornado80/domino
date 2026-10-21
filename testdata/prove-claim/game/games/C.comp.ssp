@@ -1,0 +1,11 @@
+composition C {
+    invariant: [ ./games/C.smt2 ]
+
+    instance q = Q {}
+
+    compose {
+        adversary: {
+            O: q,
+        },
+    }
+}

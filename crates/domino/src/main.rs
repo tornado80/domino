@@ -247,6 +247,7 @@ fn prove(p: &Prove) -> Result<(), Error> {
             composition,
             oracle: p.oracle.as_deref(),
             invariant_start: p.invariant_start,
+            claim: p.claim.as_deref(),
             transcript: p.transcript,
             parallel: p.parallel,
         };
@@ -261,6 +262,7 @@ fn prove(p: &Prove) -> Result<(), Error> {
             p.parallel,
             package,
             &p.oracle,
+            p.claim.as_deref(),
             p.invariant_start,
         )?;
         return Ok(());

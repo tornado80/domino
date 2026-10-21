@@ -110,7 +110,6 @@ fn clap_refuses_game_with_the_other_targets() {
         &["--proofstep", "0"],
         &["--package", "P"],
         &["--injective-randmap"],
-        &["--claim", "x"],
     ] {
         let mut args = vec!["--game", "S"];
         args.extend_from_slice(extra);

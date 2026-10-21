@@ -20,6 +20,8 @@ pub struct GameRequest<'r> {
     pub oracle: Option<&'r str>,
     /// `--invariant-start`: only the start group.
     pub invariant_start: bool,
+    /// `--claim`: a wildcard on the declared names of the game invariants to prove.
+    pub claim: Option<&'r str>,
     pub transcript: bool,
     pub parallel: usize,
 }
@@ -30,7 +32,7 @@ pub struct GameRequest<'r> {
 /// check assumes.
 ///
 /// Errors: [`Error::UnknownComposition`] (the help lists the compositions),
-/// [`Error::NoGameInvariant`], [`Error::UnknownOracle`] (the help lists the exports of `C`),
+/// [`Error::NoGameInvariant`], [`Error::NoInvariantMatches`] (before any solver work), [`Error::UnknownOracle`] (the help lists the exports of `C`),
 /// and [`Error::Parallel`] when a claim is not proved.
 pub fn prove_game<P: Project + Sync>(
     project: &P,
@@ -70,6 +72,7 @@ pub fn prove_game<P: Project + Sync>(
         backend,
         req.transcript,
         req.oracle,
+        req.claim,
         req.parallel,
         req.invariant_start,
     )

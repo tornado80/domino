@@ -172,6 +172,7 @@ pub trait Project {
         parallel: usize,
         pkg_names: &[&str],
         req_oracle: &Option<String>,
+        req_claim: Option<&str>,
         invariant_start: bool,
     ) -> Result<()>
     where
@@ -195,6 +196,7 @@ pub trait Project {
                 backend,
                 transcript,
                 req_oracle.as_deref(),
+                req_claim,
                 parallel,
                 invariant_start,
             );
@@ -210,7 +212,8 @@ pub trait Project {
 
     /// Proves the invariant of a single package, without proving anything else.
     ///
-    /// This is what `domino prove --package <name>` does.
+    /// This is what `domino prove --package <name>` does. `req_claim` (`--claim`) is a
+    /// wildcard on the declared names of the package's invariants.
     fn prove_package(
         &self,
         backend: &(impl SmtSolverBackend + Sync),
@@ -218,6 +221,7 @@ pub trait Project {
         parallel: usize,
         pkg_name: &str,
         req_oracle: &Option<String>,
+        req_claim: Option<&str>,
         invariant_start: bool,
     ) -> Result<()>
     where
@@ -243,6 +247,7 @@ pub trait Project {
             parallel,
             &[pkg_name],
             req_oracle,
+            req_claim,
             invariant_start,
         )
     }
@@ -294,6 +299,7 @@ pub trait Project {
             parallel,
             &package_invariants,
             req_oracle,
+            None, // plain `prove`: `--claim` matches the equivalence claims only
             invariant_start,
         )?;
 

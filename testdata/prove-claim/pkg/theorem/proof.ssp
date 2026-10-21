@@ -1,0 +1,67 @@
+theorem Proof {
+    const b: Bool;
+    const k: Integer;
+    const f1: fn Integer -> Integer;
+    const f2: fn Integer -> Integer;
+
+    instance left = G {
+        params {
+            b: b,
+            k: k,
+            f: f1,
+        }
+    }
+
+    instance right = H {
+        params {
+            b: b,
+            k: k,
+            f: f2,
+        }
+    }
+
+    gamehops {
+        equivalence left right {
+            invariant: [
+                ./theorem/invariant.smt2
+            ]
+
+            Inc: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    same-output:  [no-abort]
+                    invariant:    [no-abort]
+                }
+            }
+            Get: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    same-output:  [no-abort]
+                    invariant:    [no-abort]
+                }
+            }
+            Bump: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    same-output:  [no-abort]
+                    invariant:    [no-abort]
+                }
+            }
+            Read: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    same-output:  [no-abort]
+                    invariant:    [no-abort]
+                }
+            }
+        }
+    }
+}

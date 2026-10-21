@@ -478,20 +478,20 @@ pub(crate) struct Prove {
     pub(crate) proof: Option<String>,
     /// Only prove the invariant of this package, and nothing else.
     /// Cannot be combined with --proof or --proofstep.
-    #[clap(long)]
+    #[clap(long, conflicts_with = "injective_randmap")]
     pub(crate) package: Option<String>,
     /// Only prove the game invariants of this composition (as in `games/C.comp.ssp`; not a
     /// game instance), for every value of its parameters. Needs no theorem. It assumes the
     /// package invariants of its instances: prove them with `--package`. Plain `domino prove`
     /// does not run this check.
-    #[clap(long, conflicts_with_all = ["package", "injective_randmap", "claim"])]
+    #[clap(long, conflicts_with_all = ["package", "injective_randmap"])]
     pub(crate) game: Option<String>,
     /// Only prove the claims of this oracle. Package invariants are then only checked for
     /// packages that have an oracle of this name, and only for that oracle.
     #[clap(long)]
     pub(crate) oracle: Option<String>,
-    /// Only prove the equivalence claims whose name matches this pattern.
-    /// Does not apply to package invariants.
+    /// With `--package` or `--game`: a wildcard on the names of the owner's invariants.
+    /// Otherwise: a wildcard on the names of the equivalence claims.
     #[clap(long)]
     pub(crate) claim: Option<String>,
     #[clap(long, default_value_t = 1)]
