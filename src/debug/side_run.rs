@@ -5,9 +5,11 @@
 //!
 //! # The composition with free parameters
 //!
-//! No game instance fixes the parameters of `C`. [`free_theorem`] adds to the theorem a game
-//! instance named `C` whose every parameter is a theorem constant that nothing constrains: the
-//! theorem's own constant of that name and type when there is one, otherwise a new constant
+//! No game instance fixes the parameters of `C`. [`free_theorem`] makes a copy of the theorem
+//! whose only game instances are `C` and its copy `C$side` (the theorem's own instances, game
+//! hops and proofs are dropped, so a theorem instance named `C` does not clash). Every parameter
+//! of `C` is a theorem constant that nothing constrains: the theorem's own constant of that name
+//! and type when there is one, otherwise a new constant
 //! `<C>_<param>`. So the package and game invariant claims are named for the composition
 //! (`package-invariant!<name>!<C>-<PkgInst>!`, `game-invariant!<name>!<C>!`) by their one owners
 //! ([`package_invariant_claim_name`], [`game_invariant_claim_name`]), and the definitions of the
@@ -103,23 +105,23 @@ fn copy_name(composition: &str) -> String {
     format!("{composition}$side")
 }
 
-/// `theorem` with two more game instances of `comp`, `C` and `C$side`, whose parameters are
-/// free theorem constants, and the equivalence of the two that gives the SMT vocabulary.
+/// The theorem that one-sided execution of `comp` reads: `theorem` with only two game instances
+/// of `comp`, `C` and `C$side`, whose parameters are free theorem constants, and the equivalence
+/// of the two that gives the SMT vocabulary. It keeps the name, the constants, the packages and
+/// the assumptions of `theorem`, and drops its game instances, game hops and proofs: one-sided
+/// execution reads none of them, and a theorem instance named `C` cannot clash (story 85).
 pub(crate) fn free_theorem<'a>(
     theorem: &Theorem<'a>,
     comp: &Composition,
-) -> Result<(Theorem<'a>, Equivalence), DebugError> {
+) -> (Theorem<'a>, Equivalence) {
     let name = comp.name.clone();
     let copy = copy_name(&name);
-    for taken in [&name, &copy] {
-        if theorem.find_game_instance(taken).is_some() {
-            return Err(DebugError::SideInstanceNameTaken {
-                name: taken.clone(),
-                theorem: theorem.name.clone(),
-            });
-        }
-    }
-    let mut theorem = theorem.clone();
+    let mut theorem = Theorem {
+        instances: Vec::new(),
+        game_hops: Vec::new(),
+        proofs: Vec::new(),
+        ..theorem.clone()
+    };
     let params = free_params(&mut theorem, comp);
     for inst_name in [&name, &copy] {
         let inst = GameInstance::new(
@@ -153,7 +155,7 @@ pub(crate) fn free_theorem<'a>(
         Vec::new(),
         randomness,
     );
-    Ok((theorem, eq))
+    (theorem, eq)
 }
 
 /// One free theorem constant for each parameter of `comp`, added to `theorem` where it has none
@@ -234,7 +236,7 @@ pub fn side_fingerprint<P: Project>(
             name: theorem_name.to_string(),
         })?;
     let comp = composition_of(project, composition)?;
-    let (theorem, eq) = free_theorem(theorem, comp)?;
+    let (theorem, eq) = free_theorem(theorem, comp);
     let (theorem_eq, auxs_eq) = EquivalenceTransform.transform_theorem(&theorem)?;
     let mut eqctx = EquivalenceContext::new(&eq, &theorem_eq, &auxs_eq);
     eqctx.load_invariants(project)?;
@@ -344,7 +346,7 @@ where
             game_inst: composition.to_string(),
         });
     }
-    let (theorem, eq) = free_theorem(theorem, comp)?;
+    let (theorem, eq) = free_theorem(theorem, comp);
 
     let (theorem_eq, auxs_eq) = EquivalenceTransform.transform_theorem(&theorem)?;
     let mut eqctx = EquivalenceContext::new(&eq, &theorem_eq, &auxs_eq);
@@ -854,6 +856,65 @@ mod tests {
             std::fs::read_to_string(theorem_out.join("!debug!/SideInv_S/summary.txt")).unwrap();
         assert!(side_index.contains("side invariants of S"), "{side_index}");
         assert!(side_index.contains("O/index.html"), "{side_index}");
+    }
+
+    /// The claim names, the base frame and the fingerprint of the side tree of `S.O`.
+    fn side_inputs(project: &DirectoryProject<'_>) -> (Vec<String>, String, Fingerprint) {
+        let theorem = project.get_theorem("T").unwrap();
+        let comp = composition_of(project, "S").unwrap();
+        let (theorem, eq) = free_theorem(theorem, comp);
+        let (theorem_eq, auxs_eq) = EquivalenceTransform.transform_theorem(&theorem).unwrap();
+        let mut eqctx = EquivalenceContext::new(&eq, &theorem_eq, &auxs_eq);
+        eqctx.load_invariants(project).unwrap();
+        let names = side_claims(&eqctx)
+            .iter()
+            .map(|c| c.name().to_string())
+            .collect();
+        let base = side_base_frame(&eqctx, "O")
+            .into_iter()
+            .map(|e| format!("{e}\n"))
+            .collect();
+        let fingerprint = side_fingerprint(project, "T", "S", "O").unwrap();
+        (names, base, fingerprint)
+    }
+
+    /// Story 85: the free theorem holds only the two free instances, and no game hops.
+    #[test]
+    fn the_free_theorem_holds_only_the_free_instances() {
+        let project = project();
+        let theorem = project.get_theorem("T").unwrap();
+        let comp = composition_of(&project, "S").unwrap();
+        let (free, _) = free_theorem(theorem, comp);
+        let names: Vec<&str> = free.instances.iter().map(|i| i.name()).collect();
+        assert_eq!(names, ["S", "S$side"]);
+        assert!(free.game_hops.is_empty());
+        assert!(free.proofs.is_empty());
+        assert_eq!(free.name, theorem.name);
+        assert_eq!(free.assumptions.len(), theorem.assumptions.len());
+        assert_eq!(free.pkgs.len(), theorem.pkgs.len());
+    }
+
+    /// Story 85: a theorem instance with the name of the composition does not change the side
+    /// tree: the free instance is executed (the branch on `n` splits, as `n` is free).
+    #[test]
+    fn a_theorem_instance_named_as_the_composition_does_not_clash() {
+        let out = tempfile::tempdir().unwrap();
+        let run = side_run_of(&project_in("testdata/debug/se25-name-taken"), out.path());
+        assert_eq!(run.outcome.pairs.len(), 4);
+        let root = &run.outcome.tree.nodes[0];
+        assert_eq!(root.kind, NodeKind::Split, "the branch on `n > 0` splits");
+        let names: Vec<&str> = run.meta.claims.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, [GAME]);
+    }
+
+    /// Story 85: the claims, the base frame and the fingerprint do not depend on the theorem's
+    /// own instances.
+    #[test]
+    fn the_side_inputs_do_not_depend_on_the_theorem_instances() {
+        let plain = side_inputs(&project());
+        let taken = side_inputs(&project_in("testdata/debug/se25-name-taken"));
+        assert_eq!(plain.0, [GAME]);
+        assert_eq!(plain, taken);
     }
 
     #[test]

@@ -359,12 +359,12 @@ mod tests {
 
     #[test]
     fn a_side_tree_with_free_parameters_folds_only_literal_conditions() {
-        // Full4WHS has no instance named `Hybrid2`, so the side tree's free instance can take it
+        // the free theorem holds only the free instances of `Hybrid2` (story 85)
         with_theorem(FOUR_WHS, "Full4WHS", |theorem| {
             let files = DirectoryFiles::load(Path::new(FOUR_WHS)).unwrap();
             let project = DirectoryProject::load(PathBuf::from(FOUR_WHS), &files).unwrap();
             let comp = project.get_game("Hybrid2").unwrap();
-            let (free, _) = crate::debug::side_run::free_theorem(theorem, comp).unwrap();
+            let (free, _) = crate::debug::side_run::free_theorem(theorem, comp);
             let (ec, _) = EasyCryptTransform.transform_theorem(&free).unwrap();
             let inlined =
                 inline_oracle_ec(ec.find_game_instance("Hybrid2").unwrap(), "Send2").unwrap();

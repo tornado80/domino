@@ -428,6 +428,17 @@ impl JobKind<'_> {
         }
     }
 
+    /// The start of the reason of an oracle without tactics whose run failed: a proofstep job
+    /// runs lockstep execution, the other jobs one-sided execution (story 85).
+    fn run_failed(self) -> &'static str {
+        match self {
+            JobKind::Equivalence => "lockstep execution failed",
+            JobKind::SideInvariants(_) | JobKind::PackageInvariants(_) => {
+                "one-sided execution failed"
+            }
+        }
+    }
+
     /// The package of a package-invariant job.
     fn package(self) -> Option<String> {
         match self {
@@ -1756,7 +1767,7 @@ where
         Err(source) => {
             admit_outside(session, Some(oracle))?;
             let mut result =
-                OracleTactics::empty(oracle, &format!("lockstep execution failed: {source}"));
+                OracleTactics::empty(oracle, &format!("{}: {source}", kind.run_failed()));
             result.lockstep_time = lockstep_time;
             return Ok(Lockstep::Ended(OracleEnd::Done(result)));
         }

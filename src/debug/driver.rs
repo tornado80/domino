@@ -160,12 +160,6 @@ pub enum DebugError {
     )]
     NoGameInvariants { composition: String },
 
-    #[error(
-        "theorem `{theorem}` already has a game instance named `{name}`, the name one-sided \
-         execution gives the composition with free parameters"
-    )]
-    SideInstanceNameTaken { name: String, theorem: String },
-
     #[error("theorem `{theorem}` uses no instance of package `{package}`")]
     PackageNotInTheorem { package: String, theorem: String },
 

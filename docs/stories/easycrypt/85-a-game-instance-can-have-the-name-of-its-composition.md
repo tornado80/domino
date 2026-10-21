@@ -102,20 +102,20 @@ package-invariant job) says `one-sided execution failed: …`. A proofstep job d
 
 ## 5. Tests first
 
-- [ ] Red: a new fixture `testdata/debug/se25-name-taken`, which is `testdata/debug/se25` with the
+- [x] Red: a new fixture `testdata/debug/se25-name-taken`, which is `testdata/debug/se25` with the
       instance `s` renamed to `S` (`n: 1`) and `equivalence S s2`. Today `run_side_command(…, "S",
       "O", …)` gives `SideInstanceNameTaken`. After: the run succeeds, the root is a `Split` on
       `n > 0` and there are four terminals, as for `se25`. This shows that the free instance is
       executed, not `S` with `n = 1` (that would fold the branch).
-- [ ] `free_theorem` of `se25`: the instances are exactly `[S, S$side]`, and the game hops are empty.
-- [ ] `se25` without a clash: the `trace.json` claims, the base frame and the fingerprint are
+- [x] `free_theorem` of `se25`: the instances are exactly `[S, S$side]`, and the game hops are empty.
+- [x] `se25` without a clash: the `trace.json` claims, the base frame and the fingerprint are
       byte-identical before and after.
-- [ ] A side-invariant job whose one-sided run fails reports `one-sided execution failed: …`; a
+- [x] A side-invariant job whose one-sided run fails reports `one-sided execution failed: …`; a
       proofstep job still reports `lockstep execution failed: …`.
 
 ## 6. Acceptance criteria
 
-- [ ] All tests of §5 green; no reference to `SideInstanceNameTaken` is left.
+- [x] All tests of §5 green; no reference to `SideInstanceNameTaken` is left.
 - [ ] The owner's check: on a copy of `4WHS` with `instance H4 = H4 { … }` again,
       `domino-ec easycrypt prove --side-inv H4` gives tactics for the oracles (not "no tactics"),
       as with `H4_b`.

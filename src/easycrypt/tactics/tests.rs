@@ -1015,12 +1015,16 @@ mod live {
         fn on_event(&mut self, event: &crate::writers::easycrypt::progress::ExportEvent<'_>) {
             use crate::writers::easycrypt::progress::ExportEvent;
             match event {
-                ExportEvent::NodeStarted { node, total, .. } => {
-                    self.walk.lock().unwrap().push(format!("node {node}/{total}"))
-                }
-                ExportEvent::SentenceSent { sentence } => {
-                    self.walk.lock().unwrap().push(format!("sentence {sentence}"))
-                }
+                ExportEvent::NodeStarted { node, total, .. } => self
+                    .walk
+                    .lock()
+                    .unwrap()
+                    .push(format!("node {node}/{total}")),
+                ExportEvent::SentenceSent { sentence } => self
+                    .walk
+                    .lock()
+                    .unwrap()
+                    .push(format!("sentence {sentence}")),
                 _ => {}
             }
             let event = match event {
@@ -1915,12 +1919,14 @@ mod live {
             out,
             &backend(),
             options,
-            &FactoryBoard(std::sync::Mutex::new(move || -> Box<dyn ExportObserver + Send> {
-                Box::new(Watching {
-                    stop: stop.take().flatten(),
-                    walk: walk.clone(),
-                })
-            })),
+            &FactoryBoard(std::sync::Mutex::new(
+                move || -> Box<dyn ExportObserver + Send> {
+                    Box::new(Watching {
+                        stop: stop.take().flatten(),
+                        walk: walk.clone(),
+                    })
+                },
+            )),
         )
         .unwrap()
     }
@@ -5421,7 +5427,10 @@ mod progress_board {
         let key = |o: &str| ("PkgInv_Ctr".to_string(), o.to_string());
         for frame in ["Frame_Ctr_Step", "Frame_Ctr_Peek", "Frame_Ctr_Get"] {
             let events = &rows[&key(frame)];
-            assert_eq!(events[0], "item tactics 1 check file", "{frame}: {events:?}");
+            assert_eq!(
+                events[0], "item tactics 1 check file",
+                "{frame}: {events:?}"
+            );
             assert!(events[1].starts_with("sentence "), "{frame}: {events:?}");
             assert_eq!(events[2], format!("goal {frame} {frame} false"));
             assert_eq!(events.len(), 3, "{frame}: {events:?}");
@@ -5429,9 +5438,15 @@ mod progress_board {
         let init = &rows[&key("init")];
         let attempts: Vec<&String> = init.iter().filter(|e| e.starts_with("item ")).collect();
         assert!(!attempts.is_empty(), "{init:?}");
-        assert!(init.last().unwrap().starts_with("goal init init "), "{init:?}");
+        assert!(
+            init.last().unwrap().starts_with("goal init init "),
+            "{init:?}"
+        );
         for (k, item) in attempts.iter().enumerate() {
-            assert_eq!(**item, format!("item tactics {} attempt {}/2", k + 1, k + 1));
+            assert_eq!(
+                **item,
+                format!("item tactics {} attempt {}/2", k + 1, k + 1)
+            );
         }
         assert_eq!(
             init.iter().filter(|e| e.starts_with("sentence ")).count(),
@@ -5459,4 +5474,21 @@ mod progress_board {
         let two = by_row(&recorded(FOUR_ORACLES, "Proof", 2));
         assert_eq!(one, two);
     }
+}
+
+/// Story 85: an oracle whose run failed names the execution that its job runs.
+#[test]
+fn a_failed_run_names_the_execution_of_its_job() {
+    assert_eq!(
+        JobKind::Equivalence.run_failed(),
+        "lockstep execution failed"
+    );
+    assert_eq!(
+        JobKind::SideInvariants("H4").run_failed(),
+        "one-sided execution failed"
+    );
+    assert_eq!(
+        JobKind::PackageInvariants("P").run_failed(),
+        "one-sided execution failed"
+    );
 }
