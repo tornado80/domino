@@ -147,18 +147,7 @@ pub(super) fn may_mention_op(form: &Form, name: &str) -> bool {
     if op_is(form, name) || form.stub {
         return true;
     }
-    children(form).any(|c| may_mention_op(c, name))
-}
-
-/// The direct sub-formulas of a formula.
-fn children(form: &Form) -> impl Iterator<Item = &Form> {
-    form.head
-        .iter()
-        .map(|b| &**b)
-        .chain(form.args.iter())
-        .chain(form.body.iter().map(|b| &**b))
-        .chain(form.pre.iter().map(|b| &**b))
-        .chain(form.post.iter().map(|b| &**b))
+    form.children().any(|c| may_mention_op(c, name))
 }
 
 /// The most pairs a key case split takes: `2^6` cases.
@@ -243,15 +232,7 @@ fn collect_key_pairs(form: &Form, binders: &[String], pairs: &mut Vec<KeyPair>) 
             }
         }
     }
-    let children = form
-        .head
-        .iter()
-        .map(|b| &**b)
-        .chain(form.args.iter())
-        .chain(form.body.iter().map(|b| &**b))
-        .chain(form.pre.iter().map(|b| &**b))
-        .chain(form.post.iter().map(|b| &**b));
-    for child in children {
+    for child in form.children() {
         collect_key_pairs(child, binders, pairs);
     }
 }
@@ -459,5 +440,74 @@ mod tests {
         let pairs = key_pairs(&form(&read(&chain, &local("c"))), &binders(&["c"]));
         let keys: Vec<_> = pairs.iter().map(|p| p.key.as_str()).collect();
         assert_eq!(keys, ["Comp_H3.Pkg_Inst_KX.k{2}", "x{1}"]);
+    }
+
+    /// Story 88: the read `d.[ctr0{hr} <- state{hr}].[ctr1]` of §1 of the story.
+    fn state_read() -> String {
+        let ctr0 = r#"{"kind":"pvar","scope":"local","name":"ctr0","mem":"&hr"}"#;
+        read(&set(&local("d"), ctr0), &local("ctr1"))
+    }
+
+    fn ctr_pairs(json: &str) -> Vec<KeyPair> {
+        key_pairs(&form(json), &binders(&["ctr1"]))
+    }
+
+    #[test]
+    fn a_read_under_a_projection_gives_its_pair() {
+        // (oget d.[ctr0{hr} <- state{hr}].[ctr1]).`7 <> None
+        let oget = app("Top.Core.oget", &[state_read()]);
+        let proj = format!(r#"{{"kind":"proj","arg":{oget},"index":7}}"#);
+        let ne = app("Top.Logic.<>", &[proj, r#"{"kind":"op"}"#.into()]);
+        assert_eq!(
+            ctr_pairs(&ne),
+            [KeyPair {
+                binder: "ctr1".into(),
+                key: "ctr0{hr}".into()
+            }]
+        );
+    }
+
+    /// The same atom `r` under each node kind that is not an `app` or a `quant`.
+    fn under_each_kind(r: &str) -> [String; 5] {
+        let t = r#"{"kind":"op"}"#;
+        [
+            format!(r#"{{"kind":"if","cond":{r},"then":{t},"else":{t}}}"#),
+            format!(r#"{{"kind":"tuple","items":[{t},{r}]}}"#),
+            format!(r#"{{"kind":"let","bound":{r},"body":{t}}}"#),
+            format!(r#"{{"kind":"match","scrutinee":{r},"branches":[{t}]}}"#),
+            format!(r#"{{"kind":"proj","arg":{r},"index":1}}"#),
+        ]
+    }
+
+    #[test]
+    fn a_read_under_an_if_a_tuple_a_let_or_a_match_gives_one_pair() {
+        for json in under_each_kind(&state_read()) {
+            assert_eq!(ctr_pairs(&json).len(), 1, "{json}");
+        }
+    }
+
+    #[test]
+    fn an_operator_under_each_node_kind_may_be_mentioned() {
+        let inv = r#"{"kind":"app","op":"Top.Eq.inv"}"#;
+        for json in under_each_kind(inv) {
+            assert!(may_mention_op(&form(&json), "inv"), "{json}");
+        }
+        // the other arms of an `if`, a `let` body, a branch
+        let t = r#"{"kind":"op"}"#;
+        for json in [
+            format!(r#"{{"kind":"if","cond":{t},"then":{t},"else":{inv}}}"#),
+            format!(r#"{{"kind":"let","bound":{t},"body":{inv}}}"#),
+            format!(r#"{{"kind":"match","scrutinee":{t},"branches":[{t},{inv}]}}"#),
+        ] {
+            assert!(may_mention_op(&form(&json), "inv"), "{json}");
+        }
+    }
+
+    #[test]
+    fn a_stub_projection_has_no_children() {
+        let stub = form(r#"{"kind":"proj","stub":true}"#);
+        assert_eq!(stub.children().count(), 0);
+        assert!(key_pairs(&stub, &binders(&["ctr1"])).is_empty());
+        assert!(may_mention_op(&stub, "inv"));
     }
 }

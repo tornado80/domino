@@ -1,0 +1,2 @@
+{"sentence": "require import AllCore.", "want": "status"}
+{"sentence": "lemma story88 (x : int * bool) (y : int) : (if x.`2 then (x, y).`1.`1 else let z = y + 1 in z) = (match Some y with | None => 0 | Some w => w end).", "want": "full"}

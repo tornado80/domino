@@ -204,8 +204,12 @@ pub struct Node {
     pub pp: String,
 }
 
-/// A formula. Which fields are present depends on `kind` (`equivS`, `equivF`, `app`, `quant`, …);
-/// see `json-output.md`. Only a root formula (a conclusion, a hypothesis) has `pp`; a subnode's
+/// A formula. Which fields are present depends on `kind`; see `easycrypt/doc/json-output.md`,
+/// "FORM". The sub-formulas are in: `head`, `args` (`app`; `pr`, one tuple), `items` (`tuple`),
+/// `arg` (`proj`), `cond`, `then_form`, `else_form` (`if`), `scrutinee`, `branches` (`match`),
+/// `bound`, `body` (`let`; `body` also `quant`), `event` (`pr`), `bd` (`phoareS`, `phoareF`), `pre`,
+/// `post` (the program logics). [`Form::children`] gives all of them. The `exn` of a hoare goal
+/// is not read: Domino writes no exceptions. Only a root formula (a conclusion, a hypothesis) has `pp`; a subnode's
 /// `pp` is empty. In a goal read with `head`, a node deeper than 4 is a stub: its `kind`, and
 /// its `op` for an `app`, nothing else.
 #[derive(Debug, Clone, Deserialize)]
@@ -234,6 +238,35 @@ pub struct Form {
     pub binders: Vec<Binder>,
     #[serde(default)]
     pub body: Option<Box<Form>>,
+    /// `proj`: the tuple projected, and the index.
+    #[serde(default)]
+    pub arg: Option<Box<Form>>,
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// `tuple`.
+    #[serde(default)]
+    pub items: Vec<Form>,
+    /// `if`.
+    #[serde(default)]
+    pub cond: Option<Box<Form>>,
+    #[serde(default, rename = "then")]
+    pub then_form: Option<Box<Form>>,
+    #[serde(default, rename = "else")]
+    pub else_form: Option<Box<Form>>,
+    /// `match`.
+    #[serde(default)]
+    pub scrutinee: Option<Box<Form>>,
+    #[serde(default)]
+    pub branches: Vec<Form>,
+    /// `let`: the bound term (the body is `body`).
+    #[serde(default)]
+    pub bound: Option<Box<Form>>,
+    /// `pr`: the event.
+    #[serde(default)]
+    pub event: Option<Box<Form>>,
+    /// `phoareS`, `phoareF`: the bound.
+    #[serde(default)]
+    pub bd: Option<Box<Form>>,
     /// `equivS`: the two programs.
     #[serde(default)]
     pub left: Option<Side>,
@@ -261,6 +294,31 @@ pub struct Form {
 }
 
 impl Form {
+    /// The direct sub-formulas, in the order of the schema: `head`, `args`, `items`, `arg`,
+    /// `cond`, `then`, `else`, `scrutinee`, `branches`, `bound`, `body`, `event`, `bd`, `pre`,
+    /// `post`. A stub has none. Every walk of a formula tree uses this list, so that no walk
+    /// misses a field (story 88).
+    pub fn children(&self) -> impl Iterator<Item = &Form> {
+        fn one(f: &Option<Box<Form>>) -> std::option::IntoIter<&Form> {
+            f.as_deref().into_iter()
+        }
+        one(&self.head)
+            .chain(self.args.iter())
+            .chain(self.items.iter())
+            .chain(one(&self.arg))
+            .chain(one(&self.cond))
+            .chain(one(&self.then_form))
+            .chain(one(&self.else_form))
+            .chain(one(&self.scrutinee))
+            .chain(self.branches.iter())
+            .chain(one(&self.bound))
+            .chain(one(&self.body))
+            .chain(one(&self.event))
+            .chain(one(&self.bd))
+            .chain(one(&self.pre))
+            .chain(one(&self.post))
+    }
+
     /// The two procedures of an `equivF`, `(left, right)`.
     pub fn equiv_procs(&self) -> Option<(&Proc, &Proc)> {
         if self.kind != "equivF" {
@@ -473,5 +531,93 @@ mod tests {
             .join()
             .unwrap();
         assert!(took < std::time::Duration::from_millis(500), "{took:?}");
+    }
+
+    /// Story 88 §3.3: a `full` answer on a goal with a `proj`, `tuple`, `if`, `match` and
+    /// `let` (`requests.jsonl` beside it gives the lemma).
+    const EACH_KIND: &str =
+        include_str!("../../testdata/easycrypt/story88/each_formula_kind_full.json");
+
+    /// The fields of a formula node that hold objects with a `kind` but are not sub-formulas.
+    const NOT_FORMULAS: &[&str] = &["pattern", "binders", "program", "left", "right", "exn"];
+
+    /// The formula-valued fields of a raw node, as in `easycrypt/tests/json/check.py`: every
+    /// object with a `kind` in a field, or in a list in a field.
+    fn raw_children(node: &serde_json::Value) -> Vec<&serde_json::Value> {
+        let is_node = |v: &&serde_json::Value| v.get("kind").is_some();
+        let fields = node.as_object().into_iter().flatten();
+        fields
+            .filter(|(k, _)| !NOT_FORMULAS.contains(&k.as_str()))
+            .flat_map(|(_, v)| match v {
+                serde_json::Value::Array(items) => items.iter().filter(is_node).collect(),
+                v => [v].into_iter().filter(is_node).collect::<Vec<_>>(),
+            })
+            .collect()
+    }
+
+    /// The number of nodes checked: `form` and `raw` have the same number of children at
+    /// every node.
+    fn check_children(form: &Form, raw: &serde_json::Value) -> usize {
+        let raw_kids = raw_children(raw);
+        let kids: Vec<&Form> = form.children().collect();
+        assert_eq!(kids.len(), raw_kids.len(), "children of {raw}");
+        let mut by_kind: Vec<_> = raw_kids.iter().map(|r| r["kind"].as_str()).collect();
+        let mut form_kinds: Vec<_> = kids.iter().map(|f| Some(f.kind.as_str())).collect();
+        by_kind.sort();
+        form_kinds.sort();
+        assert_eq!(form_kinds, by_kind, "kinds of the children of {raw}");
+        1 + kids
+            .iter()
+            .zip(raw_kids_in_schema_order(raw))
+            .map(|(f, r)| check_children(f, r))
+            .sum::<usize>()
+    }
+
+    /// The raw children in the order of [`Form::children`].
+    fn raw_kids_in_schema_order(raw: &serde_json::Value) -> Vec<&serde_json::Value> {
+        const ORDER: &[&str] = &[
+            "head",
+            "args",
+            "items",
+            "arg",
+            "cond",
+            "then",
+            "else",
+            "scrutinee",
+            "branches",
+            "bound",
+            "body",
+            "event",
+            "bd",
+            "pre",
+            "post",
+        ];
+        ORDER
+            .iter()
+            .filter_map(|k| raw.get(*k))
+            .flat_map(|v| match v {
+                serde_json::Value::Array(items) => items.iter().collect(),
+                v => vec![v],
+            })
+            .filter(|v| v.get("kind").is_some())
+            .collect()
+    }
+
+    #[test]
+    fn every_formula_field_of_a_full_answer_is_a_child() {
+        let raw: serde_json::Value = serde_json::from_str(EACH_KIND).unwrap();
+        let concl = &raw["proof"]["front"]["concl"];
+        let goal = parse_response(EACH_KIND)
+            .unwrap()
+            .proof
+            .unwrap()
+            .front
+            .unwrap();
+        let checked = check_children(&goal.concl, concl);
+        let text = concl.to_string();
+        for kind in ["proj", "tuple", "if", "match", "let"] {
+            assert!(text.contains(&format!(r#""kind":"{kind}""#)), "no {kind}");
+        }
+        assert!(checked > 20, "{checked} nodes");
     }
 }
