@@ -214,6 +214,7 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 82 | The progress board, and plain progress for parallel jobs (ADR 0020) | `82-the-progress-board-and-plain-progress.md` | — |
 | 83 | One bar row for each running oracle (ADR 0020) | `83-one-bar-row-for-each-running-oracle.md` | 82 |
 | 84 | Rows for the fixed lemmas (ADR 0020) | `84-rows-for-the-fixed-lemmas.md` | 82 |
+| 85 | A game instance can have the name of its composition (side-invariant jobs) | `85-a-game-instance-can-have-the-name-of-its-composition.md` | 69, 77, symbolic-execution 25 |
 
 Stories 71–77 and symbolic-execution 26–29 come from the grilling of 2026-10-12/20. The merges land
 in the order 71 → symbolic-execution 26 → 74. Not merged: the rest of Christoph Egger's stack (not
