@@ -1,0 +1,16 @@
+composition G {
+    instance tbl = Tbl {
+    }
+
+    instance src = Src {
+    }
+
+    compose {
+        adversary: {
+            Set: tbl,
+        },
+        tbl: {
+            Get: src,
+        },
+    }
+}

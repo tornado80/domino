@@ -1,0 +1,17 @@
+package Tbl {
+    invariant: [ ./packages/Tbl.smt2 ]
+
+    state {
+        T: Table(Integer, Integer),
+    }
+
+    import oracles {
+        Get(x: Integer) -> Maybe(Integer),
+    }
+
+    /* breaks `zero-empty` when k = 0: the cell gets an unknown value */
+    oracle Set(k: Integer) {
+        T[k] <- invoke Get(k);
+        return;
+    }
+}

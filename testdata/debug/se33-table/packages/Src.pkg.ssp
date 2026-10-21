@@ -1,0 +1,5 @@
+package Src {
+    oracle Get(x: Integer) -> Maybe(Integer) {
+        return Some(x);
+    }
+}

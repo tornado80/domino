@@ -1045,11 +1045,19 @@ impl<'a> Executor<'a> {
 
     /// The bind of an open call (ADR 0017) gets a fresh constant with no definition: nothing is
     /// known about the outcome. easycryptify binds every import call to an `ec_r<N>` local; on
-    /// the Domino listing (story 33) the bind can also be a state field.
+    /// the Domino listing (story 33) the bind can also be a state field or a table cell; a table
+    /// cell gets the fresh value through an ordinary table write.
     fn bind_unknown(&mut self, st: &mut SymState, bind: Option<&Place>, ty: &Type) {
-        if let Some(place @ (Place::Local { .. } | Place::State { .. })) = bind {
-            let id = self.fresh(st, place_basename(place), ty);
-            st.rebind(place, id);
+        match bind {
+            Some(place @ (Place::Local { .. } | Place::State { .. })) => {
+                let id = self.fresh(st, place_basename(place), ty);
+                st.rebind(place, id);
+            }
+            Some(place @ Place::Index { base, .. }) => {
+                let id = self.fresh(st, place_basename(base), ty);
+                self.bind_fresh(st, place, (&id).into());
+            }
+            _ => {}
         }
     }
 

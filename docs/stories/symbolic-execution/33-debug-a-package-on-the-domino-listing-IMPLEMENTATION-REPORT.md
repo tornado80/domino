@@ -175,3 +175,30 @@ Every edited function has CC < 15.
   CC was over 15.
 - The no-open-call check on `test-projects/test-side-invariant-from-package-lemmas` was not
   added; the check is on `testdata/debug/se25` (`debug --game`) and the two-sided tests pass.
+
+## Addendum: an open call into a table cell
+
+Before this change, an open call that binds its result into a table cell (for example
+`T[k] <- invoke Get(k)`) did not change the table. The cell kept its old value. That was not
+sound.
+
+What changed:
+
+- `Executor::bind_unknown` (src/debug/exec.rs) now has a third case for `Place::Index`. It
+  declares a fresh constant of the import's return type and gives it to `bind_fresh`. Thus the
+  table gets the ordinary table write `(store T k fresh)`. There is no second code path.
+  CC of `bind_unknown` is 3.
+
+Tests:
+
+- New fixture `testdata/debug/se33-table`: package `Tbl` imports `Get(x) -> Maybe(Integer)`,
+  and the oracle `Set(k)` does `T[k] <- invoke Get(k)`. The invariant `zero-empty` says that
+  `T[0]` is `None`. A fresh value at `k = 0` breaks it.
+- New test `package_run::tests::an_open_call_into_a_table_cell_gets_a_fresh_value`. Before the
+  fix it failed (the verdict was `Verified`). After the fix it passes (`GoalFails`).
+- `cargo test --features cvc5-lib --lib debug::`: 232 passed, 3 ignored, 1 failed. The failure
+  is `driver::tests::tiny_timeout_yields_inconclusive_never_a_false_pass`. It is flaky with a
+  1 ms solver timeout: on the base commit 96571bad it also failed two times in three runs. The
+  new code is not reached in that test.
+- `cargo test -p domino --features cvc5-lib --test debug_package`: 4 passed.
+- `cargo clippy --workspace --all-targets` and `cargo fmt --check`: clean.

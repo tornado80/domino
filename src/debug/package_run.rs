@@ -241,6 +241,34 @@ mod tests {
     }
 
     #[test]
+    fn an_open_call_into_a_table_cell_gets_a_fresh_value() {
+        let dir = PathBuf::from("testdata/debug/se33-table");
+        let files: &'static DirectoryFiles =
+            Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
+        let project = DirectoryProject::load(dir, files).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let run = run_package_command(
+            &project,
+            "Tbl",
+            "Set",
+            None,
+            &opts(),
+            &IncrementalCvc5Backend,
+            root.path(),
+            &mut NopObserver,
+            None,
+        )
+        .unwrap();
+        // the cell T[k] gets an unknown value: with k = 0 it breaks `zero-empty`
+        let verdict = run.outcome.pairs[0].verdict_of("package-invariant!zero-empty!Tbl!");
+        assert!(
+            matches!(verdict, Some(Verdict::GoalFails { .. })),
+            "{verdict:?}"
+        );
+        assert!(!run.is_ok());
+    }
+
+    #[test]
     fn the_run_directory_and_the_project_index() {
         let root = tempfile::tempdir().unwrap();
         let run = package_run("Ctr", "Bad", None, root.path()).unwrap();
