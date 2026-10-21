@@ -891,6 +891,7 @@ mod live {
     use crate::easycrypt::check::{ok_or_reject, sentences_until_call};
     use crate::easycrypt::session::{json_binary_configured, split_sentences, Session};
     use crate::project::{DirectoryFiles, DirectoryProject};
+    use crate::writers::easycrypt::progress::{ExportObserver, NopExportObserver};
 
     #[cfg(feature = "cvc5-lib")]
     fn backend() -> crate::util::smtsolver::cvc5lib::Cvc5LibBackend {
@@ -969,14 +970,45 @@ mod live {
         file: String,
         /// The equivalence's progress folder: [`oracle_reports`] reads the reports under it.
         report: PathBuf,
-        captures: std::rc::Rc<std::cell::RefCell<Vec<Capture>>>,
+        captures: Arc<std::sync::Mutex<Vec<Capture>>>,
+        /// This test's [`WALK`].
+        walk: Walk,
         /// Sets the flag at the first event whose name starts so, as a Ctrl-C would (story 34).
         stop_at: Option<(String, Arc<AtomicBool>)>,
     }
 
+    /// The `NodeStarted` and `SentenceSent` events of one test's run (story 40).
+    type Walk = Arc<std::sync::Mutex<Vec<String>>>;
+
     thread_local! {
-        /// The `NodeStarted` and `SentenceSent` events of this test's run (story 40).
-        static WALK: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+        /// This test's walk: the observers take a handle to it on the test's thread, and the
+        /// oracles' workers write to it from theirs (story 82).
+        static WALK: Walk = Walk::default();
+    }
+
+    /// The handle to this test's [`WALK`].
+    fn walk_log() -> Walk {
+        WALK.with(Walk::clone)
+    }
+
+    /// A board whose every job reports to one observer from `make`, as a job of one worker did
+    /// before story 82.
+    struct FactoryBoard<F>(std::sync::Mutex<F>);
+
+    impl<F> crate::writers::easycrypt::progress::ProgressBoard for FactoryBoard<F>
+    where
+        F: FnMut() -> Box<dyn ExportObserver + Send> + Send,
+    {
+        fn job(
+            &self,
+            _: &str,
+            oracles: usize,
+        ) -> Box<dyn crate::writers::easycrypt::progress::JobProgress> {
+            let inner = (self.0.lock().unwrap())();
+            Box::new(crate::writers::easycrypt::progress::OneObserverJob::new(
+                inner, oracles,
+            ))
+        }
     }
 
     impl ExportObserver for Capturing {
@@ -984,10 +1016,10 @@ mod live {
             use crate::writers::easycrypt::progress::ExportEvent;
             match event {
                 ExportEvent::NodeStarted { node, total, .. } => {
-                    WALK.with(|w| w.borrow_mut().push(format!("node {node}/{total}")))
+                    self.walk.lock().unwrap().push(format!("node {node}/{total}"))
                 }
                 ExportEvent::SentenceSent { sentence } => {
-                    WALK.with(|w| w.borrow_mut().push(format!("sentence {sentence}")))
+                    self.walk.lock().unwrap().push(format!("sentence {sentence}"))
                 }
                 _ => {}
             }
@@ -1002,7 +1034,7 @@ mod live {
                     stop.store(true, Ordering::Relaxed);
                 }
             }
-            self.captures.borrow_mut().push(Capture {
+            self.captures.lock().unwrap().push(Capture {
                 event,
                 ec: proof_text(&self.out, &self.file),
                 report: oracle_reports(&self.report),
@@ -1039,8 +1071,9 @@ mod live {
         let out = tempfile::tempdir().unwrap();
         write_files(out.path(), &exported.files).unwrap();
         let proof_file = &exported.equivalences[0].proof_file;
-        let captures = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let mut observer: Option<Box<dyn ExportObserver>> = Some(Box::new(Capturing {
+        let captures = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut observer: Option<Box<dyn ExportObserver + Send>> = Some(Box::new(Capturing {
+            walk: walk_log(),
             out: out.path().to_path_buf(),
             file: proof_file.clone(),
             report: out
@@ -1059,14 +1092,14 @@ mod live {
             out.path(),
             &backend(),
             options,
-            &mut || {
+            &FactoryBoard(std::sync::Mutex::new(move || {
                 observer
                     .take()
                     .unwrap_or_else(|| Box::new(NopExportObserver))
-            },
+            })),
         )
         .unwrap();
-        let captures = captures.borrow().clone();
+        let captures = captures.lock().unwrap().clone();
         Some((result, out, captures))
     }
 
@@ -1143,7 +1176,7 @@ mod live {
     /// holds the sentences it announced.
     #[test]
     fn the_walk_announces_its_node_before_every_sentence() {
-        WALK.with(|w| w.borrow_mut().clear());
+        walk_log().lock().unwrap().clear();
         let Some((result, _out, _)) = run_captured(
             "example-projects/hello-world",
             "Proof",
@@ -1151,7 +1184,7 @@ mod live {
         ) else {
             return;
         };
-        let walk = WALK.with(|w| w.borrow().clone());
+        let walk = walk_log().lock().unwrap().clone();
         assert!(walk[0].starts_with("node router/"), "{walk:?}");
         assert!(walk[1].starts_with("sentence proc; inline."), "{walk:?}");
         assert!(walk.iter().any(|e| e.starts_with("node N")), "{walk:?}");
@@ -1868,7 +1901,8 @@ mod live {
         options: &TacticsOptions,
         stop: Option<StopIn>,
     ) -> TheoremTactics {
-        let mut watching = Some(Watching { stop });
+        let mut stop = Some(stop);
+        let walk = walk_log();
         let dir = PathBuf::from(project);
         let files = DirectoryFiles::load(&dir).unwrap();
         let project = DirectoryProject::load(dir, &files).unwrap();
@@ -1881,7 +1915,12 @@ mod live {
             out,
             &backend(),
             options,
-            &mut || Box::new(watching.take().unwrap_or(Watching { stop: None })),
+            &FactoryBoard(std::sync::Mutex::new(move || -> Box<dyn ExportObserver + Send> {
+                Box::new(Watching {
+                    stop: stop.take().flatten(),
+                    walk: walk.clone(),
+                })
+            })),
         )
         .unwrap()
     }
@@ -1890,6 +1929,7 @@ mod live {
     /// stop flag where `stop` says.
     struct Watching {
         stop: Option<StopIn>,
+        walk: Walk,
     }
 
     /// The `nth` sentence sent after node `node` is entered sets `flag`, as a Ctrl-C would: that
@@ -1920,7 +1960,7 @@ mod live {
                     }
                 }
             }
-            WALK.with(|w| w.borrow_mut().push(line));
+            self.walk.lock().unwrap().push(line);
         }
     }
 
@@ -2692,7 +2732,7 @@ wait $ec
     }
 
     fn walk_events() -> Vec<String> {
-        WALK.with(|w| std::mem::take(&mut *w.borrow_mut()))
+        std::mem::take(&mut *walk_log().lock().unwrap())
     }
 
     /// The lines of `text` that are `closed`'s script, as written there: found by their
@@ -5169,5 +5209,182 @@ mod game_constants_in_game_invariants {
         )
         .unwrap();
         assert_eq!(result.admit_count(), 0, "{}", result.render());
+    }
+}
+
+/// Story 82 (ADR 0020): every thread that proves reports to the one progress board, on the key of
+/// its own job and oracle.
+mod progress_board {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    use super::*;
+    use crate::easycrypt::session::json_binary_configured;
+    use crate::project::{DirectoryFiles, DirectoryProject};
+    use crate::writers::easycrypt::export::{export_theorem, write_files};
+    use crate::writers::easycrypt::progress::tests::Recorder;
+    use crate::writers::easycrypt::progress::{
+        ExportEvent, ExportObserver, JobProgress, ProgressBoard,
+    };
+
+    /// `(job, oracle, event)`, in the order the events came.
+    type Records = Arc<Mutex<Vec<(String, String, String)>>>;
+
+    /// Records every event of every oracle row with its job and oracle.
+    #[derive(Default)]
+    struct RecordingBoard(Records);
+
+    struct RecordingJob {
+        stem: String,
+        records: Records,
+    }
+
+    struct RecordingRow {
+        stem: String,
+        oracle: String,
+        records: Records,
+    }
+
+    impl ProgressBoard for RecordingBoard {
+        fn job(&self, stem: &str, _: usize) -> Box<dyn JobProgress> {
+            Box::new(RecordingJob {
+                stem: stem.to_string(),
+                records: self.0.clone(),
+            })
+        }
+    }
+
+    impl JobProgress for RecordingJob {
+        fn oracle(&self, name: &str) -> Box<dyn ExportObserver> {
+            Box::new(RecordingRow {
+                stem: self.stem.clone(),
+                oracle: name.to_string(),
+                records: self.records.clone(),
+            })
+        }
+    }
+
+    impl ExportObserver for RecordingRow {
+        fn on_event(&mut self, event: &ExportEvent<'_>) {
+            let mut line = Recorder::default();
+            line.on_event(event);
+            self.records.lock().unwrap().push((
+                self.stem.clone(),
+                self.oracle.clone(),
+                line.0.remove(0),
+            ));
+        }
+    }
+
+    /// Proves theorem `theorem` of `project` with `jobs` workers, through the logging
+    /// EasyCrypt, and returns what the board recorded.
+    fn recorded(project: &str, theorem: &str, jobs: usize) -> Vec<(String, String, String)> {
+        let dir = PathBuf::from(project);
+        let files = DirectoryFiles::load(&dir).unwrap();
+        let project = DirectoryProject::load(dir, &files).unwrap();
+        let theorem = project.get_theorem(theorem).unwrap();
+        let exported = export_theorem(theorem, &project).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        write_files(out.path(), &exported.files).unwrap();
+        let fake = tempfile::tempdir().unwrap();
+        TEST_EASYCRYPT.with(|t| {
+            *t.borrow_mut() = Some(FakeEasyCrypt {
+                binary: super::side_invariant_jobs::logging_easycrypt(
+                    fake.path(),
+                    &fake.path().join("log"),
+                ),
+                grace: Duration::from_millis(1_500),
+                resend: Duration::from_millis(250),
+            })
+        });
+        let board = RecordingBoard::default();
+        let options = TacticsOptions {
+            jobs,
+            ..TacticsOptions::default()
+        };
+        run_tactics_observed(
+            theorem,
+            &project,
+            &exported,
+            out.path(),
+            &crate::util::smtsolver::process::IncrementalCvc5Backend,
+            &options,
+            &board,
+        )
+        .unwrap();
+        TEST_EASYCRYPT.with(|t| t.borrow_mut().take());
+        let records = board.0.lock().unwrap().clone();
+        records
+    }
+
+    /// The events of each `(job, oracle)` row, in order.
+    fn by_row(records: &[(String, String, String)]) -> BTreeMap<(String, String), Vec<String>> {
+        let mut rows: BTreeMap<_, Vec<String>> = BTreeMap::new();
+        for (job, oracle, event) in records {
+            rows.entry((job.clone(), oracle.clone()))
+                .or_default()
+                .push(event.clone());
+        }
+        rows
+    }
+
+    /// Each row has lockstep, a node, a sentence and the end of lockstep, on its own key.
+    fn assert_rows_are_not_silent(rows: &BTreeMap<(String, String), Vec<String>>) {
+        for (key, events) in rows {
+            for kind in ["lockstep ", "node ", "sentence ", "lockstep-end "] {
+                assert!(
+                    events.iter().any(|e| e.starts_with(kind)),
+                    "{key:?} has no `{kind}` event: {events:?}"
+                );
+            }
+            let oracle = &key.1;
+            for e in events {
+                if let Some(named) = e
+                    .strip_prefix("lockstep ")
+                    .or_else(|| e.strip_prefix("node "))
+                {
+                    assert!(named.starts_with(oracle.as_str()), "{key:?}: {e}");
+                }
+            }
+        }
+    }
+
+    const FOUR_ORACLES: &str = "testdata/easycrypt/unanswered-interrupt/four-oracles";
+
+    #[test]
+    fn with_two_jobs_no_oracle_is_silent() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let rows = by_row(&recorded(FOUR_ORACLES, "Proof", 2));
+        let oracles: Vec<&str> = rows.keys().map(|(_, o)| o.as_str()).collect();
+        assert_eq!(oracles, ["First", "Fourth", "Second", "Third"]);
+        assert_rows_are_not_silent(&rows);
+    }
+
+    #[test]
+    fn the_chain_beside_an_equivalence_reports_with_one_job() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let rows = by_row(&recorded("testdata/easycrypt/story58", "OneSided", 1));
+        let jobs: Vec<&str> = rows.keys().map(|(j, _)| j.as_str()).collect();
+        assert!(jobs.iter().any(|j| j.starts_with("Eq_")), "{jobs:?}");
+        assert!(jobs.iter().any(|j| j.starts_with("SideInv_")), "{jobs:?}");
+        assert_rows_are_not_silent(&rows);
+    }
+
+    #[test]
+    fn each_oracle_has_the_same_events_with_one_job_and_with_two() {
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let one = by_row(&recorded(FOUR_ORACLES, "Proof", 1));
+        let two = by_row(&recorded(FOUR_ORACLES, "Proof", 2));
+        assert_eq!(one, two);
     }
 }

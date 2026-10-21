@@ -85,17 +85,17 @@ chain, the screen is the same as before. Story 83 replaces it.
 
 A `RecordingBoard` test double records `(job, oracle, event)`. With `FakeEasyCrypt`:
 
-- [ ] `--jobs 2`, an equivalence with 3 oracles: each oracle has `LockstepStarted`,
+- [x] `--jobs 2`, an equivalence with 3 oracles: each oracle has `LockstepStarted`,
       `NodeStarted`, `SentenceSent` and `LockstepFinished` on its own key. No oracle is silent.
-- [ ] A theorem with an equivalence **and** a side-invariant job, `--jobs 1`: the chain's oracles
+- [x] A theorem with an equivalence **and** a side-invariant job, `--jobs 1`: the chain's oracles
       have events on their own keys.
-- [ ] For each oracle, `--jobs 1` and `--jobs 2` give the same event sequence.
-- [ ] Plain: each line starts with `<stem>/<oracle>` or `<stem>`; a job line after each oracle.
+- [x] For each oracle, `--jobs 1` and `--jobs 2` give the same event sequence.
+- [x] Plain: each line starts with `<stem>/<oracle>` or `<stem>`; a job line after each oracle.
 
 ## 4. Acceptance criteria
 
 - [ ] All tests of §3 green. The export tree, the session records, the pages and the reports are
       byte-identical before and after.
-- [ ] No `NopExportObserver` is left in `oracles.rs` and `tactics/mod.rs`.
+- [x] No `NopExportObserver` is left in `oracles.rs` and `tactics/mod.rs`.
 - [ ] CRAP gate of `implement` on the diff: no touched function over budget.
 - [ ] `cargo build/test/clippy --workspace`, with and without `--features cvc5-lib`: clean.

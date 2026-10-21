@@ -43,6 +43,8 @@
 //! theorem's directory (`Full4WHS/Comp_H5.ec`).
 
 use std::io::Write as _;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -156,6 +158,12 @@ pub fn lockstep_summary_line(
     elapsed: Duration,
     stopped: bool,
 ) -> String {
+    format!("  {oracle}  {}", lockstep_summary(found, elapsed, stopped))
+}
+
+/// `lockstep: 23 joint paths, 1 stuck point in 41.2s`: [`lockstep_summary_line`] without the
+/// oracle.
+fn lockstep_summary(found: Option<(usize, usize)>, elapsed: Duration, stopped: bool) -> String {
     let plural =
         |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
     let what = match found {
@@ -167,10 +175,7 @@ pub fn lockstep_summary_line(
         None => "failed".to_string(),
     };
     let stopped = if stopped { " (stopped)" } else { "" };
-    format!(
-        "  {oracle}  lockstep: {what} in {:.1}s{stopped}",
-        elapsed.as_secs_f64()
-    )
+    format!("lockstep: {what} in {:.1}s{stopped}", elapsed.as_secs_f64())
 }
 
 /// `PKENC  N7/23  smt(dec_enc).`, the proving bar's message (story 40): the oracle, the node, and
@@ -538,6 +543,264 @@ impl ExportObserver for BarExportObserver {
 }
 
 // ---------------------------------------------------------------------------
+// The progress board (story 82, ADR 0020)
+// ---------------------------------------------------------------------------
+
+/// Where the proof jobs of one command run report their progress: one board for each run,
+/// shared by every thread that proves (the oracle workers of `--jobs N` and the side-invariant
+/// chain). A worker sees only the [`ExportObserver`] of its oracle.
+pub trait ProgressBoard: Sync {
+    /// A proof job (`stem`: `Eq_H4_H5`) starts, with `oracles` oracles to prove. Its oracle rows
+    /// go under it. Dropping the job progress ends the job.
+    fn job(&self, stem: &str, oracles: usize) -> Box<dyn JobProgress>;
+}
+
+/// The progress of one proof job. It has no status method: it counts the oracle rows it made
+/// and the rows that were dropped (ADR 0020 point 2).
+pub trait JobProgress: Send + Sync {
+    /// An oracle starts on this thread. The observer is used on this thread only; dropping it
+    /// ends the oracle's row.
+    fn oracle(&self, name: &str) -> Box<dyn ExportObserver>;
+}
+
+/// The board of "no progress".
+pub struct NopProgressBoard;
+
+impl ProgressBoard for NopProgressBoard {
+    fn job(&self, _: &str, _: usize) -> Box<dyn JobProgress> {
+        Box::new(NopProgressBoard)
+    }
+}
+
+impl JobProgress for NopProgressBoard {
+    fn oracle(&self, _: &str) -> Box<dyn ExportObserver> {
+        Box::new(NopExportObserver)
+    }
+}
+
+/// `--progress plain`: each oracle writes the oracle lines of [`PlainExportObserver`] with the
+/// key `<stem>/<oracle>` at the start (its item line becomes `<stem>/<oracle>  started`; the
+/// `tactics` phase lines go), and the job writes `<stem>  oracles <done>/<total> done` when an
+/// oracle row is dropped, whatever way the oracle ended. Each line is one write on a locked stderr, so lines of two threads never
+/// mix.
+pub struct PlainProgressBoard;
+
+impl ProgressBoard for PlainProgressBoard {
+    fn job(&self, stem: &str, oracles: usize) -> Box<dyn JobProgress> {
+        Box::new(PlainJob(Arc::new(PlainCounts {
+            stem: stem.to_string(),
+            total: oracles,
+            done: AtomicUsize::new(0),
+        })))
+    }
+}
+
+struct PlainJob(Arc<PlainCounts>);
+
+struct PlainCounts {
+    stem: String,
+    total: usize,
+    /// The oracle rows that were dropped.
+    done: AtomicUsize,
+}
+
+impl JobProgress for PlainJob {
+    fn oracle(&self, name: &str) -> Box<dyn ExportObserver> {
+        Box::new(PlainRow {
+            key: format!("{}/{name}", self.0.stem),
+            job: self.0.clone(),
+        })
+    }
+}
+
+struct PlainRow {
+    key: String,
+    job: Arc<PlainCounts>,
+}
+
+fn write_stderr_line(line: &str) {
+    let _ = writeln!(std::io::stderr().lock(), "{line}");
+}
+
+impl ExportObserver for PlainRow {
+    fn on_event(&mut self, event: &ExportEvent<'_>) {
+        if let Some(line) = keyed_line(&self.key, event) {
+            write_stderr_line(&line);
+        }
+    }
+}
+
+impl Drop for PlainRow {
+    fn drop(&mut self) {
+        let done = self.job.done.fetch_add(1, Ordering::SeqCst) + 1;
+        write_stderr_line(&job_line(&self.job.stem, done, self.job.total));
+    }
+}
+
+/// `Eq_H4_H5  oracles 3/7 done`, the plain line of a job when one of its oracles ends.
+fn job_line(stem: &str, done: usize, total: usize) -> String {
+    format!("{stem}  oracles {done}/{total} done")
+}
+
+/// The plain line of `event` in the row `key` (`Eq_H4_H5/PKENC`): the key comes from the row,
+/// not from the event. `None` for an event plain mode does not show.
+fn keyed_line(key: &str, event: &ExportEvent<'_>) -> Option<String> {
+    let what = match event {
+        // in place of `tactics 3/7: Eq_H4_H5 PKENC`: the key names the oracle, and the job line
+        // counts the oracles
+        ExportEvent::ItemStarted { .. } => "started".to_string(),
+        ExportEvent::GoalFinished { goal, admitted, .. } => {
+            format!("{goal}: {}", if *admitted { "admitted" } else { "closed" })
+        }
+        ExportEvent::LockstepStarted { .. } => "lockstep: started".to_string(),
+        ExportEvent::LockstepFinished {
+            found,
+            elapsed,
+            stopped,
+            ..
+        } => lockstep_summary(*found, *elapsed, *stopped),
+        ExportEvent::NodeStarted { node, total, .. } => node_label(node, *total),
+        _ => return None,
+    };
+    Some(format!("{key}  {what}"))
+}
+
+/// One observer for the whole job, as before story 82: it sees one `tactics` phase with one item
+/// for each oracle, and the phase ends when the job progress is dropped. The rows of the job
+/// take turns on it, under a lock.
+pub(crate) struct OneObserverJob(Arc<Mutex<OneObserver>>);
+
+struct OneObserver {
+    inner: Box<dyn ExportObserver + Send>,
+    /// The oracles the job proves.
+    total: usize,
+    phase_started: bool,
+    items: usize,
+}
+
+impl OneObserverJob {
+    pub(crate) fn new(inner: Box<dyn ExportObserver + Send>, oracles: usize) -> Self {
+        Self(Arc::new(Mutex::new(OneObserver {
+            inner,
+            total: oracles,
+            phase_started: false,
+            items: 0,
+        })))
+    }
+}
+
+impl JobProgress for OneObserverJob {
+    fn oracle(&self, _: &str) -> Box<dyn ExportObserver> {
+        Box::new(OneObserverRow(self.0.clone()))
+    }
+}
+
+impl Drop for OneObserverJob {
+    fn drop(&mut self) {
+        let mut s = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if s.phase_started {
+            s.inner.on_event(&ExportEvent::PhaseFinished {
+                phase: ExportPhase::Tactics,
+            });
+        }
+    }
+}
+
+struct OneObserverRow(Arc<Mutex<OneObserver>>);
+
+impl ExportObserver for OneObserverRow {
+    fn on_event(&mut self, event: &ExportEvent<'_>) {
+        let mut s = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        match *event {
+            ExportEvent::PhaseStarted { phase, .. } if !s.phase_started => {
+                s.phase_started = true;
+                let total_items = s.total;
+                s.inner
+                    .on_event(&ExportEvent::PhaseStarted { phase, total_items });
+            }
+            ExportEvent::ItemStarted { phase, name, .. } => {
+                s.items += 1;
+                let index = s.items;
+                s.inner
+                    .on_event(&ExportEvent::ItemStarted { phase, name, index });
+            }
+            // the job starts the phase once, and ends it after its last oracle
+            ExportEvent::PhaseStarted { .. } | ExportEvent::PhaseFinished { .. } => {}
+            _ => s.inner.on_event(event),
+        }
+    }
+
+    fn lockstep_observer(&mut self) -> Box<dyn DebugObserver> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .inner
+            .lockstep_observer()
+    }
+}
+
+/// `--progress bar` until story 83: each job has one [`BarExportObserver`], and **one** running
+/// oracle of the whole board at a time reports to it; the other oracles report to nothing. With
+/// `--jobs 1` and no side-invariant chain, the screen is the one from before story 82.
+#[derive(Default)]
+pub struct BarProgressBoard {
+    /// An oracle row has the screen.
+    busy: Arc<AtomicBool>,
+}
+
+impl ProgressBoard for BarProgressBoard {
+    fn job(&self, _: &str, oracles: usize) -> Box<dyn JobProgress> {
+        Box::new(BarJob {
+            one: OneObserverJob::new(Box::new(BarExportObserver::new()), oracles),
+            busy: self.busy.clone(),
+        })
+    }
+}
+
+struct BarJob {
+    one: OneObserverJob,
+    busy: Arc<AtomicBool>,
+}
+
+impl JobProgress for BarJob {
+    fn oracle(&self, name: &str) -> Box<dyn ExportObserver> {
+        if self
+            .busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Box::new(NopExportObserver);
+        }
+        Box::new(ScreenRow {
+            inner: self.one.oracle(name),
+            busy: self.busy.clone(),
+        })
+    }
+}
+
+/// The oracle row that has the screen; dropping it gives the screen back.
+struct ScreenRow {
+    inner: Box<dyn ExportObserver>,
+    busy: Arc<AtomicBool>,
+}
+
+impl ExportObserver for ScreenRow {
+    fn on_event(&mut self, event: &ExportEvent<'_>) {
+        self.inner.on_event(event);
+    }
+
+    fn lockstep_observer(&mut self) -> Box<dyn DebugObserver> {
+        self.inner.lockstep_observer()
+    }
+}
+
+impl Drop for ScreenRow {
+    fn drop(&mut self) {
+        self.busy.store(false, Ordering::SeqCst);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -746,5 +1009,108 @@ pub(crate) mod tests {
             });
             assert!(bars.bar.is_some(), "the proving bar is back");
         }
+    }
+
+    /// Story 82: each plain line of a row starts with `<stem>/<oracle>`, the job's with `<stem>`.
+    #[test]
+    fn plain_board_lines_start_with_the_key_of_the_row_or_the_job() {
+        let key = "Eq_H4_H5/PKENC";
+        let line = |e: ExportEvent<'_>| keyed_line(key, &e);
+        assert_eq!(
+            line(ExportEvent::LockstepStarted { oracle: "other" }).unwrap(),
+            "Eq_H4_H5/PKENC  lockstep: started"
+        );
+        assert_eq!(
+            line(ExportEvent::NodeStarted {
+                oracle: "PKENC",
+                node: "N7",
+                total: 23
+            })
+            .unwrap(),
+            "Eq_H4_H5/PKENC  N7/23"
+        );
+        assert_eq!(
+            line(ExportEvent::LockstepFinished {
+                oracle: "PKENC",
+                found: Some((23, 1)),
+                elapsed: Duration::from_millis(41_240),
+                stopped: false
+            })
+            .unwrap(),
+            "Eq_H4_H5/PKENC  lockstep: 23 joint paths, 1 stuck point in 41.2s"
+        );
+        assert_eq!(
+            line(ExportEvent::GoalFinished {
+                oracle: "PKENC",
+                goal: "N7",
+                admitted: true
+            })
+            .unwrap(),
+            "Eq_H4_H5/PKENC  N7: admitted"
+        );
+        assert_eq!(
+            line(ExportEvent::ItemStarted {
+                phase: ExportPhase::Tactics,
+                name: "Eq_H4_H5 PKENC",
+                index: 3
+            })
+            .unwrap(),
+            "Eq_H4_H5/PKENC  started"
+        );
+        assert_eq!(line(ExportEvent::SentenceSent { sentence: "auto." }), None);
+        assert_eq!(job_line("Eq_H4_H5", 3, 7), "Eq_H4_H5  oracles 3/7 done");
+    }
+
+    /// Story 82: one observer for a whole job sees one `tactics` phase, items numbered across
+    /// its oracles, and the end of the phase when the job ends.
+    #[test]
+    fn one_observer_job_numbers_the_items_of_its_rows_and_ends_the_phase() {
+        #[derive(Clone, Default)]
+        struct Shared(Arc<Mutex<Recorder>>);
+        impl ExportObserver for Shared {
+            fn on_event(&mut self, e: &ExportEvent<'_>) {
+                self.0.lock().unwrap().on_event(e);
+            }
+        }
+        let seen = Shared::default();
+        let job = OneObserverJob::new(Box::new(seen.clone()), 2);
+        for name in ["A", "B"] {
+            let mut row = job.oracle(name);
+            row.on_event(&ExportEvent::PhaseStarted {
+                phase: ExportPhase::Tactics,
+                total_items: 1,
+            });
+            row.on_event(&ExportEvent::ItemStarted {
+                phase: ExportPhase::Tactics,
+                name,
+                index: 1,
+            });
+            row.on_event(&ExportEvent::PhaseFinished {
+                phase: ExportPhase::Tactics,
+            });
+        }
+        drop(job);
+        assert_eq!(
+            seen.0.lock().unwrap().0,
+            [
+                "phase tactics 2",
+                "item tactics 1 A",
+                "item tactics 2 B",
+                "end tactics"
+            ]
+        );
+    }
+
+    /// Story 82: the temporary bar board gives the screen to one running oracle at a time.
+    #[test]
+    fn the_bar_board_gives_the_screen_to_one_row_at_a_time() {
+        let board = BarProgressBoard::default();
+        let job = board.job("Eq_A_B", 2);
+        let first = job.oracle("A");
+        assert!(board.busy.load(Ordering::SeqCst));
+        drop(job.oracle("B"));
+        assert!(board.busy.load(Ordering::SeqCst), "a second row does not take it");
+        drop(first);
+        assert!(!board.busy.load(Ordering::SeqCst));
     }
 }

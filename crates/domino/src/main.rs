@@ -681,6 +681,30 @@ fn export_observer(
     }
 }
 
+/// The proof jobs' progress board (story 82, ADR 0020): one for each command run, shared by
+/// every thread that proves. stderr only, like [`export_observer`].
+#[cfg(feature = "cvc5-lib")]
+fn progress_board(
+    mode: ProgressMode,
+) -> Box<dyn sspverif::writers::easycrypt::progress::ProgressBoard> {
+    use sspverif::writers::easycrypt::progress::{
+        BarProgressBoard, NopProgressBoard, PlainProgressBoard,
+    };
+    match mode {
+        ProgressMode::None => Box::new(NopProgressBoard),
+        ProgressMode::Plain => Box::new(PlainProgressBoard),
+        ProgressMode::Bar => Box::new(BarProgressBoard::default()),
+        ProgressMode::Auto => {
+            use std::io::IsTerminal;
+            if std::io::stderr().is_terminal() {
+                Box::new(BarProgressBoard::default())
+            } else {
+                Box::new(PlainProgressBoard)
+            }
+        }
+    }
+}
+
 /// Builds every theorem of `theorem_names` fully in memory. Callers write only once *all* of
 /// them succeeded: a failed export must not leave a half-written tree, and extending that across
 /// the whole invocation is deliberate. Without it, `domino easycrypt export` (no `--theorem`) on
@@ -890,6 +914,7 @@ fn easycrypt_prove<P: project::Project + Sync>(
                 ResumeArg::Restart => ResumeMode::Restart,
             },
         };
+        let board = progress_board(p.progress);
         let mut ended_early = false;
         for (name, exported) in &exports {
             let theorem = project.get_theorem(name).unwrap();
@@ -901,7 +926,7 @@ fn easycrypt_prove<P: project::Project + Sync>(
                 &theorem_out,
                 &backend,
                 &options,
-                &mut || export_observer(p.progress),
+                board.as_ref(),
             )?;
             if !result.unproved_side_invariants.is_empty() {
                 // story 69: the equivalence did not start; the warning is on stderr

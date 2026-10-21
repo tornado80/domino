@@ -95,7 +95,7 @@ use crate::writers::easycrypt::invariant::{
     invariant_ops, leaf_part_ops, package_invariant_ops, side_job_ops,
 };
 use crate::writers::easycrypt::lower::inline_oracle_ec;
-use crate::writers::easycrypt::progress::{ExportObserver, NopExportObserver};
+use crate::writers::easycrypt::progress::{NopProgressBoard, ProgressBoard};
 use crate::writers::easycrypt::EcExportError;
 
 use super::check::{
@@ -734,13 +734,13 @@ where
         out_dir,
         backend,
         options,
-        &mut || Box::new(NopExportObserver),
+        &NopProgressBoard,
     )
 }
 
-/// [`run_tactics`], reporting the `tactics` phase to an observer per oracle (per goal):
-/// `progress` is called once for each oracle a worker proves on this thread (`--jobs 1`); with
-/// more workers, their oracles report to no observer.
+/// [`run_tactics`], reporting to `board` (story 82, ADR 0020): each proof job is a job of the
+/// board, and each oracle a worker proves is a row of it, on every thread that proves (the
+/// workers of `--jobs N` and the side-invariant chain).
 ///
 /// Each selected equivalence is one **proof job** ([`oracles::prove_equivalence`], story 68): its
 /// oracles are proved by up to [`TacticsOptions::jobs`] workers at once, each oracle under its
@@ -753,7 +753,7 @@ pub fn run_tactics_observed<P, B>(
     out_dir: &Path,
     backend: &B,
     options: &TacticsOptions,
-    progress: &mut dyn FnMut() -> Box<dyn ExportObserver>,
+    board: &dyn ProgressBoard,
 ) -> Result<TheoremTactics, TacticsError>
 where
     P: Project + Sync,
@@ -787,17 +787,16 @@ where
     // equivalences' proof jobs run (story 69 §3.3)
     let (equivalences, (side_invariants, package_invariants, unproved_packages)) =
         if plan.equivalences.is_empty() {
-            (Vec::new(), run_side_chain(&ctx, &plan, progress)?)
+            (Vec::new(), run_side_chain(&ctx, &plan, board)?)
         } else if plan.side.is_empty() && plan.packages.is_empty() {
             (
-                run_jobs(&ctx, eqs(), progress)?,
+                run_jobs(&ctx, eqs(), board)?,
                 (Vec::new(), Vec::new(), Vec::new()),
             )
         } else {
             std::thread::scope(|s| {
-                let chain =
-                    s.spawn(|| run_side_chain(&ctx, &plan, &mut || Box::new(NopExportObserver)));
-                let equivalences = run_jobs(&ctx, eqs(), progress);
+                let chain = s.spawn(|| run_side_chain(&ctx, &plan, board));
+                let equivalences = run_jobs(&ctx, eqs(), board);
                 let chain = chain.join().expect("the side-invariant jobs do not panic");
                 Ok::<_, TacticsError>((equivalences?, chain?))
             })?
@@ -822,7 +821,7 @@ where
 fn run_side_chain<'a, P, B>(
     ctx: &RunCtx<'a, P, B>,
     plan: &'a RunPlan,
-    progress: &mut dyn FnMut() -> Box<dyn ExportObserver>,
+    board: &dyn ProgressBoard,
 ) -> Result<
     (
         Vec<EquivalenceTactics>,
@@ -855,7 +854,7 @@ where
                     .iter()
                     .filter(|(_, p)| p == name)
                     .map(|(eq, p)| (eq, JobKind::PackageInvariants(p.as_str())));
-                packages.extend(run_jobs(ctx, jobs, progress)?);
+                packages.extend(run_jobs(ctx, jobs, board)?);
             }
             ChainStep::Side(i) => {
                 let (eq, composition) = &plan.side[i];
@@ -873,7 +872,7 @@ where
                     sides.extend(run_jobs(
                         ctx,
                         std::iter::once((eq, JobKind::SideInvariants(composition.as_str()))),
-                        progress,
+                        board,
                     )?);
                 }
             }
@@ -1126,7 +1125,7 @@ struct RunCtx<'a, P, B> {
 fn run_jobs<'a, P, B>(
     ctx: &RunCtx<'a, P, B>,
     jobs: impl Iterator<Item = (&'a EquivalenceReport, JobKind<'a>)>,
-    progress: &mut dyn FnMut() -> Box<dyn ExportObserver>,
+    board: &dyn ProgressBoard,
 ) -> Result<Vec<EquivalenceTactics>, TacticsError>
 where
     P: Project + Sync,
@@ -1149,7 +1148,7 @@ where
             fake: ctx.fake.clone(),
         };
         // `None`: skipped, the reason on stderr
-        let Some(tactics) = oracles::prove_equivalence(&job, progress)? else {
+        let Some(tactics) = oracles::prove_equivalence(&job, board)? else {
             continue;
         };
         let interrupted = tactics.interrupted.is_some() && tactics.ended_early.is_none();

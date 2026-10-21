@@ -17,23 +17,19 @@
 //! sections in oracle order, whatever order they finished in), unless it proves one `--oracle`
 //! only: then the oracle's own report is the report.
 
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::debug::progress::{eprintln_above_bars, DebugObserver};
+use crate::debug::progress::eprintln_above_bars;
 use crate::project::Project;
 use crate::theorem::Theorem;
 use crate::util::smtsolver::SmtSolverBackend;
 use crate::writers::easycrypt::export::{EquivalenceReport, ExportedTheorem};
-use crate::writers::easycrypt::progress::{
-    ExportEvent, ExportObserver, ExportPhase, NopExportObserver,
-};
+use crate::writers::easycrypt::progress::{ExportObserver, JobProgress, ProgressBoard};
 
 use super::super::check::{equivalence_setup, pkg_setup, side_setup, CheckError, EquivalenceSetup};
 use super::super::job::{
@@ -102,11 +98,11 @@ impl<P, B> EquivalenceJob<'_, P, B> {
 }
 
 /// Proves the selected oracles of `job.eq`. `None`: the records say it is proved, and the job
-/// skipped it (the reason is on stderr). `progress` is called for each oracle proved on this
-/// thread, so only when the job has one worker.
+/// skipped it (the reason is on stderr). The job reports to `board` once, and each oracle a
+/// worker takes is a row of it, whatever the number of workers (story 82).
 pub(super) fn prove_equivalence<P, B>(
     job: &EquivalenceJob<'_, P, B>,
-    progress: &mut dyn FnMut() -> Box<dyn ExportObserver>,
+    board: &dyn ProgressBoard,
 ) -> Result<Option<EquivalenceTactics>, TacticsError>
 where
     P: Project + Sync,
@@ -119,24 +115,7 @@ where
         JobKind::SideInvariants(c) => side_setup(job.theorem_ec, c)?,
         JobKind::PackageInvariants(p) => pkg_setup(job.theorem_ec, p)?,
     };
-    if let Some(wanted) = &options.oracle {
-        let known = |name: &String| name == wanted;
-        if !setup.oracles.iter().any(|(name, _)| known(name))
-            && !eq.oracle_files.iter().any(|(name, _)| known(name))
-            && !job
-                .exported
-                .package_invariants
-                .iter()
-                .filter(|p| p.join_file == eq.proof_file)
-                .any(|p| p.frame_files.iter().any(|(name, _)| known(name)))
-        {
-            return Err(CheckError::NoSuchOracle {
-                oracle: wanted.clone(),
-                file: eq.proof_file.clone(),
-            }
-            .into());
-        }
-    }
+    check_wanted_oracle(job, &setup)?;
     let names: Vec<String> = setup.oracles.iter().map(|(n, _)| n.clone()).collect();
     // story 35: the records decide before anything is created or truncated
     // the lemmas no tree is walked for
@@ -161,23 +140,8 @@ where
         let wrote: Vec<String> = created.iter().map(|p| p.display().to_string()).collect();
         eprintln_above_bars(&translation_files_line(job.stem(), &wrote));
     }
-    let selected = |name: &str| options.oracle.as_deref().is_none_or(|w| w == name);
-    let mut rows = Vec::new();
-    let mut queue = VecDeque::new();
-    for (name, proc_name) in &setup.oracles {
-        // proved in an earlier job: not walked, not re-sent (ADR 0006)
-        let done = prior
-            .as_ref()
-            .and_then(|p| p.oracle(name))
-            .and_then(OracleTactics::from_record);
-        if let Some(done) = done {
-            restore_oracle_file(job, name, proc_name, &done.script)?;
-            rows.push(Row::new(name, RowState::Done(Box::new(done))));
-        } else if selected(name) {
-            queue.push_back(name.clone());
-            rows.push(Row::new(name, RowState::Pending));
-        }
-    }
+    let (rows, queue) = queue_oracles(job, &setup, prior.as_ref())?;
+    let progress = board.job(job.stem(), queue.len());
     let board = Mutex::new(Board {
         queue,
         rows,
@@ -197,50 +161,100 @@ where
     let workers = options
         .jobs
         .clamp(1, board.lock().unwrap().queue.len().max(1));
-    if workers == 1 {
-        let shared = Rc::new(RefCell::new(Shared {
-            inner: progress(),
-            total: board.lock().unwrap().queue.len(),
-            phase_started: false,
-            items: 0,
-        }));
-        work(job, &setup, &board, &translation, &dir, &mut || {
-            Box::new(SharedProgress(shared.clone()))
-        });
-        let mut shared = shared.borrow_mut();
-        if shared.phase_started {
-            shared.inner.on_event(&ExportEvent::PhaseFinished {
-                phase: ExportPhase::Tactics,
-            });
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| work(job, &setup, &board, &translation, &dir, progress.as_ref()));
         }
-    } else {
-        std::thread::scope(|s| {
-            for _ in 0..workers {
-                s.spawn(|| {
-                    work(job, &setup, &board, &translation, &dir, &mut || {
-                        Box::new(NopExportObserver)
-                    })
-                });
-            }
-        });
-    }
-    let mut board = board.into_inner().unwrap();
+    });
+    drop(progress);
+    finish(job, board.into_inner().unwrap(), fixed.as_ref(), &dir).map(Some)
+}
+
+/// Ends the job after its workers: the first error of a worker, else the fixed lemmas (once every
+/// oracle is done and nothing stopped the job), the tactics, and the page and report written
+/// for the last time.
+fn finish<P, B>(
+    job: &EquivalenceJob<'_, P, B>,
+    mut board: Board,
+    fixed: Option<&FixedFiles>,
+    dir: &Path,
+) -> Result<EquivalenceTactics, TacticsError>
+where
+    P: Project + Sync,
+    B: SmtSolverBackend + Sync,
+{
     if let Some(e) = board.error.take() {
         return Err(e);
     }
-    if board.interrupted.is_none() && options.stop_requested() && !board.queue.is_empty() {
+    if board.interrupted.is_none() && job.options.stop_requested() && !board.queue.is_empty() {
         board.interrupted = Some(Interrupted::NoOracleInFlight);
     }
     board.running_done();
     // the lemmas without a tree, once every oracle is done
-    if let Some(fixed) = &fixed {
+    if let Some(fixed) = fixed {
         if board.interrupted.is_none() {
-            board.fixed = super::fixed::prove_fixed_lemmas(job, fixed, &dir)?;
+            board.fixed = super::fixed::prove_fixed_lemmas(job, fixed, dir)?;
         }
     }
     let tactics = board.tactics(job);
-    board.write(job, &dir);
-    Ok(Some(tactics))
+    board.write(job, dir);
+    Ok(tactics)
+}
+
+/// `--oracle`: the oracle must be one of the job's, of its lemma files, or of the frame files of
+/// its package invariant; else [`CheckError::NoSuchOracle`].
+fn check_wanted_oracle<P, B>(
+    job: &EquivalenceJob<'_, P, B>,
+    setup: &EquivalenceSetup<'_>,
+) -> Result<(), TacticsError> {
+    let (eq, options) = (job.eq, job.options);
+    if let Some(wanted) = &options.oracle {
+        let known = |name: &String| name == wanted;
+        if !setup.oracles.iter().any(|(name, _)| known(name))
+            && !eq.oracle_files.iter().any(|(name, _)| known(name))
+            && !job
+                .exported
+                .package_invariants
+                .iter()
+                .filter(|p| p.join_file == eq.proof_file)
+                .any(|p| p.frame_files.iter().any(|(name, _)| known(name)))
+        {
+            return Err(CheckError::NoSuchOracle {
+                oracle: wanted.clone(),
+                file: eq.proof_file.clone(),
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// The rows of the job's page, and the oracles to prove in oracle order. An oracle that `prior`
+/// says is proved is a done row (its lemma file is restored when missing); one that `--oracle`
+/// does not select has no row.
+fn queue_oracles<P, B>(
+    job: &EquivalenceJob<'_, P, B>,
+    setup: &EquivalenceSetup<'_>,
+    prior: Option<&SessionRecord>,
+) -> Result<(Vec<Row>, VecDeque<String>), TacticsError> {
+    let options = job.options;
+    let selected = |name: &str| options.oracle.as_deref().is_none_or(|w| w == name);
+    let mut rows = Vec::new();
+    let mut queue = VecDeque::new();
+    for (name, proc_name) in &setup.oracles {
+        // proved in an earlier job: not walked, not re-sent (ADR 0006)
+        let done = prior
+            .and_then(|p| p.oracle(name))
+            .and_then(OracleTactics::from_record);
+        if let Some(done) = done {
+            restore_oracle_file(job, name, proc_name, &done.script)?;
+            rows.push(Row::new(name, RowState::Done(Box::new(done))));
+        } else if selected(name) {
+            queue.push_back(name.clone());
+            rows.push(Row::new(name, RowState::Pending));
+        }
+    }
+    Ok((rows, queue))
 }
 
 /// Writes `oracle`'s lemma file with `script`, a proof its record holds, when the file is missing
@@ -264,7 +278,7 @@ fn work<P, B>(
     board: &Mutex<Board>,
     translation: &str,
     dir: &Path,
-    progress: &mut dyn FnMut() -> Box<dyn ExportObserver>,
+    progress: &dyn JobProgress,
 ) where
     P: Project,
     B: SmtSolverBackend,
@@ -272,7 +286,7 @@ fn work<P, B>(
     loop {
         let next = board.lock().unwrap().next(job, dir);
         let Some(oracle) = next else { return };
-        let worked = prove_oracle(job, setup, &oracle, translation, progress());
+        let worked = prove_oracle(job, setup, &oracle, translation, progress.oracle(&oracle));
         board.lock().unwrap().finished(job, dir, &oracle, worked);
     }
 }
@@ -693,48 +707,6 @@ impl Board {
         }
         out.push_str("</body></html>\n");
         out
-    }
-}
-
-/// The progress observer of a job with one worker (`--jobs 1`): the live page of each oracle
-/// reports to it, and it reports one `tactics` phase with one item for each oracle, as a job
-/// did before story 68.
-struct SharedProgress(Rc<RefCell<Shared>>);
-
-struct Shared {
-    inner: Box<dyn ExportObserver>,
-    /// The oracles the job proves.
-    total: usize,
-    phase_started: bool,
-    items: usize,
-}
-
-impl ExportObserver for SharedProgress {
-    fn on_event(&mut self, event: &ExportEvent<'_>) {
-        let mut s = self.0.borrow_mut();
-        match *event {
-            ExportEvent::PhaseStarted { phase, .. } => {
-                if !s.phase_started {
-                    s.phase_started = true;
-                    let total_items = s.total;
-                    s.inner
-                        .on_event(&ExportEvent::PhaseStarted { phase, total_items });
-                }
-            }
-            ExportEvent::ItemStarted { phase, name, .. } => {
-                s.items += 1;
-                let index = s.items;
-                s.inner
-                    .on_event(&ExportEvent::ItemStarted { phase, name, index });
-            }
-            // the job ends the phase, after its last oracle
-            ExportEvent::PhaseFinished { .. } => {}
-            _ => s.inner.on_event(event),
-        }
-    }
-
-    fn lockstep_observer(&mut self) -> Box<dyn DebugObserver> {
-        self.0.borrow_mut().inner.lockstep_observer()
     }
 }
 
