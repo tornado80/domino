@@ -276,9 +276,17 @@ impl SweepEntry {
         }
     }
 
-    /// `theorem / proofstep 0 (Left == Right) / oracle`.
+    /// `theorem / proofstep 0 (Left == Right) / oracle`, or `game C oracle` for a run of
+    /// `domino debug --game` (its theorem is synthetic).
     pub(crate) fn label(&self) -> String {
         let t = &self.target;
+        if let Some(composition) = self
+            .composition
+            .as_ref()
+            .filter(|_| self.listing == "domino")
+        {
+            return format!("game {composition} {}", t.oracle);
+        }
         format!(
             "{} proofstep {} ({} == {}) {}",
             t.theorem, t.proofstep, t.left, t.right, t.oracle

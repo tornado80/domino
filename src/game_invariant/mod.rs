@@ -19,8 +19,16 @@
 pub mod error;
 
 mod free;
+mod lookup;
 mod prove;
 mod verify;
 
-pub(crate) use free::{base_frame, claims, free_theorem};
+/// The line that names the package invariants which a game-invariant check of `comp`
+/// assumes; `None` when no instance of `comp` has a package invariant.
+pub(crate) fn assumption_note(comp: &crate::package::Composition) -> Option<String> {
+    verify::assumption_line(&verify::assumed_packages(comp))
+}
+
+pub(crate) use free::{base_frame, claims, composition_theorem, free_theorem};
+pub(crate) use lookup::{check_export, composition_of, export_names};
 pub use prove::{prove_game, GameRequest};

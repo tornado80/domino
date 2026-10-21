@@ -18,6 +18,7 @@ use crate::{
 
 use super::error::{ClaimFailedError, Error, Result};
 use super::free::{claims, oracle_frame};
+use super::lookup::{check_export, export_names};
 
 /// The name the game invariant checks appear under in the UI, in place of a theorem name.
 pub(crate) const UI_SECTION_NAME: &str = "Game Invariants";
@@ -126,20 +127,9 @@ impl<'a, Backend: SmtSolverBackend + Sync, Proj: Project + Sync>
         if self.invariant_start_only {
             return Ok(vec![ClaimGroup::InvariantStart]);
         }
-        let oracle_names: Vec<String> = self
-            .comp
-            .exports
-            .iter()
-            .map(|e| e.name().to_string())
-            .collect();
+        let oracle_names = export_names(self.comp);
         if let Some(req_oracle) = self.req_oracle {
-            if !oracle_names.iter().any(|name| name == req_oracle) {
-                return Err(Error::UnknownOracle {
-                    composition: self.comp.name.clone(),
-                    oracle_name: req_oracle.to_string(),
-                    known_oracle_names: oracle_names,
-                });
-            }
+            check_export(self.comp, req_oracle)?;
             return Ok(vec![ClaimGroup::Oracle {
                 oracle_name: req_oracle.to_string(),
             }]);

@@ -16,7 +16,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_derive::{Deserialize, Serialize};
 
 use crate::debug::driver::StopReason;
-use crate::debug::layout::{proofstep_dir, Layout};
+use crate::debug::layout::{game_dir, proofstep_dir, Layout, GAME_DIR};
+use crate::debug::lockstep_run::ListingKind;
 use crate::debug::report::format_elapsed;
 use crate::debug::sweep::{esc, href_attr, SweepEntry};
 
@@ -159,8 +160,19 @@ impl ResultRecord {
             .filter(|c| c.goal_fails > 0 || c.inconclusive > 0)
     }
 
-    /// `T proofstep 3 (L == R) O [claim]`.
+    /// The composition of a run of `domino debug --game` (story 32): a one-sided run on the
+    /// Domino listing. Its theorem is synthetic and the index does not show it.
+    fn game(&self) -> Option<&str> {
+        self.composition
+            .as_deref()
+            .filter(|_| self.listing == ListingKind::Domino.as_str())
+    }
+
+    /// `T proofstep 3 (L == R) O [claim]`, or `game C O [claim]`.
     fn label(&self) -> String {
+        if let Some(composition) = self.game() {
+            return format!("game {composition} {} [{}]", self.oracle, self.claim);
+        }
         format!(
             "{} proofstep {} ({} == {}) {} [{}]",
             self.theorem, self.proofstep, self.left, self.right, self.oracle, self.claim
@@ -259,6 +271,10 @@ pub enum Level {
         theorem: String,
         package: String,
     },
+    /// The runs of `domino debug --game C` (story 32), in `!game!/<C>/` under the debug root.
+    Game {
+        composition: String,
+    },
 }
 
 impl Level {
@@ -293,13 +309,14 @@ impl Level {
                 composition,
             } => root.join(theorem).join(side_inv_rel(composition)),
             Level::PkgInv { theorem, package } => root.join(theorem).join(pkg_inv_rel(package)),
+            Level::Game { composition } => game_dir(root, composition),
         }
     }
 
     fn parent(&self) -> Option<Level> {
         match self {
             Level::Project => None,
-            Level::Theorem { .. } => Some(Level::Project),
+            Level::Theorem { .. } | Level::Game { .. } => Some(Level::Project),
             Level::Proofstep { theorem, .. }
             | Level::SideInv { theorem, .. }
             | Level::PkgInv { theorem, .. } => Some(Level::Theorem {
@@ -327,6 +344,9 @@ impl Level {
             }
             Level::PkgInv { theorem, package } => {
                 format!("domino debug — {theorem}: package invariants of {package}")
+            }
+            Level::Game { composition } => {
+                format!("domino debug — game invariants of {composition}")
             }
         }
     }
@@ -375,6 +395,12 @@ fn levels_below(root: &Path, level: &Level) -> Vec<Level> {
     let mut theorems = std::collections::BTreeSet::new();
     for found in records_below(&level.dir(root)) {
         let r = found.record;
+        if let Some(composition) = r.game() {
+            proofsteps.insert(Level::Game {
+                composition: composition.to_string(),
+            });
+            continue;
+        }
         proofsteps.insert(match (r.composition, r.package) {
             (Some(composition), _) => Level::SideInv {
                 theorem: r.theorem.clone(),
@@ -480,7 +506,10 @@ fn header(level: &Level) -> &'static [&'static str] {
             "oldest run",
             "",
         ],
-        Level::Proofstep { .. } | Level::SideInv { .. } | Level::PkgInv { .. } => &[
+        Level::Proofstep { .. }
+        | Level::SideInv { .. }
+        | Level::PkgInv { .. }
+        | Level::Game { .. } => &[
             "oracle",
             "claim",
             "strategy",
@@ -496,16 +525,21 @@ fn header(level: &Level) -> &'static [&'static str] {
 fn rows(level: &Level, dir: &Path, found: &[Found]) -> Vec<Row> {
     match level {
         Level::Project => {
-            let groups = group(found, |r| (r.theorem.clone(), 0, String::new()));
+            // after every theorem, the compositions of `domino debug --game`
+            let groups = group(found, |r| match r.game() {
+                Some(c) => (c.to_string(), GAME_ROWS, String::new()),
+                None => (r.theorem.clone(), 0, String::new()),
+            });
             groups
                 .into_iter()
-                .map(|((theorem, _, _), runs)| {
-                    let hint = format!("no index; run `domino debug --proof {theorem}`");
-                    child_row(
-                        vec![theorem.clone()],
-                        &runs,
-                        child_link(dir, &theorem, hint),
-                    )
+                .map(|((name, rows, _), runs)| {
+                    if rows == GAME_ROWS {
+                        let hint = format!("no index; run `domino debug --game {name}`");
+                        let link = child_link(dir, &format!("{GAME_DIR}/{name}"), hint);
+                        return child_row(vec![format!("game  {name}")], &runs, link);
+                    }
+                    let hint = format!("no index; run `domino debug --proof {name}`");
+                    child_row(vec![name.clone()], &runs, child_link(dir, &name, hint))
                 })
                 .collect()
         }
@@ -540,9 +574,10 @@ fn rows(level: &Level, dir: &Path, found: &[Found]) -> Vec<Row> {
                 })
                 .collect()
         }
-        Level::Proofstep { .. } | Level::SideInv { .. } | Level::PkgInv { .. } => {
-            found.iter().map(|f| run_row(dir, f)).collect()
-        }
+        Level::Proofstep { .. }
+        | Level::SideInv { .. }
+        | Level::PkgInv { .. }
+        | Level::Game { .. } => found.iter().map(|f| run_row(dir, f)).collect(),
     }
 }
 
@@ -550,6 +585,9 @@ fn rows(level: &Level, dir: &Path, found: &[Found]) -> Vec<Row> {
 /// then package trees.
 const SIDE_INV_ROWS: usize = usize::MAX - 1;
 const PKG_INV_ROWS: usize = usize::MAX;
+
+/// The group key that orders the compositions of `domino debug --game` after every theorem.
+const GAME_ROWS: usize = usize::MAX;
 
 /// `!debug!/PkgInv_<P>`: the directory of a package's package trees, under its theorem's.
 fn pkg_inv_rel(package: &str) -> String {

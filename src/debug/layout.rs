@@ -43,6 +43,23 @@ pub fn claim_dir(claim: Option<&str>, core: bool) -> String {
 /// The `_build` subdirectory debug runs go under.
 pub const DOMINO_DEBUG_DIR: &str = "_build/debug";
 
+/// The directory under the debug root that holds the runs of `domino debug --game` (story 32).
+/// `!` is not in the `identifier` rule of `ssp.pest`, so it cannot clash with a theorem name.
+pub const GAME_DIR: &str = "!game!";
+
+/// The directory of the game-invariant runs of composition `composition`: `<root>/!game!/<C>/`.
+pub fn game_dir(root: &Path, composition: &str) -> PathBuf {
+    root.join(GAME_DIR).join(composition)
+}
+
+/// The directory of one run of `domino debug --game`: `<root>/!game!/<C>/<O>/<claim-dir>/`,
+/// where `<claim-dir>` is [`claim_dir`] of the declared name that `--claim` gives.
+pub fn game_run_dir(root: &Path, composition: &str, oracle: &str, claim: Option<&str>) -> PathBuf {
+    game_dir(root, composition)
+        .join(oracle)
+        .join(claim_dir(claim, false))
+}
+
 /// The directory of one Domino-listing run: `<root>/<theorem>/<left>-<right>/<oracle>/<claim>/`.
 pub fn run_dir(root: &Path, target: &Target, claim_label: &str) -> PathBuf {
     proofstep_dir(root, &target.theorem, &target.left, &target.right)
@@ -129,6 +146,19 @@ mod tests {
         assert_eq!(
             run_dir(Path::new("/x"), &target, ALL_CLAIMS_DIR),
             Path::new("/x/T/L-R/O/!all-claims!")
+        );
+    }
+
+    #[test]
+    fn a_game_run_directory_is_below_the_game_directory() {
+        let root = Path::new("/x");
+        assert_eq!(
+            game_run_dir(root, "S", "O", None),
+            Path::new("/x/!game!/S/O/!all-claims!")
+        );
+        assert_eq!(
+            game_run_dir(root, "S", "O", Some("main")),
+            Path::new("/x/!game!/S/O/main")
         );
     }
 

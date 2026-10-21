@@ -578,7 +578,7 @@ pub(crate) enum ListingKind {
 }
 
 impl ListingKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             ListingKind::EasyCrypt => "easycrypt",
             ListingKind::Domino => "domino",

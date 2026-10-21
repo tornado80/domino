@@ -10,6 +10,7 @@ use crate::{
 
 use super::error::{Error, Result};
 use super::free::{claims, composition_theorem};
+use super::lookup::composition_of;
 use super::verify::{assumed_packages, assumption_line, GameInvariantSmtDriver, UI_SECTION_NAME};
 
 /// What `domino prove --game` selects.
@@ -40,14 +41,7 @@ pub fn prove_game<P: Project + Sync>(
     req: &GameRequest<'_>,
 ) -> Result<()> {
     let composition = req.composition;
-    let Some(comp) = project.get_game(composition) else {
-        let mut known_compositions: Vec<String> = project.games().map(str::to_string).collect();
-        known_compositions.sort();
-        return Err(Error::UnknownComposition {
-            composition: composition.to_string(),
-            known_compositions,
-        });
-    };
+    let comp = composition_of(project, composition)?;
 
     let (theorem, eq) = composition_theorem(comp);
     let (theorem_eq, auxs_eq) = EquivalenceTransform.transform_theorem(&theorem)?;

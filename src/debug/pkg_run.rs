@@ -31,7 +31,7 @@ use std::time::Instant;
 use crate::debug::driver::{ClaimInfo, DebugError};
 use crate::debug::ir::InlinedOracle;
 use crate::debug::lockstep_fingerprint::Fingerprint;
-use crate::debug::lockstep_run::{LockstepDebugOptions, LockstepRun};
+use crate::debug::lockstep_run::{ListingKind, LockstepDebugOptions, LockstepRun};
 use crate::debug::progress::DebugObserver;
 use crate::debug::side_run::{execute_one_sided, OneSidedInputs, StateOwner};
 use crate::package::Package;
@@ -150,6 +150,8 @@ where
         OneSidedInputs {
             theorem: theorem_name.to_string(),
             owner: StateOwner::Package(package.to_string()),
+            listing: ListingKind::EasyCrypt,
+            claim: None,
             oracle,
             inlined: &inlined,
             game_inst: &theorem_dbg.instances[0],

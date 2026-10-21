@@ -345,7 +345,6 @@ fn debug(d: &Debug) -> Result<(), Error> {
     use sspverif::debug::layout::{self, DOMINO_DEBUG_DIR};
     use sspverif::debug::lockstep_report::render_summary as render_lockstep_summary;
     use sspverif::debug::lockstep_run::{run_lockstep_domino, LockstepDebugOptions};
-    use sspverif::debug::smtout::SmtOut;
     use sspverif::debug::sweep::{self, SweepEntry};
 
     if d.proofstep.is_some() && d.proof.is_none() {
@@ -360,6 +359,13 @@ fn debug(d: &Debug) -> Result<(), Error> {
     };
     let files = project::DirectoryFiles::load(&project_root)?;
     let project = project::DirectoryProject::load(project_root.clone(), &files)?;
+    let root = d
+        .out
+        .clone()
+        .unwrap_or_else(|| project_root.join(DOMINO_DEBUG_DIR));
+    if let Some(composition) = &d.game {
+        return debug_game(d, &project, &root, composition);
+    }
 
     // Every filter is optional: omitted means all, given means only that (as in `prove`).
     let plan = sweep::plan(
@@ -375,22 +381,13 @@ fn debug(d: &Debug) -> Result<(), Error> {
         eprintln!("debug: the project has no equivalence proofstep to debug");
         return Ok(());
     }
-    let root = d
-        .out
-        .clone()
-        .unwrap_or_else(|| project_root.join(DOMINO_DEBUG_DIR));
     let claim_set = ClaimSet::of(d.claim_set == ClaimSetArg::Core, d.claim.as_deref());
     let claim_label = claim_set.dir();
     // One oracle: today's concise report on stdout. Several: one line per oracle as it
     // finishes, then the failures of the whole project.
     let single = plan.targets.len() == 1;
 
-    let smt_out = match d.smt {
-        SmtOutArg::None => SmtOut::None,
-        SmtOutArg::Failures => SmtOut::Failures,
-        SmtOutArg::All => SmtOut::All,
-        SmtOutArg::Deltas => SmtOut::Deltas,
-    };
+    let smt_out = smt_out_of(d.smt);
     let opts = DebugOptions {
         check_left: !d.no_check_left,
         check_right: !d.no_check_right,
@@ -530,6 +527,92 @@ fn debug(d: &Debug) -> Result<(), Error> {
         }
     }
 
+    if entries.iter().any(|entry| !entry.ok) {
+        return Err(DebugNotVerified.into());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cvc5-lib")]
+fn smt_out_of(arg: SmtOutArg) -> sspverif::debug::smtout::SmtOut {
+    use sspverif::debug::smtout::SmtOut;
+    match arg {
+        SmtOutArg::None => SmtOut::None,
+        SmtOutArg::Failures => SmtOut::Failures,
+        SmtOutArg::All => SmtOut::All,
+        SmtOutArg::Deltas => SmtOut::Deltas,
+    }
+}
+
+/// `domino debug --game C` (symbolic-execution story 32): one-sided execution of each oracle of
+/// `C` (or of `--oracle`) on the Domino listing, one after another, into `<root>/!game!/<C>/`.
+/// Exits non-zero when a check fails or a run stops early.
+#[cfg(feature = "cvc5-lib")]
+fn debug_game<P: project::Project>(
+    d: &Debug,
+    project: &P,
+    root: &std::path::Path,
+    composition: &str,
+) -> Result<(), Error> {
+    use sspverif::debug::game_run::{assumption_line, game_oracles, run_game_command};
+    use sspverif::debug::index::{self, Level};
+    use sspverif::debug::lockstep_run::LockstepDebugOptions;
+    use sspverif::debug::side_run::{one_sided_entry, StateOwner};
+    use sspverif::debug::sweep;
+
+    let oracles = game_oracles(project, composition, d.oracle.as_deref())?;
+    let opts = LockstepDebugOptions {
+        timeout_ms: d.timeout,
+        max_paths: d.max_paths,
+        smt_out: smt_out_of(d.smt),
+        transcript: d.transcript,
+    };
+    let backend = sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.timeout);
+    let stop = stop_on_ctrl_c(
+        "debug: interrupt — finishing the current solver query, then writing partial results \
+         (Ctrl-C again to abort now)",
+    );
+    if let Some(line) = assumption_line(project, composition) {
+        println!("{line}");
+    }
+    let owner = StateOwner::Composition(composition.to_string());
+    let mut entries = Vec::new();
+    for oracle in &oracles {
+        let mut observer = debug_observer(d.progress);
+        let run = run_game_command(
+            project,
+            composition,
+            oracle,
+            d.claim.as_deref(),
+            &opts,
+            &backend,
+            root,
+            observer.as_mut(),
+            Some(&stop),
+        )?;
+        drop(observer);
+        let entry = one_sided_entry(&run, &owner);
+        println!("{}", entry.one_line());
+        let interrupted = sweep::is_interrupted(&entry);
+        entries.push(entry);
+        if interrupted {
+            break;
+        }
+    }
+
+    let level = Level::Game {
+        composition: composition.to_string(),
+    };
+    let written = if d.oracle.is_some() {
+        index::update_indexes(root, &level)
+    } else {
+        index::refresh_indexes(root, &level)
+    }
+    .map_err(DebugIo)?;
+    for w in written {
+        let updated = if w.updated { "      (updated)" } else { "" };
+        println!("index    {}{updated}", w.path.display());
+    }
     if entries.iter().any(|entry| !entry.ok) {
         return Err(DebugNotVerified.into());
     }

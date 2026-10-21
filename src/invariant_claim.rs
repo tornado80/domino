@@ -40,15 +40,40 @@ pub(crate) fn select(
     let Some(pattern) = pattern else {
         return Ok(claims);
     };
-    let matches = |claim: &ResolvedClaim| {
-        Wildcard::new(pattern.as_bytes())
-            .is_ok_and(|wildcard| wildcard.is_match(declared_name(claim).as_bytes()))
+    select_by(claims, pattern, owner, |name| {
+        Wildcard::new(pattern.as_bytes()).is_ok_and(|wildcard| wildcard.is_match(name.as_bytes()))
+    })
+}
+
+/// As [`select`], but `name` is the exact declared name of one invariant: `domino debug`
+/// takes an exact name, because it is also the name of the run directory (story 32).
+///
+/// Errors: [`NoInvariantMatches`] when no invariant has that name.
+pub(crate) fn select_exact(
+    claims: Vec<ResolvedClaim>,
+    name: Option<&str>,
+    owner: &str,
+) -> Result<Vec<ResolvedClaim>, NoInvariantMatches> {
+    let Some(name) = name else {
+        return Ok(claims);
     };
+    select_by(claims, name, owner, |declared| declared == name)
+}
+
+fn select_by(
+    claims: Vec<ResolvedClaim>,
+    pattern: &str,
+    owner: &str,
+    matches: impl Fn(&str) -> bool,
+) -> Result<Vec<ResolvedClaim>, NoInvariantMatches> {
     let declared_names = claims
         .iter()
         .map(|c| declared_name(c).to_string())
         .collect();
-    let selected: Vec<ResolvedClaim> = claims.into_iter().filter(matches).collect();
+    let selected: Vec<ResolvedClaim> = claims
+        .into_iter()
+        .filter(|claim| matches(declared_name(claim)))
+        .collect();
     if selected.is_empty() {
         return Err(NoInvariantMatches {
             owner: owner.to_string(),
@@ -95,6 +120,15 @@ mod tests {
     #[test]
     fn no_pattern_selects_every_claim() {
         assert_eq!(select(two(), None, "P").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn an_exact_name_is_not_a_wildcard() {
+        let selected = select_exact(two(), Some("main"), "P").unwrap();
+        assert_eq!(names(&selected), ["package-invariant!main!P!"]);
+        let err = select_exact(two(), Some("ma*"), "P").unwrap_err();
+        assert_eq!(err.declared_names, ["main", "bad"]);
+        assert_eq!(select_exact(two(), None, "P").unwrap().len(), 2);
     }
 
     #[test]

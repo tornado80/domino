@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! `domino easycrypt debug --side-inv <C>` (symbolic-execution story 25, ADR 0014): one-sided
-//! execution of each oracle of a composition, on the EasyCrypt listing.
+//! execution of each oracle of a composition, on the EasyCrypt listing. [`execute_free`] is the
+//! engine that `domino debug --game` (story 32, [`crate::debug::game_run`]) also uses, on the
+//! Domino listing.
 //!
 //! # The composition with free parameters
 //!
@@ -34,14 +36,14 @@ use crate::debug::claims::ClaimQuery;
 use crate::debug::driver::{sites_view, ClaimInfo, DebugError, StopReason};
 use crate::debug::fold::FoldedListing;
 use crate::debug::index;
-use crate::debug::ir::{count_terminals, InlinedOracle};
-use crate::debug::layout::Layout;
+use crate::debug::ir::{count_terminals, inline_oracle, InlinedOracle};
+use crate::debug::layout::{claim_dir, Layout};
 use crate::debug::lockstep::{LockstepOutcome, LockstepSide};
 use crate::debug::lockstep_fingerprint::Fingerprint;
 use crate::debug::lockstep_report;
 use crate::debug::lockstep_run::{
-    summarize, GoalsView, LockstepDebugOptions, LockstepMeta, LockstepOptionsView, LockstepRun,
-    LOCKSTEP_TRACE_SCHEMA,
+    summarize, GoalsView, ListingKind, LockstepDebugOptions, LockstepMeta, LockstepOptionsView,
+    LockstepRun, LOCKSTEP_TRACE_SCHEMA,
 };
 use crate::debug::progress::{DebugEvent, DebugObserver};
 use crate::debug::side::{run_side, SideOptions};
@@ -49,7 +51,7 @@ use crate::debug::sweep::{SweepEntry, Target};
 use crate::game_invariant::{base_frame, claims, free_theorem};
 use crate::package::Composition;
 use crate::project::Project;
-use crate::theorem::{GameInstance, Theorem};
+use crate::theorem::{GameInstance, ResolvedClaim, Theorem};
 use crate::transforms::samplify::SampleInfo;
 use crate::transforms::theorem_transforms::{
     DebugTransform, EasyCryptTransform, EquivalenceTransform,
@@ -178,8 +180,72 @@ where
     let (theorem_eq, auxs_eq) = EquivalenceTransform.transform_theorem(&theorem)?;
     let mut eqctx = EquivalenceContext::new(&eq, &theorem_eq, &auxs_eq);
     eqctx.load_invariants(project)?;
+    let claims = claims(&eqctx);
+    if claims.is_empty() {
+        return Err(DebugError::NoGameInvariants {
+            composition: composition.to_string(),
+        });
+    }
+    execute_free(
+        FreeRun {
+            theorem: &theorem,
+            eqctx: &eqctx,
+            composition,
+            oracle,
+            listing: ListingKind::EasyCrypt,
+            claim: None,
+            claims,
+        },
+        opts,
+        backend,
+        out,
+        observer,
+        stop,
+        started,
+    )
+}
 
-    let (theorem_dbg, auxs_dbg) = DebugTransform.transform_theorem(&theorem)?;
+/// One one-sided run of the free composition: what the side tree (story 25) and
+/// `domino debug --game` (story 32) give to [`execute_free`].
+pub(crate) struct FreeRun<'r> {
+    /// The free theorem ([`free_theorem`]).
+    pub theorem: &'r Theorem<'r>,
+    /// The SMT vocabulary of `theorem`, with the invariants loaded.
+    pub eqctx: &'r EquivalenceContext<'r>,
+    pub composition: &'r str,
+    /// An export of `composition`.
+    pub oracle: &'r str,
+    /// The listing that the engine walks. Only the inlined oracle depends on it.
+    pub listing: ListingKind,
+    /// The declared name of the one game invariant that `--claim` selects; `None` for all.
+    pub claim: Option<&'r str>,
+    /// The claims to check at each terminal; not empty.
+    pub claims: Vec<ResolvedClaim>,
+}
+
+/// Run one-sided execution of `run.oracle` of the free instance of `run.composition` on
+/// `run.listing`, and write its artifacts and result record into `out`. The claims, the base
+/// frame and the fingerprint do not depend on the listing.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn execute_free<B: SmtSolverBackend>(
+    run: FreeRun<'_>,
+    opts: &LockstepDebugOptions,
+    backend: &B,
+    out: PathBuf,
+    observer: &mut dyn DebugObserver,
+    stop: Option<&AtomicBool>,
+    started: Instant,
+) -> Result<LockstepRun, DebugError> {
+    let FreeRun {
+        theorem,
+        eqctx,
+        composition,
+        oracle,
+        listing,
+        claim,
+        claims,
+    } = run;
+    let (theorem_dbg, auxs_dbg) = DebugTransform.transform_theorem(theorem)?;
     let inst = theorem_dbg
         .find_game_instance(composition)
         .expect("the free instance exists");
@@ -189,28 +255,29 @@ where
         .expect("aux for the free instance")
         .1
         .sample_info;
-    let (theorem_ec, _) = EasyCryptTransform.transform_theorem(&theorem)?;
-    let inlined = inline_oracle_ec(
-        theorem_ec
-            .find_game_instance(composition)
-            .expect("the free instance exists"),
-        oracle,
-    )?;
+    let inlined = match listing {
+        ListingKind::EasyCrypt => {
+            let (theorem_ec, _) = EasyCryptTransform.transform_theorem(theorem)?;
+            inline_oracle_ec(
+                theorem_ec
+                    .find_game_instance(composition)
+                    .expect("the free instance exists"),
+                oracle,
+            )?
+        }
+        ListingKind::Domino => inline_oracle(inst, oracle)?,
+    };
 
-    let claims = claims(&eqctx);
-    if claims.is_empty() {
-        return Err(DebugError::NoGameInvariants {
-            composition: composition.to_string(),
-        });
-    }
     let queries: Vec<ClaimQuery> = claims
         .iter()
-        .map(|c| ClaimQuery::of(&eqctx, c, oracle))
+        .map(|c| ClaimQuery::of(eqctx, c, oracle))
         .collect();
     execute_one_sided(
         OneSidedInputs {
             theorem: theorem.name.clone(),
             owner: StateOwner::Composition(composition.to_string()),
+            listing,
+            claim: claim.map(str::to_string),
             oracle,
             inlined: &inlined,
             game_inst: inst,
@@ -224,8 +291,8 @@ where
                 })
                 .collect(),
             queries,
-            fingerprint: fingerprint_of(&theorem, &eqctx, composition, &inlined),
-            base: base_frame(&eqctx, oracle),
+            fingerprint: fingerprint_of(theorem, eqctx, composition, &inlined),
+            base: base_frame(eqctx, oracle),
         },
         opts,
         backend,
@@ -251,11 +318,15 @@ impl StateOwner {
         }
     }
 
-    /// What the tree checks, as the page header says it.
-    fn subject(&self) -> String {
-        match self {
-            StateOwner::Composition(c) => format!("side invariants of {c}"),
-            StateOwner::Package(p) => format!("package invariants of {p}"),
+    /// What the tree checks, as the page header says it. On the Domino listing a composition's
+    /// tree checks its game invariants (story 32); on the EasyCrypt listing, its side invariants.
+    fn subject(&self, listing: ListingKind) -> String {
+        match (self, listing) {
+            (StateOwner::Composition(c), ListingKind::Domino) => format!("game invariants of {c}"),
+            (StateOwner::Composition(c), ListingKind::EasyCrypt) => {
+                format!("side invariants of {c}")
+            }
+            (StateOwner::Package(p), _) => format!("package invariants of {p}"),
         }
     }
 }
@@ -264,8 +335,12 @@ impl StateOwner {
 pub(crate) struct OneSidedInputs<'r> {
     pub theorem: String,
     pub owner: StateOwner,
+    /// The listing that `inlined` is.
+    pub listing: ListingKind,
+    /// The declared name of the one invariant to check; `None` for all of them.
+    pub claim: Option<String>,
     pub oracle: &'r str,
-    /// The EasyCrypt listing of the oracle.
+    /// The listing of the oracle.
     pub inlined: &'r InlinedOracle,
     /// The instance the executor names the state and the constants by ([`DebugTransform`]).
     pub game_inst: &'r GameInstance,
@@ -293,6 +368,8 @@ pub(crate) fn execute_one_sided<B: SmtSolverBackend>(
     let OneSidedInputs {
         theorem,
         owner,
+        listing,
+        claim,
         oracle,
         inlined,
         game_inst,
@@ -302,24 +379,25 @@ pub(crate) fn execute_one_sided<B: SmtSolverBackend>(
         fingerprint,
         base,
     } = inputs;
+    let claim_label = claim_dir(claim.as_deref(), false);
     observer.on_event(&DebugEvent::Started {
         oracle,
-        claim: "!all-claims!",
+        claim: &claim_label,
         admitted: false,
     });
     std::fs::create_dir_all(layout.path(&out, "models"))?;
     let meta = LockstepMeta {
         schema: LOCKSTEP_TRACE_SCHEMA,
         mode: ONE_SIDED,
-        listing: "easycrypt",
+        listing: listing.as_str(),
         theorem,
         proofstep: 0,
         left_game: owner.name().to_string(),
         right_game: String::new(),
         oracle: oracle.to_string(),
-        claim: "!all-claims!".to_string(),
+        all_claims: claim.is_none(),
+        claim: claim_label,
         core: false,
-        all_claims: true,
         claims,
         out_dir: out.display().to_string(),
         layout,
@@ -346,7 +424,7 @@ pub(crate) fn execute_one_sided<B: SmtSolverBackend>(
         left_syntactic: count_terminals(inlined),
         right_syntactic: 0,
         one_sided: true,
-        subject: owner.subject(),
+        subject: owner.subject(listing),
         fingerprint: std::iter::once(("all".to_string(), fingerprint.hex.clone()))
             .chain(fingerprint.parts.clone())
             .collect(),

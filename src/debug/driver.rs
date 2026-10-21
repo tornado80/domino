@@ -167,6 +167,17 @@ pub enum DebugError {
     #[error(transparent)]
     PackageInvariant(#[from] Box<crate::package_invariant::error::Error>),
 
+    /// `domino debug --game C` (story 32): the errors of `domino prove --game C` for an unknown
+    /// composition, a composition with no game invariant and an unknown oracle.
+    #[diagnostic(transparent)]
+    #[error(transparent)]
+    GameInvariant(#[from] Box<crate::game_invariant::error::Error>),
+
+    /// `domino debug --game C --claim <name>`: no game invariant of `C` has that name.
+    #[diagnostic(transparent)]
+    #[error(transparent)]
+    NoInvariantMatches(#[from] crate::invariant_claim::NoInvariantMatches),
+
     #[error("{}", claim_not_found(claim, available, *core))]
     ClaimNotFound {
         claim: String,

@@ -12,6 +12,7 @@ pub mod driver;
 pub mod effect;
 pub mod exec;
 pub mod fold;
+pub mod game_run;
 pub mod index;
 mod inline_rules;
 pub mod ir;
