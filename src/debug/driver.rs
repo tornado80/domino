@@ -2866,33 +2866,63 @@ mod tests {
         );
     }
 
-    /// `--timeout 1` on a non-trivial claim: a goal check that cannot be decided
-    /// in the budget times out to `Inconclusive`, never to `Verified` or a false
-    /// `GOAL FAILS`. Run with pruning **off** so the un-pruned shape holds — with
-    /// pruning on, the incremental branch context makes even PKENC's goal checks
-    /// resolve in well under a millisecond, so nothing stays inconclusive (a good
-    /// property, but not what this test is about).
+    /// Test-only backend: real cvc5, but every solver gets a resource limit of
+    /// one unit per query (`rlimit-per`). Resource units count solver steps, not
+    /// time, so each non-trivial check stops with `unknown` on any machine.
+    struct ResourceOutBackend(Cvc5LibBackend);
+
+    impl SmtSolverBackend for ResourceOutBackend {
+        type Solver = <Cvc5LibBackend as SmtSolverBackend>::Solver;
+
+        fn new_smtsolver(&self) -> crate::util::smtsolver::Result<Self::Solver> {
+            let mut solver = self.0.new_smtsolver()?;
+            solver.set_option("rlimit-per", "1")?;
+            Ok(solver)
+        }
+
+        fn new_smtsolver_with_transcript<W: std::io::Write + Send + Sync + 'static>(
+            &self,
+            writer: W,
+        ) -> crate::util::smtsolver::Result<Self::Solver> {
+            let mut solver = self.0.new_smtsolver_with_transcript(writer)?;
+            solver.set_option("rlimit-per", "1")?;
+            Ok(solver)
+        }
+    }
+
+    /// A check that the solver does not settle in its budget (an `unknown`)
+    /// becomes `Inconclusive`, never `Verified` or a false `GOAL FAILS`, and an
+    /// unknown branch is explored, never pruned. The `unknown` comes from a
+    /// one-unit resource limit (see [`ResourceOutBackend`]), not from a
+    /// wall-clock timeout: cvc5 settles these goals in under 1 ms, so
+    /// `--timeout 1` did not fire on fast machines. Pruning is off so the
+    /// un-pruned shape holds.
     #[test]
     fn tiny_timeout_yields_inconclusive_never_a_false_pass() {
-        let opts = DebugOptions {
-            timeout_ms: Some(1),
-            ..both_off()
-        };
-        let run = run_in_tmp(
-            "example-projects/kem-dem/kem-dem-cca-ssp",
-            "kem_dem_cca_ssp",
-            "PKENC",
-            "same-output",
-            opts,
-        );
+        let run = with_project("example-projects/kem-dem/kem-dem-cca-ssp", |proj| {
+            let out = tempfile::tempdir().unwrap().keep();
+            run_debug_command(
+                proj,
+                "kem_dem_cca_ssp",
+                0,
+                "PKENC",
+                ClaimSet::of(false, Some("same-output")),
+                &both_off(),
+                &ResourceOutBackend(Cvc5LibBackend::new(true, None)),
+                Some(out),
+                &mut NopObserver,
+                None,
+            )
+            .unwrap()
+        });
         assert_eq!(run.summary.goal_fails, 0, "{}", render_tree(&run));
         assert!(
             run.summary.inconclusive > 0,
-            "with --timeout 1 the real goal checks should be Inconclusive: {}",
+            "a resource-out goal check should be Inconclusive: {}",
             render_tree(&run)
         );
         assert!(!run.is_ok());
-        // A timeout is `unknown`, so it is explored, never pruned.
+        // An `unknown` is explored, never pruned.
         assert_eq!(run.summary.left_pruned_branches, 0);
         assert_eq!(run.summary.right_pruned_branches, 0);
         assert_eq!(run.summary.left_paths, 6);
