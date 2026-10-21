@@ -139,20 +139,26 @@ pub(super) fn app_op_leaf(form: &Form) -> Option<&str> {
     op_name(form).map(|op| op.rsplit_once('.').map_or(op, |(_, n)| n))
 }
 
-/// Whether any node of the formula tree is an application of an operator named `name`.
-pub(super) fn mentions_op(form: &Form, name: &str) -> bool {
-    if op_is(form, name) {
+/// Whether the formula may hold an application of an operator named `name`: `true` if a node
+/// is one, or if a node is a stub ([`Form::stub`]), below which it can be. A formula read with
+/// `head` is cut at depth 4, and a premise can hold `inv` deeper (story 86). `false` only for a
+/// formula seen in full that does not hold it.
+pub(super) fn may_mention_op(form: &Form, name: &str) -> bool {
+    if op_is(form, name) || form.stub {
         return true;
     }
-    let children = form
-        .head
+    children(form).any(|c| may_mention_op(c, name))
+}
+
+/// The direct sub-formulas of a formula.
+fn children(form: &Form) -> impl Iterator<Item = &Form> {
+    form.head
         .iter()
         .map(|b| &**b)
         .chain(form.args.iter())
         .chain(form.body.iter().map(|b| &**b))
         .chain(form.pre.iter().map(|b| &**b))
-        .chain(form.post.iter().map(|b| &**b));
-    children.into_iter().any(|c| mentions_op(c, name))
+        .chain(form.post.iter().map(|b| &**b))
 }
 
 /// The most pairs a key case split takes: `2^6` cases.
@@ -292,11 +298,37 @@ mod tests {
         let goal = response.proof.as_ref().unwrap().front.as_ref().unwrap();
         let pre = goal.concl.pre.as_ref().unwrap();
         // the precondition is `true /\ inv …` (or a conjunction with it)
-        assert!(mentions_op(pre, "inv"), "{}", pre.pp);
+        assert!(may_mention_op(pre, "inv"), "{}", pre.pp);
         let post = goal.concl.post.as_ref().unwrap();
         let (a, b) = as_conjunction(post).expect("equal-output /\\ inv");
-        assert!(!mentions_op(a, "inv"));
+        assert!(!may_mention_op(a, "inv"));
         assert_eq!(app_op_leaf(b), Some("inv"));
+    }
+
+    /// Story 86: an `/\` of two atoms, the second at depth 2 being `atom`.
+    fn conj_with(atom: &str) -> Form {
+        form(&format!(
+            r#"{{"kind":"app","pp":"x","op":"Top.Logic./\\","args":[
+                {{"kind":"app","pp":"a","op":"Top.a"}},{atom}]}}"#
+        ))
+    }
+
+    #[test]
+    fn an_operator_at_depth_2_may_be_mentioned() {
+        let f = conj_with(r#"{"kind":"app","pp":"inv","op":"Top.Eq.inv"}"#);
+        assert!(may_mention_op(&f, "inv"));
+    }
+
+    #[test]
+    fn an_operator_below_a_stub_may_be_mentioned() {
+        let f = conj_with(r#"{"kind":"app","pp":"","op":"Top.Logic./\\","stub":true}"#);
+        assert!(may_mention_op(&f, "inv"));
+    }
+
+    #[test]
+    fn a_formula_without_stubs_and_without_the_operator_does_not_mention_it() {
+        let f = conj_with(r#"{"kind":"app","pp":"b","op":"Top.b"}"#);
+        assert!(!may_mention_op(&f, "inv"));
     }
 
     fn formula_goal() -> Goal {

@@ -557,9 +557,9 @@ fn part_view(
 /// from `ssp.toml`.
 pub(super) const BASE_SMT_LEMMAS: [&str; 5] = ["get_setE", "mem_set", "remE", "mem_rem", "emptyE"];
 
-/// The length of the fallback sequence: `smt()` and `smt(hints)`, each also with the premise
-/// unfolded.
-const FALLBACKS: usize = 4;
+/// The length of the fallback sequence: the crush `move=> /> <binders> *; smt().` (story 86),
+/// then `smt()` and `smt(hints)`, each also with the premise unfolded.
+const FALLBACKS: usize = 5;
 
 /// The length of the part fallback sequence ([`Prover::atom`]); the fourth is the key case
 /// split.
@@ -1140,48 +1140,80 @@ impl Prover<'_> {
     }
 
     /// Unfolds the invariant's operators in the hypothesis `name` (`rewrite /inv /params_inv
-    /// /StateRelation_… /Helper_… in name.`), so a solver sees through them; only if the hypothesis mentions
-    /// `inv`. `Ok(false)` if there was nothing to unfold or EasyCrypt refused.
-    fn unfold_premise(&mut self, name: &str) -> R<bool> {
+    /// /StateRelation_… /Helper_… in name.`), so a solver sees through them; only if the
+    /// hypothesis may mention `inv` ([`goals::may_mention_op`]: a premise read at `head` is cut
+    /// at depth 4, and `inv` can be deeper). `Ok(false)` if there was nothing to unfold, if
+    /// EasyCrypt refused, or if it warned `unused unfold` for each operator (story 86).
+    pub(super) fn unfold_premise(&mut self, name: &str) -> R<bool> {
         // `inv` for an oracle lemma, `Comp_<C>.side_inv_<C>` for a side-invariant lemma
         let Some(head) = self.unfold_ops.first().cloned() else {
             return Ok(false);
         };
-        let mentions = self.front().is_some_and(|g| {
+        let may_mention = self.front().is_some_and(|g| {
             g.hyps.iter().any(|h| {
                 h.name == name
                     && h.form
                         .as_ref()
-                        .is_some_and(|f| goals::mentions_op(f, op_leaf(&head)))
+                        .is_some_and(|f| goals::may_mention_op(f, op_leaf(&head)))
             })
         });
-        if !mentions {
+        if !may_mention {
             return Ok(false);
         }
-        let all: String = self.unfold_ops.iter().map(|o| format!(" /{o}")).collect();
-        let only_head = format!(" /{head}");
-        for ops in [all.as_str(), only_head.as_str()] {
-            if self.send(&format!("rewrite{ops} in {name}."), Want::Head)? {
-                return Ok(true);
+        let all: Vec<&str> = self.unfold_ops.iter().map(String::as_str).collect();
+        let only_head = [head.as_str()];
+        let tries: &[&[&str]] = if all.len() > 1 {
+            &[&all, &only_head]
+        } else {
+            &[&only_head]
+        };
+        for &ops in tries {
+            let list: String = ops.iter().map(|o| format!(" /{o}")).collect();
+            if self.send(&format!("rewrite{list} in {name}."), Want::Head)? {
+                return Ok(!self.all_unfolds_unused(ops));
             }
         }
         Ok(false)
     }
 
+    /// Whether the last answer warns `unused unfold: /<op>` for each of `ops`: the rewrite
+    /// changed nothing.
+    fn all_unfolds_unused(&self, ops: &[&str]) -> bool {
+        let Some(answer) = self.session.last() else {
+            return false;
+        };
+        ops.iter().all(|op| {
+            let warning = format!("unused unfold: /{op}");
+            answer.messages.iter().any(|m| m.text.contains(&warning))
+        })
+    }
+
+    /// The binders of an ambient goal `forall <binders>, A => B`, as `move =>` names them; `None`
+    /// if the front goal has no such premise.
+    fn premise_binders(&self) -> Option<String> {
+        let goal = self.front()?;
+        match goals::as_forall(&goal.concl) {
+            Some((names, body)) if goals::as_implication(body).is_some() => Some(names.join(" ")),
+            _ => None,
+        }
+    }
+
+    /// The crush of a side goal (story 86): `move=> /> <binders> *; smt().` `/>` substitutes the
+    /// equalities of the premise, destructs its conjunctions and existentials, and the solver
+    /// sees only the facts left. `Ok(false)`, with nothing sent, on a goal without a premise.
+    fn try_crush(&mut self) -> R<bool> {
+        let Some(names) = self.premise_binders() else {
+            return Ok(false);
+        };
+        self.try_close(&[&format!("move=> /> {names} *; smt().")])
+    }
+
     /// `move => <binders> hpre.`, the invariant unfolded in `hpre`, then `tail`.
     fn try_with_premise(&mut self, tail: &str) -> R<bool> {
-        let intro = {
-            let Some(goal) = self.front() else {
-                return Ok(false);
-            };
-            match goals::as_forall(&goal.concl) {
-                Some((names, body)) if goals::as_implication(body).is_some() => {
-                    Some((names.join(" "), goals::fresh_name(goal, "hpre")))
-                }
-                _ => None,
-            }
+        let Some(names) = self.premise_binders() else {
+            return Ok(false);
         };
-        let Some((names, premise)) = intro else {
+        let Some(premise) = self.front().map(|g| goals::fresh_name(g, "hpre")) else {
             return Ok(false);
         };
         let before = self.count();
@@ -1196,13 +1228,23 @@ impl Prover<'_> {
         Ok(false)
     }
 
-    /// The fallback sequence (§3.5): `smt()`, then the same with the premise introduced and the
-    /// invariant unfolded in it (`/#` on a quantified goal), then the hint list likewise.
+    /// The fallback sequence (§3.5): the crush (story 86), then `smt()`, then the same with the
+    /// premise introduced and the invariant unfolded in it, then the hint list likewise.
     fn fallbacks(&mut self) -> R<bool> {
         self.as_role(Role::Reduce, Self::reduce_to_ambient)?;
+        let crush = Closing::Fallback {
+            k: 1,
+            of: FALLBACKS,
+        };
+        let closed = self.as_role(Role::SideGoalFallback(1), |p| {
+            p.closing_attempt(crush, "move=> /> <binders> *; smt()", Self::try_crush)
+        })?;
+        if closed {
+            return Ok(true);
+        }
         let hints = self.hint_sentence();
         for (i, tail) in ["smt().", hints.as_str()].into_iter().enumerate() {
-            let k = 2 * i + 1;
+            let k = 2 * i + 2;
             let shown = tail.trim_end_matches('.');
             let plain = Closing::Fallback { k, of: FALLBACKS };
             let closed = self.as_role(Role::SideGoalFallback(k), |p| {
@@ -1281,7 +1323,7 @@ impl Prover<'_> {
     /// A side goal (a condition, the side goal of `rcondt`): the quick close, then the fallbacks,
     /// else an admit whose reason is `Router` for the router prelude and otherwise
     /// `domino-verified-ec-failed`: Domino decided this branch under its assumptions.
-    fn close_side_goal(&mut self, node: usize, claim: &str, router: bool) -> R<()> {
+    pub(super) fn close_side_goal(&mut self, node: usize, claim: &str, router: bool) -> R<()> {
         if self.try_quick_close()? || self.fallbacks()? {
             return Ok(());
         }

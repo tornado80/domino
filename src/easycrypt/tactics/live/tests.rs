@@ -618,14 +618,14 @@ fn every_attempt_is_listed_in_order_and_the_last_closing_one_is_on_the_chip() {
     rig.answer("auto => /#.", "error", Some("cannot close"), &["g"], 1);
     rig.live.attempt_ended(false);
     rig.live
-        .attempt(Closing::Fallback { k: 1, of: 4 }, "smt()", TWO_S);
+        .attempt(Closing::Fallback { k: 2, of: 5 }, "smt()", TWO_S);
     rig.sending("smt().");
     rig.answer("smt().", "ok", None, &[], 1);
     rig.live.attempt_ended(true);
     rig.live.node_left();
     rig.live.finish();
     let page = rig.page();
-    assert!(page.contains("closed by fallback 1/4: smt()"), "{page}");
+    assert!(page.contains("closed by fallback 2/5: smt()"), "{page}");
     assert!(page.contains("closing attempts (2)"));
     let failed = page.find("✗ failed").unwrap();
     let closed = page.find("✓ closed").unwrap();
@@ -638,13 +638,13 @@ fn the_attempt_in_flight_is_on_the_chip() {
     rig.one_oracle();
     rig.live.node_entered("N0", "determined", vec![], Some(0));
     rig.live.attempt(
-        Closing::Fallback { k: 2, of: 4 },
+        Closing::Fallback { k: 3, of: 5 },
         "smt() (premise unfolded)",
         TWO_S,
     );
     assert!(rig
         .page()
-        .contains("trying fallback 2/4: smt() (premise unfolded)"));
+        .contains("trying fallback 3/5: smt() (premise unfolded)"));
 }
 
 #[test]

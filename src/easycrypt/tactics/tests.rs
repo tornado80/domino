@@ -3570,6 +3570,29 @@ fn run_leaf(
     pairs: Vec<PairRecord>,
     part_ops: &[crate::writers::easycrypt::invariant::InvariantOp],
 ) -> LeafRun {
+    run_fake(goals, start, arms, pairs, part_ops, |p| {
+        p.prove_node(0).unwrap();
+        assert_eq!(p.count(), 0, "the leaf is closed");
+    })
+}
+
+/// Story 86: closes the front goal after `start.` as a `branch-condition` side goal, against a
+/// fake EasyCrypt as in [`run_leaf`].
+fn run_side_goal(goals: &[(&str, String)], start: &str, arms: &str) -> LeafRun {
+    run_fake(goals, start, arms, vec![], &[], |p| {
+        p.close_side_goal(0, "branch-condition", false).unwrap();
+    })
+}
+
+/// The fake EasyCrypt of [`run_leaf`], and a prover on it that `act` drives.
+fn run_fake(
+    goals: &[(&str, String)],
+    start: &str,
+    arms: &str,
+    pairs: Vec<PairRecord>,
+    part_ops: &[crate::writers::easycrypt::invariant::InvariantOp],
+    act: impl FnOnce(&mut super::driver::Prover<'_>),
+) -> LeafRun {
     use crate::debug::lockstep::JointTree;
     use crate::easycrypt::session::tests::start_fake;
     use crate::easycrypt::session::tests::TestSink;
@@ -3588,6 +3611,7 @@ fn run_leaf(
 d='{}'; n=0; g=none
 ans() {{ n=$((n+1)); eval "g_$n=$g"; printf '{{"version":"domino-json/3","state":%s,"status":"ok","messages":[],"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
 err() {{ printf '{{"version":"domino-json/3","state":%s,"status":"error","messages":[],"error":{{"msg":"no"}},"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
+unused() {{ n=$((n+1)); eval "g_$n=$g"; printf '{{"version":"domino-json/3","state":%s,"status":"ok","messages":[{{"level":"warning","text":"unused unfold: /inv"}}],"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
 while IFS= read -r req; do
   printf '%s\n' "$req" >> "$d/requests"
   line=$(printf '%s\n' "$req" | sed -e 's/^."sentence":"\(.*\)","want":"[a-z]*".$/\1/' -e 's/\\"/"/g' -e 's/\\\\/\\/g')
@@ -3659,8 +3683,7 @@ done
         last_smt: None,
         admit_smt: None,
     };
-    prover.prove_node(0).unwrap();
-    assert_eq!(prover.count(), 0, "the leaf is closed");
+    act(&mut prover);
     let admits = prover.stats.admits.clone();
     let script = prover.script.render();
     let said = sink
@@ -3746,7 +3769,8 @@ fn proof_of(front: &str, open: usize) -> String {
         "formula"
     };
     let kinds = vec![format!("\"{kind}\""); open].join(",");
-    format!(r#"{{"front":{front},"kinds":[{kinds}]}}"#)
+    // the fake EasyCrypt answers one line for each sentence
+    format!(r#"{{"front":{front},"kinds":[{kinds}]}}"#).replace('\n', " ")
 }
 
 /// A program goal whose sides hold `if`s with these conditions.
@@ -5491,4 +5515,159 @@ fn a_failed_run_names_the_execution_of_its_job() {
         JobKind::PackageInvariants("P").run_failed(),
         "one-sided execution failed"
     );
+}
+
+/// Story 86: a side goal `forall &1 &2, <premise> => g`.
+fn side_goal(premise: &str) -> String {
+    let g = r#"{"kind":"app","pp":"g","op":"Top.g"}"#;
+    formula(&format!(
+        r#"{{"kind":"quant","pp":"q","quantifier":"forall","binders":[{{"name":"&1"}},{{"name":"&2"}}],
+            "body":{{"kind":"app","pp":"i","op":"Top.Logic.=>","args":[{premise},{g}]}}}}"#
+    ))
+}
+
+/// Story 86: the premise after `sp`, as a `head` answer cuts it: a `/\` chain of equalities whose
+/// `inv` is below depth 4, here a stub.
+const DEEP_PREMISE: &str = r#"{"kind":"app","pp":"e and more","op":"Top.Logic./\\","args":[
+    {"kind":"app","pp":"e","op":"Top.Logic.="},
+    {"kind":"app","pp":"e and more","op":"Top.Logic./\\","args":[
+        {"kind":"app","pp":"e","op":"Top.Logic.="},
+        {"kind":"app","pp":"","op":"Top.Logic./\\","stub":true}]}]}"#;
+
+/// The goal after `move => &1 &2 hpre.`: `hpre` is `premise`, the conclusion `g`.
+fn introduced(premise: &str) -> String {
+    format!(
+        r#"{{"id":1,"hyps":[{{"name":"hpre","kind":"hyp","form":{premise}}}],
+            "concl":{{"kind":"app","pp":"g","op":"Top.g"}},"text":"g"}}"#
+    )
+}
+
+/// The sentences sent to close the side goal: no `start.`, `undo`, read of the goal or admit.
+fn side_goal_fallbacks(run: &LeafRun) -> Vec<&str> {
+    run.requests
+        .iter()
+        .filter_map(|r| r.split_once(' ').map(|(_, s)| s))
+        .filter(|s| {
+            !["start.", "undo ", "pragma ", "admit."]
+                .iter()
+                .any(|p| s.starts_with(p))
+        })
+        .collect()
+}
+
+#[test]
+fn a_side_goal_tries_the_crush_after_the_quick_close_then_the_four_fallbacks() {
+    let goals = [
+        ("side", proof_of(&side_goal(DEEP_PREMISE), 1)),
+        ("intro", proof_of(&introduced(DEEP_PREMISE), 1)),
+    ];
+    let arms = r#"
+    "move => &1 &2 hpre.") g=intro; ans;;
+    "pragma Goals:printall.") n=$((n-1)); ans;;
+    admit.) g=none; ans;;"#;
+    let run = run_side_goal(&goals, "side", arms);
+    let hints = "smt(get_setE mem_set remE mem_rem emptyE).";
+    assert_eq!(
+        side_goal_fallbacks(&run),
+        [
+            "auto => /#.",
+            "move=> /> &1 &2 *; smt().",
+            "smt().",
+            "move => &1 &2 hpre.",
+            // the premise is cut above `inv`: it may mention it, so the unfold is sent
+            "rewrite /inv in hpre.",
+            "smt().",
+            hints,
+            "move => &1 &2 hpre.",
+            "rewrite /inv in hpre.",
+            hints,
+        ]
+    );
+    assert_eq!(run.admits.len(), 1);
+}
+
+#[test]
+fn the_crush_closes_a_side_goal_and_nothing_else_is_sent() {
+    let goals = [("side", proof_of(&side_goal(DEEP_PREMISE), 1))];
+    let arms = r#"
+    "move=> /> &1 &2 *; smt().") g=none; ans;;"#;
+    let run = run_side_goal(&goals, "side", arms);
+    assert_eq!(
+        side_goal_fallbacks(&run),
+        ["auto => /#.", "move=> /> &1 &2 *; smt()."]
+    );
+    assert!(run.admits.is_empty());
+    assert!(
+        run.script.contains("move=> /> &1 &2 *; smt()."),
+        "{}",
+        run.script
+    );
+}
+
+#[test]
+fn a_crush_that_leaves_a_goal_open_is_rolled_back_and_fallback_2_follows() {
+    let goals = [("side", proof_of(&side_goal(DEEP_PREMISE), 1))];
+    // `/>` splits the goal and `smt()` closes only one of the two: the count does not drop
+    let arms = r#"
+    "move=> /> &1 &2 *; smt().") ans;;
+    "smt().") g=none; ans;;"#;
+    let run = run_side_goal(&goals, "side", arms);
+    assert_eq!(
+        side_goal_fallbacks(&run),
+        ["auto => /#.", "move=> /> &1 &2 *; smt().", "smt()."]
+    );
+    assert!(run.admits.is_empty());
+    assert!(!run.script.contains("move=> />"), "{}", run.script);
+}
+
+#[test]
+fn a_side_goal_without_a_premise_gets_no_crush() {
+    let goals = [(
+        "side",
+        proof_of(&formula(r#"{"kind":"app","pp":"g","op":"Top.g"}"#), 1),
+    )];
+    let arms = r#"
+    "smt().") g=none; ans;;"#;
+    let run = run_side_goal(&goals, "side", arms);
+    assert_eq!(side_goal_fallbacks(&run), ["auto => /#.", "smt()."]);
+}
+
+/// Story 86: EasyCrypt accepts `rewrite /inv in hpre.` when `inv` is not in `hpre`, and warns
+/// `unused unfold`: `unfold_premise` says that nothing was unfolded.
+#[test]
+fn an_unused_unfold_is_nothing_unfolded() {
+    let goals = [
+        ("side", proof_of(&side_goal(DEEP_PREMISE), 1)),
+        ("intro", proof_of(&introduced(DEEP_PREMISE), 1)),
+    ];
+    let arms = r#"
+    "move => &1 &2 hpre.") g=intro; ans;;
+    "rewrite /inv in hpre.") unused;;"#;
+    let mut unfolded = None;
+    let run = run_fake(&goals, "side", arms, vec![], &[], |p| {
+        assert!(p.send("move => &1 &2 hpre.", Want::Head).unwrap());
+        unfolded = Some(p.unfold_premise("hpre").unwrap());
+    });
+    assert_eq!(unfolded, Some(false));
+    assert!(run
+        .requests
+        .contains(&"head rewrite /inv in hpre.".to_string()));
+}
+
+/// Story 86: the same unfold without the warning unfolds.
+#[test]
+fn an_unfold_of_a_deep_premise_is_sent_and_unfolds() {
+    let goals = [
+        ("side", proof_of(&side_goal(DEEP_PREMISE), 1)),
+        ("intro", proof_of(&introduced(DEEP_PREMISE), 1)),
+    ];
+    let arms = r#"
+    "move => &1 &2 hpre.") g=intro; ans;;
+    "rewrite /inv in hpre.") ans;;"#;
+    let mut unfolded = None;
+    run_fake(&goals, "side", arms, vec![], &[], |p| {
+        assert!(p.send("move => &1 &2 hpre.", Want::Head).unwrap());
+        unfolded = Some(p.unfold_premise("hpre").unwrap());
+    });
+    assert_eq!(unfolded, Some(true));
 }
