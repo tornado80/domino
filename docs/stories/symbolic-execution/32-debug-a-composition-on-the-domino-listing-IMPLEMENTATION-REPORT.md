@@ -187,3 +187,13 @@ Every edited function has CC < 15.
 - A game record is found by "it has a composition and its listing is `domino`". The EasyCrypt
   side-tree records are under `_build/easycrypt/`, not under the Domino debug root.
 - `--features cvc5-lib`: type-checked and linted only (see above), not built or run.
+
+## Addendum: the cvc5-lib tests ran
+
+After the session, the lead session built with `--features cvc5-lib` (`source
+~/.cache/domino/cvc5-lib-env.sh` sets `CVC5_LIB_DIR` and `CVC5_INCLUDE_DIR` to the cached static
+cvc5; the build does not need cmake). With a 6G memory cap and `--test-threads=1`:
+
+- `cargo test -p domino --features cvc5-lib --test debug_game`: 6 passed (the five `runs` tests
+  that were "written, not run", and the clap test).
+- `cargo test -p domino --features cvc5-lib --test debug_all_claims` (two-sided `debug`): 8 passed.
