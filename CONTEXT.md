@@ -97,6 +97,11 @@ applies to every game instance of that composition. Domino assumes
 and proves it the same way as a package invariant.
 _Distinguish_: **state relation** and **invariant**. Those relate the two sides of an equivalence. A
 package invariant or a game invariant is about **one side** only.
+_Distinguish_ also the two strengths of a game invariant check: inside an equivalence, it is proved
+for the two game instances, with their constants bound; on its own, it is proved for its
+composition, for every value of the composition's parameters. The second is the stronger claim and
+the one the side-invariant lemma needs. "The game" of a game invariant check on its own is always
+the composition, never a game instance.
 
 ## Debugging
 
@@ -135,7 +140,7 @@ invariants on each path. Of a package's oracle it builds a **package tree** and 
 package's invariants on each path; every call the package makes to its imports is an *open call*.
 It is not a strategy, because a strategy walks two oracles; it is what a hoare proof of a
 side-invariant lemma or a package-invariant lemma follows, the way an equivalence's proof follows
-the joint tree.
+the joint tree. Like a strategy, it walks either listing.
 
 **Open call** — a call from a package to one of its imports when nothing is known about who
 provides it: it may abort, or return any value of its type, and it cannot touch the calling

@@ -130,6 +130,10 @@ left path #3:
 | 27 | Early returns as `goto` in the debugger and in `domino inline` | `27-early-returns-as-goto.md` | 26 |
 | 28 | The folded listing: hide trivial branches | `28-the-folded-listing.md` | 27 |
 | 29 | The package tree: one-sided execution of a package oracle with open calls (ADR 0017) | `29-the-package-tree.md` | 25, EasyCrypt 73, 75 |
+| 30 | `domino prove --game C`: the game invariants of a composition, on their own (ADR 0021) | `30-prove-game-invariants-of-a-composition.md` | 25, EasyCrypt 77, 85 |
+| 31 | `--claim` selects a package or game invariant by name in `domino prove` | `31-claim-selects-an-invariant-by-name.md` | 30 |
+| 32 | `domino debug --game C`: the side tree on the Domino listing | `32-debug-a-composition-on-the-domino-listing.md` | 30, 25, 22 |
+| 33 | `domino debug --package P`: the package tree on the Domino listing, with open calls | `33-debug-a-package-on-the-domino-listing.md` | 32, 29 |
 
 Stories 01, 02 and 04 are independent and may be done in any order (or in parallel). Stories 08
 and 09 are independent of each other; whichever lands second wires a one-way hook (see `09` §3.6).
@@ -140,6 +144,10 @@ a second wave from the owner's follow-up review of `domino debug`; 16–18 are a
 `TRACE_SCHEMA` by one, so whichever lands second bumps from whatever it finds and records the
 number in its report. **Story 14 goes last** — it reuses 10's events and cancellation, 12's
 `StopReason`, 11's `SmtWriter` and 13's `goal_smt`, and it benefits from 15 making the per-worker base frame ~4× smaller.
+
+Stories 30–33 give `domino prove` and `domino debug` the one-sided checks of a package
+(`--package P`) and a composition (`--game C`), with no theorem (ADR 0021). Story 30 goes first;
+31 and 32 may then land in any order; 33 goes after 32.
 
 ## 6. Working agreement (important)
 
