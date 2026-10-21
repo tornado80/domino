@@ -1,10 +1,12 @@
 theorem Proof {
     const u: Bool;
+    const g: fn Integer -> Integer;
 
     instance C_0 = C {
         params {
             c: false,
             u: u,
+            f: g,
         }
     }
 
@@ -12,12 +14,14 @@ theorem Proof {
         params {
             c: true,
             u: u,
+            f: g,
         }
     }
 
     instance D_1 = D {
         params {
             c: true,
+            f: g,
         }
     }
 

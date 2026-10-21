@@ -1,9 +1,11 @@
 composition D {
     const c: Bool;
+    const f: fn Integer -> Integer;
 
     instance P = P {
         params {
             b: c,
+            f: f,
         }
     }
 

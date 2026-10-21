@@ -822,6 +822,8 @@ fn build_side_record<'a>(
         }
     }
 
+    bind_game_consts(game_inst, binder, op_param, lookup)?;
+
     let abort_field = abort_field_name(field_ns_prefix);
     let mut fields = instance_fields;
     fields.extend(param_decls);
@@ -834,6 +836,63 @@ fn build_side_record<'a>(
         param_fields,
         abort_field,
     })
+}
+
+/// Story 81 (ADR 0019 point 5): the names that read `game_inst`'s fixed bindings. `lookup`
+/// gets `{binder}.<X>` for each game constant `X`, and `{binder}.<Inst>.<f>` for each function
+/// parameter `f` of an instance. A value is the literal, or the field that
+/// [`StateLookup::theorem_consts`] has for its theorem constant (none when no field of the side
+/// is bound to it). A function is `func_<c>` of its theorem constant `c`, so that
+/// `(left.f a …)` applies it.
+fn bind_game_consts(
+    game_inst: &GameInstance,
+    binder: &str,
+    op_param: &str,
+    lookup: &mut StateLookup,
+) -> Result<(), EcExportError> {
+    let span = SourceSpan::from((0, 0));
+    for (id, expr) in &game_inst.consts {
+        let ec_ty = translate_type(&id.ty, span)?;
+        if let Some(found) = bound_value(expr, ec_ty, op_param, lookup) {
+            lookup.fields.insert(format!("{binder}.{}", id.name), found);
+        }
+    }
+    for inst in &game_inst.game().pkgs {
+        for (name, ty, span) in &inst.pkg.params {
+            if !matches!(ty.kind(), crate::types::TypeKind::Fn(..)) {
+                continue;
+            }
+            let ec_ty = translate_type(ty, *span)?;
+            if let Some(found) =
+                param_assignment(inst, name).and_then(|e| bound_value(e, ec_ty, op_param, lookup))
+            {
+                lookup
+                    .fields
+                    .insert(format!("{binder}.{}.{name}", inst.name()), found);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// What `expr`, of type `ty`, reads in a state relation on side `op_param`: see
+/// [`bind_game_consts`].
+fn bound_value(
+    expr: &Expression,
+    ty: EcType,
+    op_param: &str,
+    lookup: &StateLookup,
+) -> Option<(EcExpr, EcType)> {
+    match resolve_expr_value(expr)? {
+        ParamValue::Literal(text) => Some((literal_expr(&text), ty)),
+        ParamValue::TheoremConst(c) if matches!(ty, EcType::Fun(..)) => {
+            Some((EcExpr::Var(func_op_name(&c)), ty))
+        }
+        ParamValue::TheoremConst(c) => lookup
+            .theorem_consts
+            .get(&format!("{op_param}.{c}"))
+            .cloned(),
+    }
 }
 
 /// The state fields of `inst`'s package, in declaration order: the raw name, the
@@ -1620,30 +1679,8 @@ impl<'a> TCtx<'a> {
         if let Some((mangled, ty)) = locals.get(a) {
             return Ok((EcExpr::Var(mangled.clone()), ty.clone()));
         }
-        // A dotted accessor (`left.KX.State`, or `state-left.KX.State` in a
-        // file that spells its own `define-state-relation` binders
-        // differently) whose *head* — the segment before the first `.` —
-        // resolves through `locals` to this definition's own left/right
-        // binder (`handle_define_state_relation`'s `side_locals`, canonical
-        // mangled name `l`/`r`). `self.lookup`'s own keys are always
-        // `left.<rest>`/`right.<rest>` regardless of what the source file
-        // calls its binders (`build_invariant_file` populates it with those
-        // fixed prefixes unconditionally), so resolving here only needs to
-        // translate the *canonical* `l`/`r` name back to that fixed prefix,
-        // never the source's own spelling.
-        if let Some((head, rest)) = a.split_once('.') {
-            if let Some((canonical, _ty)) = locals.get(head) {
-                let prefix = match canonical.as_str() {
-                    "l" => Some("left"),
-                    "r" => Some("right"),
-                    _ => None,
-                };
-                if let Some(prefix) = prefix {
-                    if let Some((expr, ty)) = self.lookup.fields.get(&format!("{prefix}.{rest}")) {
-                        return Ok((expr.clone(), ty.clone()));
-                    }
-                }
-            }
+        if let Some(found) = self.side_field(a, locals) {
+            return Ok(found);
         }
         if a == "left" {
             return Ok((EcExpr::Var("l".to_string()), self.left_record_ty.clone()));
@@ -1670,6 +1707,30 @@ impl<'a> TCtx<'a> {
             return Ok(found);
         }
         Err(self.unrecognised(whole))
+    }
+
+    /// The [`StateLookup::fields`] entry of `name`, read through this definition's own
+    /// binders.
+    ///
+    /// A dotted accessor (`left.KX.State`, or `state-left.KX.State` in a
+    /// file that spells its own `define-state-relation` binders
+    /// differently) whose *head* — the segment before the first `.` —
+    /// resolves through `locals` to this definition's own left/right
+    /// binder (`handle_define_state_relation`'s `side_locals`, canonical
+    /// mangled name `l`/`r`). `self.lookup`'s own keys are always
+    /// `left.<rest>`/`right.<rest>` regardless of what the source file
+    /// calls its binders (`build_invariant_file` populates it with those
+    /// fixed prefixes unconditionally), so resolving here only needs to
+    /// translate the *canonical* `l`/`r` name back to that fixed prefix,
+    /// never the source's own spelling.
+    fn side_field(&self, name: &str, locals: &Locals) -> Option<(EcExpr, EcType)> {
+        let (head, rest) = name.split_once('.')?;
+        let prefix = match locals.get(head)?.0.as_str() {
+            "l" => "left",
+            "r" => "right",
+            _ => return None,
+        };
+        self.lookup.fields.get(&format!("{prefix}.{rest}")).cloned()
     }
 
     /// `(<theorem-consts-<T>-<X>> <<theorem-consts>>)`, theorem constant `<X>`, read as
@@ -1758,7 +1819,10 @@ impl<'a> TCtx<'a> {
             return self.translate_proj(n, i, rest, locals, whole);
         }
 
-        if let Some((head_expr, ty @ EcType::Fun(..))) = self.lookup.fields.get(&head).cloned() {
+        let field = self
+            .side_field(&head, locals)
+            .or_else(|| self.lookup.fields.get(&head).cloned());
+        if let Some((head_expr, ty @ EcType::Fun(..))) = field {
             return self.translate_field_app(head_expr, ty, rest, locals, whole);
         }
         self.translate_call(&head, rest, locals, whole)
@@ -3289,6 +3353,32 @@ mod tests {
             panic!("expected an op def");
         };
         assert_eq!(render_expr(body), "l.`l_pkg_KX_State = r.`r_pkg_KX_State");
+    }
+
+    /// Story 81: a function game constant applied through the source's own binder name.
+    #[test]
+    fn a_function_constant_applies_through_any_binder_spelling() {
+        let mut lookup = HashMap::new();
+        lookup.insert(
+            "left.f".to_string(),
+            (
+                EcExpr::Var("func_g".to_string()),
+                EcType::Fun(Box::new(EcType::Int), Box::new(EcType::Int)),
+            ),
+        );
+        let mut state = InvariantParserState {
+            lookup: Box::leak(Box::new(fields_only(lookup))),
+            ..fresh_state()
+        };
+        state
+            .parse_stmts(
+                "(define-state-relation foo (state-left state-right) (= (state-left.f 0) 1))",
+            )
+            .unwrap();
+        let EcItem::OpDef { body, .. } = &state.items[0] else {
+            panic!("expected an op def");
+        };
+        assert_eq!(render_expr(body), "func_g 0 = 1");
     }
 
     // --- acceptance criteria exercised against real target projects ------

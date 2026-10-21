@@ -1,6 +1,7 @@
 package P {
     params {
         b: Bool,
+        f: fn Integer -> Integer,
     }
 
     state {

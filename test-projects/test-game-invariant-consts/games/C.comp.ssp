@@ -1,5 +1,6 @@
 composition C {
     const c: Bool;
+    const f: fn Integer -> Integer;
     const u: Bool;
 
     invariant: [ ./games/C.smt2 ]
@@ -7,6 +8,7 @@ composition C {
     instance P = P {
         params {
             b: c,
+            f: f,
         }
     }
 

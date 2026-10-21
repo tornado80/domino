@@ -1348,6 +1348,19 @@ mod tests {
         assert!(oracle.contains("Comp_C.C_const_c = true"), "{oracle}");
     }
 
+    /// Story 81: the state relation reads `left.c` as the literal of `C_1`, and `(right.f 0)`
+    /// and `(left.P.f 0)` as the operator of the theorem constant `g` that both bind.
+    #[test]
+    fn the_state_relation_reads_game_constants_through_the_instance_bindings() {
+        let exported = export(GAME_CONSTS, "Proof").unwrap();
+        let relation = item_text(
+            file(&exported, "Eq_C_1_D_1_Invariants.ec"),
+            "op StateRelation_invariant",
+        );
+        assert!(relation.contains("/\\ true"), "{relation}");
+        assert_eq!(count(relation, "func_g 0"), 2, "{relation}");
+    }
+
     /// Story 80: a composition with package invariants only has no constant field and no links.
     #[test]
     fn a_composition_with_package_invariants_only_has_no_constant_fields() {
