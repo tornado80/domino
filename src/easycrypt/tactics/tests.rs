@@ -105,6 +105,7 @@ fn an_admit_label_names_the_id_the_claim_the_reason_and_dominos_verdict() {
         domino: DominoView::Verified,
         goal: String::new(),
         smt: None,
+        split: None,
     };
     assert_eq!(
         admit.label(),
@@ -295,6 +296,7 @@ fn admit(reason: AdmitReason, id: &str) -> Admit {
         domino: DominoView::Verified,
         goal: "x = y".into(),
         smt: None,
+        split: None,
     }
 }
 
@@ -407,6 +409,7 @@ fn the_admits_of_a_seal_have_their_own_reason_in_the_report() {
         domino: DominoView::NotApplicable,
         goal: String::new(),
         smt: None,
+        split: None,
     };
     assert_eq!(sealed.label(), "(* domino: N3 open-goal; interrupted *)");
     let o = oracle_with(vec![
@@ -4046,6 +4049,7 @@ fn the_admit_label_says_dominos_view_only_where_the_reason_does_not() {
             domino: DominoView::Verified,
             goal: String::new(),
             smt: Some(SmtOutcome::Timeout),
+            split: None,
         };
         let says = matches!(
             reason,
@@ -4070,6 +4074,7 @@ fn the_admit_label_says_dominos_view_only_where_the_reason_does_not() {
         domino: DominoView::Verified,
         goal: String::new(),
         smt: None,
+        split: None,
     };
     assert_eq!(whole.label(), "(* domino: J2; domino-verified-ec-failed *)");
 
@@ -4139,6 +4144,22 @@ fn run_key_split_with(
     budget: Option<Duration>,
     pairs: Vec<PairRecord>,
 ) -> LeafRun {
+    key_split_fake(refuse, two, closes, slow, pairs, |p| {
+        p.leaf_budget = budget;
+        p.prove_node(0).unwrap();
+        assert_eq!(p.count(), 0, "the leaf is closed");
+    })
+}
+
+/// The fake EasyCrypt of [`run_key_split_with`], and a prover on it that `act` drives.
+fn key_split_fake(
+    refuse: &str,
+    two: bool,
+    closes: &[usize],
+    slow: u32,
+    pairs: Vec<PairRecord>,
+    act: impl FnOnce(&mut super::driver::Prover<'_>),
+) -> LeafRun {
     let local = |n: &str| format!(r#"{{"kind":"local","name":"{n}"}}"#);
     let key = |n: &str| {
         format!(r#"{{"kind":"pvar","scope":"global","path":"Top.Comp_H3.M./{n}","mem":"&2"}}"#)
@@ -4186,11 +4207,7 @@ fn run_key_split_with(
     "move: hpre => />; smt(get_setE mem_set remE mem_rem emptyE).") case $g in p1) err;; *) c=$((c+1)); [ "$c" = 1 ] && sleep {slow}; case " {closes} " in *" $c "*) {down};; *) err;; esac;; esac;;
     admit.) {down};;"#
     );
-    run_fake(&goals, "start", &arms, pairs, &[], |p| {
-        p.leaf_budget = budget;
-        p.prove_node(0).unwrap();
-        assert_eq!(p.count(), 0, "the leaf is closed");
-    })
+    run_fake(&goals, "start", &arms, pairs, &[], act)
 }
 
 fn run_key_split(closes: &[usize]) -> LeafRun {
@@ -4354,6 +4371,23 @@ fn the_cases_after_the_leaf_budget_are_admitted_without_a_crush() {
             "equal-output+invariant (case c <> Comp_H3.M.k{2}, d <> Comp_H3.M.j{2}, leaf time budget spent)",
         ]
     );
+}
+
+/// Story 89 addendum: the leaf is proved two times at one node, so two neighbouring parts
+/// with one label are split, each with an admitted case. The report counts two parts.
+#[test]
+fn the_report_counts_each_split_part_once() {
+    let run = key_split_fake("refuse-none", false, &[2, 4], 0, vec![], |p| {
+        p.prove_node(0).unwrap();
+        p.session.send("start.", Want::Full).unwrap();
+        p.prove_node(0).unwrap();
+        assert_eq!(p.count(), 0, "the leaf is closed");
+    });
+    let claims: Vec<_> = run.admits.iter().map(|a| a.claim.as_str()).collect();
+    let case = "equal-output+invariant (case c = Comp_H3.M.k{2})";
+    assert_eq!(claims, [case, case], "{:?}", run.admits);
+    let report = equivalence_with(vec![oracle_with(run.admits)]).render();
+    assert!(report.contains("2 of them cases of 2 parts"), "{report}");
 }
 
 /// Story 66: more than six pairs, and fallback 4 does not run.

@@ -144,6 +144,7 @@ fn admit() -> Admit {
         domino: DominoView::Verified,
         goal: "g".into(),
         smt: None,
+        split: None,
     }
 }
 

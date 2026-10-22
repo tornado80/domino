@@ -159,6 +159,10 @@ pub struct Admit {
     /// How the last part fallback ended (story 65), or `None` when no fallback ran. The
     /// session record does not hold it.
     pub smt: Option<SmtOutcome>,
+    /// The key case split that made this case admit (story 89 addendum): the number of admits
+    /// the oracle had when the split started, the same for every case of one split. `None`
+    /// for any other admit. The session record does not hold it.
+    pub split: Option<usize>,
 }
 
 /// How the last part fallback before an admit ended (story 65).
@@ -248,6 +252,7 @@ impl Admit {
             },
             goal: String::new(),
             smt: None,
+            split: None,
         })
     }
 }
@@ -757,6 +762,7 @@ impl Prover<'_> {
             domino: DominoView::NotApplicable,
             goal: String::new(),
             smt: None,
+            split: None,
         };
         let (script, admits) = self.script.sealed(open, &admit.label());
         let node = admit.id.clone();
@@ -1050,6 +1056,7 @@ impl Prover<'_> {
             domino,
             goal: goal_pp,
             smt,
+            split: None,
         };
         let label = admit.label();
         self.stop_point()?;
@@ -2218,7 +2225,11 @@ impl Prover<'_> {
         self.as_role(role, |p| {
             p.closing_attempt(closing, &shown, |p| {
                 let snap = p.snap();
+                let from = p.stats.admits.len();
                 let tally = p.split_cases(leaf, &pairs, &mut Vec::new())?;
+                for a in &mut p.stats.admits[from..] {
+                    a.split = Some(from);
+                }
                 if let (Some(t), Some(live)) = (tally, &p.live) {
                     let n = t.closed + t.admitted;
                     live.attempt_shown(&format!("case split: {} of {n} cases closed", t.closed));

@@ -631,22 +631,23 @@ impl OracleTactics {
 
     /// The admitted cases of key case splits (story 89), and the parts they are cases of. A
     /// case admit has the note ` (case …)` after its part's claim; the cases of one part are
-    /// admitted one after the other, so a run of case admits with one node and one part is one
-    /// part.
+    /// admitted one after the other, so a run of case admits with one node, one part and one
+    /// split ([`driver::Admit::split`]) is one part.
     pub fn case_admits(&self) -> (usize, usize) {
         let mut cases = 0;
         let mut parts = 0;
-        let mut last: Option<(&str, &str)> = None;
+        let mut last: Option<(&str, &str, Option<usize>)> = None;
         for a in &self.stats.admits {
             let Some((part, _)) = a.claim.split_once(" (case ") else {
                 last = None;
                 continue;
             };
             cases += 1;
-            if last != Some((a.id.as_str(), part)) {
+            let this = Some((a.id.as_str(), part, a.split));
+            if last != this {
                 parts += 1;
             }
-            last = Some((a.id.as_str(), part));
+            last = this;
         }
         (cases, parts)
     }

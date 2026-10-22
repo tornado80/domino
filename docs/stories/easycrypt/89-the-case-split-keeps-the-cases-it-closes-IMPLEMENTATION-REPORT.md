@@ -163,8 +163,11 @@ binary is `domino-ec.bak-2026-10-21`) and ran, in `~/ec4whs`, one run at a time,
   `rewrite /side_inv_<C> … in hpre.` (story 86 §3.2) followed by `smt(…)`.
 - H6_1_1 ~ H7_0: the key case split (stories 88 and 89) occurs in Send2, Send3, Send4 and Send5
   (`case (ctr1 = ctr0{2}) => [->|?].`). Story 89 counts one admit for each case that does not close:
-  38 admitted cases of 17 parts. Counted by part, 16 + 17 = 33 invariant-conjunct parts are admitted,
-  the same as before (33). The total is 84 against 81 only because of the count by case.
+  38 admitted cases. The split is sent on 23 parts with 64 cases: 26 cases close, 38 are admitted;
+  3 split parts close completely and 20 keep an admitted case. Counted by part, 16 + 20 = 36
+  invariant-conjunct parts keep an admit, against 33 admitted parts before. (`report.txt` says "of 17
+  parts": it merges neighbouring split parts with the same label at one node; counted again from the
+  `.ec` files with `scripts/proof_statistics.py`.)
   The side invariants have no case split: their parts close before part fallback 4.
 - **Time.** The side invariants have a shorter wall time (−15 % and −5 %), but their work (Σ oracles) is +2 % (H2) and +23 % (H6). The hops are slower in wall time: +39 % (step 8),
   +54 % (step 10), +50 % (step 11). In H6_1_0 ~ H6_1_1 Send3, the part-fallback time went from 6 m 31 s
@@ -174,3 +177,11 @@ binary is `domino-ec.bak-2026-10-21`) and ran, in `~/ec4whs`, one run at a time,
   those proofsteps were not run, but this result makes it likely that the limit is not kept there.
 - Not run: `--side-inv H7`, proofsteps 0–7, and the story 87 `easycrypt debug` checks.
   The proof files in `~/ec4whs` are changed on disk and not committed; `Proof_Statistics.md` is not updated.
+
+## Addendum: one count for each split part
+
+**The bug.** The `report.txt` line `… admits (…; N of them cases of M parts)` gave an incorrect M. `case_admits` started a new part only when the node id or the part label of two consecutive case admits changed. Thus it merged two neighbouring split parts that have the same label at the same node. In a 4WHS run, `Eq_H6_1_1_H7_0_Send2.ec` has 6 split parts (two at each of J1, J2 and J3, all with the label `StateRelation_relation_state_equality`, each with 2 admitted cases). The report said "12 of them cases of 3 parts".
+
+**The fix.** Each case admit now records its split. `Admit` has the new field `split: Option<usize>`. `key_case_split` in `src/easycrypt/tactics/driver.rs` sets it on all admits that `split_cases` makes. The value is the number of admits that the oracle had when the split started. Thus the value is the same for all cases of one split, and different for two splits. `case_admits` in `src/easycrypt/tactics/mod.rs` now starts a new part when the node, the label or the split changes. There is no second code path. The session record format does not change: the record does not hold the split, and an admit read from a record has `split: None`.
+
+**The test.** `the_report_counts_each_split_part_once` in `src/easycrypt/tactics/tests.rs` uses the scripted fake EasyCrypt. It proves the leaf at node 0 two times, so there are two neighbouring split parts with the same label, each with one admitted case. The report must say "2 of them cases of 2 parts". Before the fix, it said "2 of them cases of 1 parts".
