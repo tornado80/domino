@@ -166,7 +166,7 @@ binary is `domino-ec.bak-2026-10-21`) and ran, in `~/ec4whs`, one run at a time,
   38 admitted cases of 17 parts. Counted by part, 16 + 17 = 33 invariant-conjunct parts are admitted,
   the same as before (33). The total is 84 against 81 only because of the count by case.
   The side invariants have no case split: their parts close before part fallback 4.
-- **Time.** The side invariants are faster (−15 % and −5 %). The hops are slower: +39 % (step 8),
+- **Time.** The side invariants have a shorter wall time (−15 % and −5 %), but their work (Σ oracles) is +2 % (H2) and +23 % (H6). The hops are slower in wall time: +39 % (step 8),
   +54 % (step 10), +50 % (step 11). In H6_1_0 ~ H6_1_1 Send3, the part-fallback time went from 6 m 31 s
   to 13 m 44 s (22 failed, 56 before), and the largest answer from 0.2 MB to 1.4 MB. The probable
   cause is that a deep premise of a leaf part is now unfolded (story 86 §3.2), so each part `smt`
