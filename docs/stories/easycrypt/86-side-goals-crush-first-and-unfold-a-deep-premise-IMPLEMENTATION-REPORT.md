@@ -143,8 +143,11 @@ binary is `domino-ec.bak-2026-10-21`) and ran, in `~/ec4whs`, one run at a time,
   `rewrite /side_inv_<C> … in hpre.` (story 86 §3.2) followed by `smt(…)`.
 - H6_1_1 ~ H7_0: the key case split (stories 88 and 89) occurs in Send2, Send3, Send4 and Send5
   (`case (ctr1 = ctr0{2}) => [->|?].`). Story 89 counts one admit for each case that does not close:
-  38 admitted cases of 17 parts. Counted by part, 16 + 17 = 33 invariant-conjunct parts are admitted,
-  the same as before (33). The total is 84 against 81 only because of the count by case.
+  38 admitted cases. The split is sent on 23 parts with 64 cases: 26 cases close, 38 are admitted;
+  3 split parts close completely and 20 keep an admitted case. Counted by part, 16 + 20 = 36
+  invariant-conjunct parts keep an admit, against 33 admitted parts before. (`report.txt` says "of 17
+  parts": it merges neighbouring split parts with the same label at one node; counted again from the
+  `.ec` files with `scripts/proof_statistics.py`.)
   The side invariants have no case split: their parts close before part fallback 4.
 - **Time.** The side invariants have a shorter wall time (−15 % and −5 %), but their work (Σ oracles) is +2 % (H2) and +23 % (H6). The hops are slower in wall time: +39 % (step 8),
   +54 % (step 10), +50 % (step 11). In H6_1_0 ~ H6_1_1 Send3, the part-fallback time went from 6 m 31 s
