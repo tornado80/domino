@@ -632,6 +632,22 @@ impl Resume {
     }
 }
 
+/// The leaf part a key case split works on (story 89): where a case's admit goes, and the
+/// sentence that closes a case.
+pub(super) struct CaseLeaf<'p> {
+    node: usize,
+    pair: Option<&'p PairRecord>,
+    part: &'p Part,
+    close: &'p str,
+}
+
+/// The cases of a key case split that closed, and those admitted.
+#[derive(Debug, Clone, Copy)]
+struct CaseTally {
+    closed: usize,
+    admitted: usize,
+}
+
 /// A point to return to: the session's state and the script's.
 struct Snap {
     state: u64,
@@ -641,6 +657,8 @@ struct Snap {
     /// how many of them kept.
     reached: usize,
     kept: usize,
+    /// How many admits the oracle had: an undone case split takes its case admits back.
+    admits: usize,
 }
 
 pub(super) struct Prover<'a> {
@@ -850,6 +868,7 @@ impl Prover<'_> {
             closed: self.stats.closed,
             reached: self.resume.as_ref().map_or(0, |r| r.reached.len()),
             kept: self.resume.as_ref().map_or(0, |r| r.kept),
+            admits: self.stats.admits.len(),
         }
     }
 
@@ -861,6 +880,7 @@ impl Prover<'_> {
         }
         self.script.rollback(snap.script);
         self.stats.closed = snap.closed;
+        self.stats.admits.truncate(snap.admits);
         if let Some(resume) = self.resume.as_mut() {
             resume.reached.truncate(snap.reached);
             resume.kept = snap.kept;
@@ -2154,19 +2174,28 @@ impl Prover<'_> {
             }
             outcome = self.last_smt;
         }
-        if self.key_case_split(part, &hints)? {
+        // the crush when there are premises, else `smt(<hints>).`
+        let close = &fallbacks[fallbacks.len() - 1];
+        let leaf = CaseLeaf {
+            node,
+            pair,
+            part,
+            close,
+        };
+        if self.key_case_split(&leaf)? {
             return Ok(());
         }
         self.admit_smt = self.last_smt.or(outcome);
         self.admit_part(node, pair, part, "")
     }
 
-    /// Part fallback 4 (story 66): `case (b = k) => [->|?].` on each pair of
-    /// [`goals::key_pairs`] in turn, each case a bullet, and `hints` at the end of each case.
-    /// Kept only if every case closes; else everything is undone. It does not run (`false`,
-    /// `last_smt` cleared) with no pair or more than [`goals::MAX_KEY_PAIRS`]; after it ran,
-    /// `last_smt` is the outcome of its last `smt`.
-    fn key_case_split(&mut self, part: &Part, hints: &str) -> R<bool> {
+    /// Part fallback 4 (story 66, story 89): `case (b = k) => [->|?].` on each pair of
+    /// [`goals::key_pairs`] in turn, each case a bullet closed by [`Self::close_case`]. Kept
+    /// (`true`) if at least one case closed, the other cases admitted; else everything is
+    /// undone, also when EasyCrypt refuses a `case`. It does not run (`false`, `last_smt`
+    /// cleared) with no pair or more than [`goals::MAX_KEY_PAIRS`]; after it ran, `last_smt` is
+    /// the outcome of its last `smt`.
+    fn key_case_split(&mut self, leaf: &CaseLeaf<'_>) -> R<bool> {
         self.last_smt = None;
         // the opening read the goal at `head` depth: the keys are deep in it
         self.full_front()?;
@@ -2179,7 +2208,7 @@ impl Prover<'_> {
         }
         let role = Role::PartFallback {
             n: PART_FALLBACKS,
-            part: part.claim_label(),
+            part: leaf.part.claim_label(),
         };
         let closing = Closing::Fallback {
             k: PART_FALLBACKS,
@@ -2189,23 +2218,33 @@ impl Prover<'_> {
         self.as_role(role, |p| {
             p.closing_attempt(closing, &shown, |p| {
                 let snap = p.snap();
-                let closed = p.split_cases(&pairs, hints)?;
-                if !closed {
+                let tally = p.split_cases(leaf, &pairs, &mut Vec::new())?;
+                if let (Some(t), Some(live)) = (tally, &p.live) {
+                    let n = t.closed + t.admitted;
+                    live.attempt_shown(&format!("case split: {} of {n} cases closed", t.closed));
+                }
+                let kept = tally.is_some_and(|t| t.closed > 0);
+                if !kept {
                     let outcome = p.last_smt;
                     p.rollback(snap)?;
                     p.last_smt = outcome;
                 }
-                Ok(closed)
+                Ok(kept)
             })
         })
     }
 
-    /// The cases of `pairs` on the front goal, as in [`Self::key_case_split`]: whether every
-    /// case closed. Stops at the first case that does not; the caller undoes.
-    fn split_cases(&mut self, pairs: &[goals::KeyPair], hints: &str) -> R<bool> {
+    /// The cases of `pairs` on the front goal, as in [`Self::key_case_split`], `path` naming
+    /// the cases already taken: how many cases closed and how many were admitted. `None` when
+    /// EasyCrypt refused a `case` or it did not give two goals; the caller undoes.
+    fn split_cases(
+        &mut self,
+        leaf: &CaseLeaf<'_>,
+        pairs: &[goals::KeyPair],
+        path: &mut Vec<String>,
+    ) -> R<Option<CaseTally>> {
         let Some((first, rest)) = pairs.split_first() else {
-            let before = self.count();
-            return Ok(self.send(hints, Want::Status)? && self.count() < before);
+            return self.close_case(leaf, path).map(Some);
         };
         let before = self.count();
         let outcome = self.last_smt;
@@ -2215,15 +2254,55 @@ impl Prover<'_> {
         )?;
         self.last_smt = outcome;
         if !sent || self.count() != before + 1 {
-            return Ok(false);
+            return Ok(None);
         }
         let equal: Vec<_> = rest
             .iter()
             .filter(|p| p.binder != first.binder)
             .cloned()
             .collect();
-        Ok(self.bullet(|p| p.split_cases(&equal, hints))?
-            && self.bullet(|p| p.split_cases(rest, hints))?)
+        path.push(format!("{} = {}", first.binder, first.key));
+        let eq = self.bullet(|p| p.split_cases(leaf, &equal, path))?;
+        path.pop();
+        let Some(eq) = eq else {
+            return Ok(None);
+        };
+        path.push(format!("{} <> {}", first.binder, first.key));
+        let ne = self.bullet(|p| p.split_cases(leaf, rest, path))?;
+        path.pop();
+        Ok(ne.map(|ne| CaseTally {
+            closed: eq.closed + ne.closed,
+            admitted: eq.admitted + ne.admitted,
+        }))
+    }
+
+    /// One case of a key case split, the cases taken on the way in `path`: closed with
+    /// `leaf.close` alone, else admitted as the part with the case note. Once the leaf budget
+    /// is spent, admitted without sending anything.
+    fn close_case(&mut self, leaf: &CaseLeaf<'_>, path: &[String]) -> R<CaseTally> {
+        let cases = path.join(", ");
+        let admitted = CaseTally {
+            closed: 0,
+            admitted: 1,
+        };
+        if self
+            .deadline
+            .is_some_and(|d| std::time::Instant::now() >= d)
+        {
+            let note = format!(" (case {cases}, leaf time budget spent)");
+            self.admit_part(leaf.node, leaf.pair, leaf.part, &note)?;
+            return Ok(admitted);
+        }
+        self.last_smt = None;
+        if self.try_close(&[leaf.close])? {
+            return Ok(CaseTally {
+                closed: 1,
+                admitted: 0,
+            });
+        }
+        self.admit_smt = self.last_smt;
+        self.admit_part(leaf.node, leaf.pair, leaf.part, &format!(" (case {cases})"))?;
+        Ok(admitted)
     }
 
     /// Admits the front goal as `part` of the pair's claims: the reason is what Domino itself

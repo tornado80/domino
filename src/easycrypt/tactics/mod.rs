@@ -605,6 +605,52 @@ impl OracleTactics {
         }
     }
 
+    /// The admits of the oracle's report line: their number by reason, and the admitted cases
+    /// apart (story 89 §3.5), or `no admit`.
+    pub fn admits_summary(&self) -> String {
+        let by_reason = self.admits_by_reason();
+        if by_reason.is_empty() {
+            return "no admit".to_string();
+        }
+        let parts: Vec<String> = by_reason
+            .iter()
+            .map(|(r, n)| format!("{} {n}", r.slug()))
+            .collect();
+        let (cases, of_parts) = self.case_admits();
+        let cases = if cases == 0 {
+            String::new()
+        } else {
+            format!("; {cases} of them cases of {of_parts} parts")
+        };
+        format!(
+            "{} admits ({}{cases})",
+            self.stats.admits.len(),
+            parts.join(", ")
+        )
+    }
+
+    /// The admitted cases of key case splits (story 89), and the parts they are cases of. A
+    /// case admit has the note ` (case …)` after its part's claim; the cases of one part are
+    /// admitted one after the other, so a run of case admits with one node and one part is one
+    /// part.
+    pub fn case_admits(&self) -> (usize, usize) {
+        let mut cases = 0;
+        let mut parts = 0;
+        let mut last: Option<(&str, &str)> = None;
+        for a in &self.stats.admits {
+            let Some((part, _)) = a.claim.split_once(" (case ") else {
+                last = None;
+                continue;
+            };
+            cases += 1;
+            if last != Some((a.id.as_str(), part)) {
+                parts += 1;
+            }
+            last = Some((a.id.as_str(), part));
+        }
+        (cases, parts)
+    }
+
     /// Admits by reason, in the order of [`AdmitReason::ALL`], nonzero only.
     pub fn admits_by_reason(&self) -> Vec<(AdmitReason, usize)> {
         AdmitReason::ALL
@@ -2087,81 +2133,7 @@ impl EquivalenceTactics {
             }
         }
         for o in &self.oracles {
-            if o.resumed {
-                let _ = writeln!(
-                    out,
-                    "  {}: resumed from session record (lockstep {} joint paths, {} admits)",
-                    o.oracle,
-                    o.joint_paths,
-                    o.stats.admits.len()
-                );
-                for a in &o.stats.admits {
-                    let _ = writeln!(out, "    admit {}", a.fields());
-                }
-                continue;
-            }
-            if let Some(problem) = &o.problem {
-                let _ = writeln!(out, "  {}: no tactics ({problem})", o.oracle);
-                continue;
-            }
-            if let Some(at) = &o.resumed_at {
-                let _ = write!(
-                    out,
-                    "  {}: resumed at {} ({} closed node{} kept, {})",
-                    o.oracle,
-                    at.node,
-                    at.kept,
-                    if at.kept == 1 { "" } else { "s" },
-                    at.mode.slug()
-                );
-                if !at.stale.is_empty() {
-                    let _ = write!(out, "; saved joint tree is stale ({})", at.stale.join(", "));
-                }
-                out.push('\n');
-            }
-            let _ = writeln!(
-                out,
-                "  {}: lockstep {} joint paths, {} nodes, {} stuck points ({})",
-                o.oracle,
-                o.joint_paths,
-                o.nodes,
-                o.stuck_points,
-                secs(o.lockstep_time)
-            );
-            let by_reason = o.admits_by_reason();
-            let admits = if by_reason.is_empty() {
-                "no admit".to_string()
-            } else {
-                let parts: Vec<String> = by_reason
-                    .iter()
-                    .map(|(r, n)| format!("{} {n}", r.slug()))
-                    .collect();
-                format!("{} admits ({})", o.stats.admits.len(), parts.join(", "))
-            };
-            let _ = writeln!(
-                out,
-                "    goals closed: {}, {admits}, fallbacks: {}, EasyCrypt time {} ({} attempts undone)",
-                o.stats.closed,
-                o.stats.fallbacks,
-                secs(o.easycrypt_time),
-                o.stats.attempts_undone
-            );
-            if !o.stats.time.is_empty() {
-                out += &o.stats.time.render(o.easycrypt_time);
-            }
-            for m in &o.alignment_mismatches {
-                let _ = writeln!(out, "    alignment mismatch (fallback used): {m}");
-            }
-            for a in &o.stats.admits {
-                let _ = writeln!(out, "    admit {}", a.fields());
-                if a.reason == AdmitReason::DominoVerifiedEcFailed {
-                    let goal: String = a.goal.chars().take(4000).collect();
-                    let _ = writeln!(out, "      goal: {goal}");
-                }
-            }
-            for u in self.unanswered.iter().filter(|u| u.oracle == o.oracle) {
-                let _ = writeln!(out, "    {u}");
-            }
+            self.render_oracle(&mut out, o);
         }
         match (&self.interrupted, &self.ended_early) {
             (Some(at), Some(why)) => {
@@ -2196,6 +2168,78 @@ impl EquivalenceTactics {
             secs(self.elapsed)
         );
         out
+    }
+}
+
+impl EquivalenceTactics {
+    /// The lines of `o` in [`Self::render`].
+    fn render_oracle(&self, out: &mut String, o: &OracleTactics) {
+        if o.resumed {
+            let _ = writeln!(
+                out,
+                "  {}: resumed from session record (lockstep {} joint paths, {} admits)",
+                o.oracle,
+                o.joint_paths,
+                o.stats.admits.len()
+            );
+            for a in &o.stats.admits {
+                let _ = writeln!(out, "    admit {}", a.fields());
+            }
+            return;
+        }
+        if let Some(problem) = &o.problem {
+            let _ = writeln!(out, "  {}: no tactics ({problem})", o.oracle);
+            return;
+        }
+        if let Some(at) = &o.resumed_at {
+            let _ = write!(
+                out,
+                "  {}: resumed at {} ({} closed node{} kept, {})",
+                o.oracle,
+                at.node,
+                at.kept,
+                if at.kept == 1 { "" } else { "s" },
+                at.mode.slug()
+            );
+            if !at.stale.is_empty() {
+                let _ = write!(out, "; saved joint tree is stale ({})", at.stale.join(", "));
+            }
+            out.push('\n');
+        }
+        let _ = writeln!(
+            out,
+            "  {}: lockstep {} joint paths, {} nodes, {} stuck points ({})",
+            o.oracle,
+            o.joint_paths,
+            o.nodes,
+            o.stuck_points,
+            secs(o.lockstep_time)
+        );
+        let admits = o.admits_summary();
+        let _ = writeln!(
+            out,
+            "    goals closed: {}, {admits}, fallbacks: {}, EasyCrypt time {} ({} attempts undone)",
+            o.stats.closed,
+            o.stats.fallbacks,
+            secs(o.easycrypt_time),
+            o.stats.attempts_undone
+        );
+        if !o.stats.time.is_empty() {
+            *out += &o.stats.time.render(o.easycrypt_time);
+        }
+        for m in &o.alignment_mismatches {
+            let _ = writeln!(out, "    alignment mismatch (fallback used): {m}");
+        }
+        for a in &o.stats.admits {
+            let _ = writeln!(out, "    admit {}", a.fields());
+            if a.reason == AdmitReason::DominoVerifiedEcFailed {
+                let goal: String = a.goal.chars().take(4000).collect();
+                let _ = writeln!(out, "      goal: {goal}");
+            }
+        }
+        for u in self.unanswered.iter().filter(|u| u.oracle == o.oracle) {
+            let _ = writeln!(out, "    {u}");
+        }
     }
 }
 

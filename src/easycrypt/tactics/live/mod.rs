@@ -561,6 +561,16 @@ impl LiveHandle {
         live.touch(false);
     }
 
+    /// The current node's attempt in flight is shown as `shown` from now on (story 89: the
+    /// case split tells how many of its cases closed).
+    pub fn attempt_shown(&self, shown: &str) {
+        let mut live = self.0.borrow_mut();
+        if let Some(a) = live.current_node_mut().and_then(|n| n.attempts.last_mut()) {
+            a.shown = shown.to_string();
+        }
+        live.touch(false);
+    }
+
     /// The current node's attempt in flight ended: `closed`, or else failed or timed out, as
     /// its steps say.
     pub fn attempt_ended(&self, closed: bool) {

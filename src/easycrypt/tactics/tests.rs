@@ -298,6 +298,29 @@ fn admit(reason: AdmitReason, id: &str) -> Admit {
     }
 }
 
+/// Story 89 §3.5: the report counts the admitted cases apart, and the parts they are cases of.
+#[test]
+fn the_report_counts_admitted_cases_apart() {
+    let case = |id: &str, claim: &str| Admit {
+        claim: claim.into(),
+        ..admit(AdmitReason::DominoVerifiedEcFailed, id)
+    };
+    let o = oracle_with(vec![
+        admit(AdmitReason::Stuck, "S1"),
+        case("J2", "invariant/R (case c = k{2})"),
+        case("J2", "invariant/R (case c <> k{2}, d = j{2})"),
+        case("J2", "invariant/S (case c = k{2})"),
+        case("J3", "invariant/S (case c = k{2})"),
+    ]);
+    let report = equivalence_with(vec![o]).render();
+    assert!(
+        report.contains(
+            "5 admits (stuck 1, domino-verified-ec-failed 4; 4 of them cases of 3 parts)"
+        ),
+        "{report}"
+    );
+}
+
 #[test]
 fn the_report_counts_admits_by_reason_and_lists_the_verified_ones_with_their_goal() {
     let o = oracle_with(vec![
@@ -4102,10 +4125,20 @@ fn a_claim_that_fails_in_domino_is_admitted_at_once_and_a_part_without_a_claim_i
     assert_eq!(whole.domino, DominoView::Fails);
 }
 
-/// Story 66: `forall c d, P (m.[k{2} <- v]).[c] (m.[j{2} <- v]).[d]` after `auto`, with a fake
-/// EasyCrypt in which only the key cases close (`p1` is the part, `nK` is K goals after a
-/// `case`). `last_closes` says whether the last case's `smt` closes.
-fn run_key_split(last_closes: bool) -> LeafRun {
+/// Story 66: `forall c d, P (m.[k{2} <- v]).[c] (m.[j{2} <- v]).[d]` after `auto` (two pairs
+/// when `two`, else only the read at `c`), with a fake EasyCrypt in which only the key cases
+/// close (`p1` is the part, `nK` is K goals after a `case`). Story 89: the crush of case `i`
+/// (1 is the first case sent) closes it when `i` is in `closes`; the crush of case 1 takes
+/// `slow` seconds; `budget` is the leaf budget; a sentence that matches the glob `refuse` is
+/// refused.
+fn run_key_split_with(
+    refuse: &str,
+    two: bool,
+    closes: &[usize],
+    slow: u32,
+    budget: Option<Duration>,
+    pairs: Vec<PairRecord>,
+) -> LeafRun {
     let local = |n: &str| format!(r#"{{"kind":"local","name":"{n}"}}"#);
     let key = |n: &str| {
         format!(r#"{{"kind":"pvar","scope":"global","path":"Top.Comp_H3.M./{n}","mem":"&2"}}"#)
@@ -4122,10 +4155,10 @@ fn run_key_split(last_closes: bool) -> LeafRun {
             local(b)
         )
     };
+    let second = if two { read("j", "d") } else { local("d") };
     let body = format!(
-        r#"{{"kind":"app","pp":"","op":"Top.P","args":[{},{}]}}"#,
+        r#"{{"kind":"app","pp":"","op":"Top.P","args":[{},{second}]}}"#,
         read("k", "c"),
-        read("j", "d")
     );
     let binder = |n: &str| format!(r#"{{"name":"{n}","kind":"var","type":{{"pp":"int"}}}}"#);
     let all = format!(
@@ -4141,71 +4174,129 @@ fn run_key_split(last_closes: bool) -> LeafRun {
         ("n2", proof_of(&formula(&body), 2)),
         ("n3", proof_of(&formula(&body), 3)),
     ];
-    let last = if last_closes { "g=none; ans" } else { "err" };
+    let closes: Vec<String> = closes.iter().map(ToString::to_string).collect();
+    let closes = closes.join(" ");
+    let down = "case $g in n3) g=n2;; n2) g=n1;; *) g=none;; esac; ans";
     let arms = format!(
         r#"
+    {refuse}) err;;
     "auto => &1 &2 hpre.") g=all; ans;;
     "move => c d /=.") g=p1; ans;;
     "case ("*) case $g in p1) g=n2; ans;; n2) g=n3; ans;; n1) g=n2; ans;; *) err;; esac;;
-    "smt(get_setE mem_set remE mem_rem emptyE).") case $g in n3) g=n2; ans;; n2) g=n1; ans;; n1) {last};; *) err;; esac;;
-    admit.) g=none; ans;;"#
+    "move: hpre => />; smt(get_setE mem_set remE mem_rem emptyE).") case $g in p1) err;; *) c=$((c+1)); [ "$c" = 1 ] && sleep {slow}; case " {closes} " in *" $c "*) {down};; *) err;; esac;; esac;;
+    admit.) {down};;"#
     );
-    run_leaf(&goals, "start", &arms, vec![], &[])
+    run_fake(&goals, "start", &arms, pairs, &[], |p| {
+        p.leaf_budget = budget;
+        p.prove_node(0).unwrap();
+        assert_eq!(p.count(), 0, "the leaf is closed");
+    })
 }
 
-const KEY_SPLIT: [&str; 7] = [
-    "case (c = Comp_H3.M.k{2}) => [->|?].",
-    "case (d = Comp_H3.M.j{2}) => [->|?].",
-    "smt(get_setE mem_set remE mem_rem emptyE).",
-    "smt(get_setE mem_set remE mem_rem emptyE).",
-    "case (d = Comp_H3.M.j{2}) => [->|?].",
-    "smt(get_setE mem_set remE mem_rem emptyE).",
-    "smt(get_setE mem_set remE mem_rem emptyE).",
-];
+fn run_key_split(closes: &[usize]) -> LeafRun {
+    run_key_split_with("refuse-none", true, closes, 0, None, vec![])
+}
 
-/// Story 66: two pairs give four cases, in order, each a bullet, and the part is closed.
-#[test]
-fn two_key_pairs_split_into_four_cases_each_a_bullet() {
-    let run = run_key_split(true);
-    let split: Vec<_> = run
-        .said
+const CRUSH: &str = "move: hpre => />; smt(get_setE mem_set remE mem_rem emptyE).";
+
+/// The sentences of part fallback 4: those sent after the first three part fallbacks.
+fn split_said(run: &LeafRun) -> Vec<&str> {
+    run.said
         .iter()
         .filter_map(|s| s.strip_prefix("part-fallback "))
         .filter_map(|s| s.strip_suffix(" [equal-output+invariant]"))
         .skip(3)
-        .collect();
-    assert_eq!(split, KEY_SPLIT, "{:?}", run.said);
-    assert!(run.admits.is_empty(), "{:?}", run.admits);
-    let script: Vec<_> = run
-        .script
+        .collect()
+}
+
+/// The script lines of the split: the `case` sentences, the crushes and the admits.
+fn split_script(run: &LeafRun) -> Vec<&str> {
+    run.script
         .lines()
         .map(str::trim)
-        .filter(|l| l.contains("case (") || l.contains("smt(get"))
-        .collect();
+        .filter(|l| l.contains("case (") || l.contains("smt(get") || l.contains("admit."))
+        .collect()
+}
+
+/// Story 66, story 89 §3.2: two pairs give four cases, in order, each a bullet closed with the
+/// crush alone, and the part is closed.
+#[test]
+fn two_key_pairs_split_into_four_cases_each_a_bullet() {
+    let run = run_key_split(&[1, 2, 3, 4]);
+    let case_c = "case (c = Comp_H3.M.k{2}) => [->|?].";
+    let case_d = "case (d = Comp_H3.M.j{2}) => [->|?].";
     assert_eq!(
-        script,
-        [
-            "case (c = Comp_H3.M.k{2}) => [->|?].",
-            "+ case (d = Comp_H3.M.j{2}) => [->|?].",
-            "+ smt(get_setE mem_set remE mem_rem emptyE).",
-            "+ smt(get_setE mem_set remE mem_rem emptyE).",
-            "+ case (d = Comp_H3.M.j{2}) => [->|?].",
-            "+ smt(get_setE mem_set remE mem_rem emptyE).",
-            "+ smt(get_setE mem_set remE mem_rem emptyE).",
-        ],
+        split_said(&run),
+        [case_c, case_d, CRUSH, CRUSH, case_d, CRUSH, CRUSH],
+        "{:?}",
+        run.said
+    );
+    assert!(
+        !run.said
+            .iter()
+            .skip(5)
+            .any(|s| s.contains(" smt().") || s.contains(" smt(get") && !s.contains("move:")),
+        "{:?}",
+        run.said
+    );
+    assert!(run.admits.is_empty(), "{:?}", run.admits);
+    let crush = format!("+ {CRUSH}");
+    let plus_d = format!("+ {case_d}");
+    assert_eq!(
+        split_script(&run),
+        [case_c, &plus_d, &crush, &crush, &plus_d, &crush, &crush],
         "{}",
         run.script
     );
 }
 
-/// Story 66: when the last case does not close, the whole split is undone and the part is
-/// admitted with the outcome of that last `smt`.
+/// Story 89 §5: the `=` case's crush fails and the `<>` case's closes: the split is kept, the
+/// first case admitted with its note.
+#[test]
+fn a_case_that_does_not_close_is_admitted_and_the_split_kept() {
+    let pair = leaf_pair(false, Verdict::Verified, &[]);
+    let run = run_key_split_with("refuse-none", false, &[2], 0, None, vec![pair]);
+    let case_c = "case (c = Comp_H3.M.k{2}) => [->|?].";
+    let crush = format!("+ {CRUSH}");
+    let script: Vec<_> = split_script(&run)
+        .iter()
+        .map(|l| l.split(" (*").next().unwrap())
+        .collect();
+    assert_eq!(script, [case_c, "+ admit.", &crush], "{}", run.script);
+    let [admit] = run.admits.as_slice() else {
+        panic!("{:?}", run.admits)
+    };
+    assert_eq!(
+        admit.claim,
+        "equal-output+invariant (case c = Comp_H3.M.k{2})"
+    );
+    assert_eq!(admit.smt, Some(SmtOutcome::Error));
+    // a case is the part's goal under one more hypothesis: the part's own reason
+    assert_eq!(admit.reason, AdmitReason::DominoVerifiedEcFailed);
+}
+
+/// Story 89 §5: two pairs, three of four cases close: one admit, with the nested note.
+#[test]
+fn three_of_four_cases_close_and_one_is_admitted_with_the_nested_note() {
+    let run = run_key_split(&[1, 3, 4]);
+    let [admit] = run.admits.as_slice() else {
+        panic!("{:?}", run.admits)
+    };
+    assert_eq!(
+        admit.claim,
+        "equal-output+invariant (case c = Comp_H3.M.k{2}, d <> Comp_H3.M.j{2})"
+    );
+    assert!(run.script.contains("case ("), "{}", run.script);
+}
+
+/// Story 66, story 89 §3.3: when no case closes, the whole split is undone and the part is
+/// admitted once with the outcome of the last crush.
 #[test]
 fn one_failing_case_undoes_the_whole_split() {
-    let run = run_key_split(false);
+    let run = run_key_split(&[]);
     let n = run.said.len();
     assert!(
-        run.said[n - 3].starts_with("part-fallback smt("),
+        run.said[n - 4].starts_with("part-fallback move: hpre"),
         "{:?}",
         run.said
     );
@@ -4219,7 +4310,50 @@ fn one_failing_case_undoes_the_whole_split() {
     let [admit] = run.admits.as_slice() else {
         panic!("{:?}", run.admits)
     };
+    assert_eq!(admit.claim, "equal-output+invariant");
     assert_eq!(admit.smt, Some(SmtOutcome::Error));
+}
+
+/// Story 89 §3.1: EasyCrypt refuses the second `case`: the whole split is undone, also the
+/// cases already closed, and the part is admitted once.
+#[test]
+fn a_refused_case_undoes_the_whole_split() {
+    let run = run_key_split_with("\"case (d = \"*", true, &[1, 2, 3, 4], 0, None, vec![]);
+    assert!(
+        run.said.iter().any(|s| s.contains("case (d = ")),
+        "{:?}",
+        run.said
+    );
+    assert!(!run.script.contains("case ("), "{}", run.script);
+    let [admit] = run.admits.as_slice() else {
+        panic!("{:?}", run.admits)
+    };
+    assert_eq!(admit.claim, "equal-output+invariant");
+}
+
+/// Story 89 §3.4: the leaf budget runs out in the first case: the other cases are admitted
+/// without a crush, with the budget note.
+#[test]
+fn the_cases_after_the_leaf_budget_are_admitted_without_a_crush() {
+    let run = run_key_split_with(
+        "refuse-none",
+        true,
+        &[1, 2, 3, 4],
+        2,
+        Some(Duration::from_secs(1)),
+        vec![],
+    );
+    let crushes = split_said(&run).iter().filter(|s| **s == CRUSH).count();
+    assert_eq!(crushes, 1, "{:?}", run.said);
+    let claims: Vec<_> = run.admits.iter().map(|a| a.claim.as_str()).collect();
+    assert_eq!(
+        claims,
+        [
+            "equal-output+invariant (case c = Comp_H3.M.k{2}, d <> Comp_H3.M.j{2}, leaf time budget spent)",
+            "equal-output+invariant (case c <> Comp_H3.M.k{2}, d = Comp_H3.M.j{2}, leaf time budget spent)",
+            "equal-output+invariant (case c <> Comp_H3.M.k{2}, d <> Comp_H3.M.j{2}, leaf time budget spent)",
+        ]
+    );
 }
 
 /// Story 66: more than six pairs, and fallback 4 does not run.
