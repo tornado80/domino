@@ -17,6 +17,8 @@
 //!
 //! A one-sided invariant file holds only invariant forms of the right kind.
 
+use std::collections::{BTreeSet, HashMap};
+
 use miette::Diagnostic;
 use thiserror::Error;
 
@@ -26,8 +28,9 @@ use crate::theorem::GameInstance;
 use crate::types::{Type, TypeKind};
 use crate::util::smtparser::SmtParser;
 use crate::writers::easycrypt::ast::{EcBinop, EcExpr, EcItem, EcType, EcUnop};
+use crate::writers::easycrypt::game::instance_mangled_names;
 use crate::writers::easycrypt::interfaces::composition_span;
-use crate::writers::easycrypt::names::Names;
+use crate::writers::easycrypt::names::{NameKind, Names};
 use crate::writers::easycrypt::types::{func_op_name, translate_type};
 use crate::writers::easycrypt::EcExportError;
 
@@ -37,9 +40,10 @@ use super::params::{
     pkg_params_type_name, template_app, theorem_const_of, PkgParamField,
 };
 use super::{
-    abort_field_name, field_expr, fold_and, game_inv_op_name, instance_field_name, pkg_inv_op_name,
-    pkg_inv_template_name, pkg_state_fields, pkg_state_type_name, side_inv_op_name,
-    side_record_type_name, InvariantError, Locals, OpRegistry, Sexp, StateLookup, TCtx,
+    abort_field_name, field_expr, fold_and, game_inv_op_name, instance_field_name, module_var_path,
+    pkg_inv_op_name, pkg_inv_template_name, pkg_state_field_name, pkg_state_fields,
+    pkg_state_type_name, side_inv_op_name, side_record_type_name, InvariantError, Locals,
+    OpRegistry, Sexp, SideConjunct, StateLookup, TCtx,
 };
 
 /// A one-sided invariant file that does not hold exactly one invariant form of its kind.
@@ -399,46 +403,15 @@ pub(crate) fn composition_items<P: Project>(
         name: side_record_type_name(name),
         fields,
     }];
+    let conjuncts = conjuncts(game, name, ctx, &mut ops)?;
     let mut pkg_conjuncts = Vec::new();
-    for inst in invariant_instances(comp) {
-        for invariant in package_invariant_names(ctx.project, inst)? {
-            let template = pkg_inv_template_name(&invariant, &inst.pkg.name);
-            ops.define_named(
-                &template,
-                &format!("the package invariant `{invariant}` of `{}`", inst.pkg.name),
-            )?;
-            let op = pkg_inv_op_name(&invariant, name, inst.name());
-            ops.define_named(
-                &op,
-                &format!(
-                    "the package invariant `{invariant}` of instance `{}`",
-                    inst.name()
-                ),
-            )?;
-            let body = wrapper_body(inst, &prefix, &template);
-            items.push(op_def(&op, "s", record_ty.clone(), body));
-            pkg_conjuncts.push(apply(&op, "s"));
-        }
-    }
     let mut game_conjuncts = Vec::new();
-    if let Some(body) = links_body(comp, &prefix)? {
-        let op = links_op_name(name);
-        ops.define_named(&op, &format!("the links of `{}`", comp.name))?;
-        items.push(op_def(&op, "s", record_ty.clone(), body));
-        game_conjuncts.push(apply(&op, "s"));
-    }
-    if !comp.invariants.is_empty() {
-        let owner = format!("composition `{}`", comp.name);
-        let lookup = game_lookup(game, &prefix)?;
-        for invariant in named_invariants(ctx.project, &comp.invariants, &owner, Kind::Game)? {
-            let op = game_inv_op_name(&invariant.name, name);
-            ops.define_named(
-                &op,
-                &format!("the game invariant `{}` of `{}`", invariant.name, comp.name),
-            )?;
-            let body = translate(ctx, &invariant.file, &lookup, &invariant.body)?;
-            items.push(op_def(&op, "g", record_ty.clone(), body));
-            game_conjuncts.push(apply(&op, "s"));
+    for conjunct in conjuncts {
+        let applied = apply(&conjunct.op, "s");
+        items.push(conjunct.item);
+        match conjunct.part {
+            Kind::Package => pkg_conjuncts.push(applied),
+            Kind::Game => game_conjuncts.push(applied),
         }
     }
     let guarded = |conjuncts: Vec<EcExpr>| EcExpr::Binop {
@@ -469,6 +442,196 @@ pub(crate) fn composition_items<P: Project>(
         }
     }
     Ok(Some(items))
+}
+
+/// One conjunct of `side_inv_<C>`: its operator (unqualified), the item that defines it, the
+/// module variables it reads ([`SideConjunct::footprint`]), and whether it is a package or a
+/// game conjunct (the links are a game conjunct).
+struct Conjunct {
+    op: String,
+    item: EcItem,
+    footprint: BTreeSet<String>,
+    part: Kind,
+}
+
+/// The conjuncts of `side_inv_<name>` in the order of its body (story 93 §3.1): the wrapper
+/// `PkgInv_<N>_of_<Inst>_in_<name>` of each package invariant of each instance, then
+/// `links_<name>`, then `GameInv_<N>_of_<name>` of each game invariant. Each operator, and each
+/// template a wrapper applies, is defined in `ops`. [`composition_items`] builds `side_inv_<name>`
+/// from this list, so the two cannot get out of order.
+fn conjuncts<P: Project>(
+    game: &GameInstance,
+    name: &str,
+    ctx: &SideCtx<'_, P>,
+    ops: &mut OpRegistry,
+) -> Result<Vec<Conjunct>, EcExportError> {
+    let comp = game.game();
+    let prefix = format!("{name}_");
+    let record_ty = EcType::Named(side_record_type_name(name));
+    let vars = ModuleVars::of(comp, name, &prefix)?;
+    let mut out = Vec::new();
+    for inst in invariant_instances(comp) {
+        let templates = package_templates(inst, ctx)?;
+        for invariant in package_invariant_names(ctx.project, inst)? {
+            let template = pkg_inv_template_name(&invariant, &inst.pkg.name);
+            ops.define_named(
+                &template,
+                &format!("the package invariant `{invariant}` of `{}`", inst.pkg.name),
+            )?;
+            let op = pkg_inv_op_name(&invariant, name, inst.name());
+            ops.define_named(
+                &op,
+                &format!(
+                    "the package invariant `{invariant}` of instance `{}`",
+                    inst.name()
+                ),
+            )?;
+            let footprint = vars.template_footprint(inst, &prefix, &templates, &template);
+            let body = wrapper_body(inst, &prefix, &template);
+            out.push(Conjunct {
+                item: op_def(&op, "s", record_ty.clone(), body),
+                op,
+                footprint,
+                part: Kind::Package,
+            });
+        }
+    }
+    if let Some(body) = links_body(comp, &prefix)? {
+        let op = links_op_name(name);
+        ops.define_named(&op, &format!("the links of `{}`", comp.name))?;
+        out.push(Conjunct {
+            footprint: vars.footprint(&body),
+            item: op_def(&op, "s", record_ty.clone(), body),
+            op,
+            part: Kind::Game,
+        });
+    }
+    if !comp.invariants.is_empty() {
+        let owner = format!("composition `{}`", comp.name);
+        let lookup = game_lookup(game, &prefix)?;
+        for invariant in named_invariants(ctx.project, &comp.invariants, &owner, Kind::Game)? {
+            let op = game_inv_op_name(&invariant.name, name);
+            ops.define_named(
+                &op,
+                &format!("the game invariant `{}` of `{}`", invariant.name, comp.name),
+            )?;
+            let body = translate(ctx, &invariant.file, &lookup, &invariant.body)?;
+            out.push(Conjunct {
+                footprint: vars.footprint(&body),
+                item: op_def(&op, "g", record_ty.clone(), body),
+                op,
+                part: Kind::Game,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// The conjuncts of `side_inv_<name>` with their footprints (story 93 §3.1), in the order of its
+/// body, each operator qualified with `Comp_<name>`. Empty when the composition of `game` has no
+/// side invariant.
+pub(crate) fn side_conjuncts<P: Project>(
+    game: &GameInstance,
+    name: &str,
+    ctx: &SideCtx<'_, P>,
+) -> Result<Vec<SideConjunct>, EcExportError> {
+    if !has_side_invariants(game.game()) {
+        return Ok(Vec::new());
+    }
+    let conjuncts = conjuncts(game, name, ctx, &mut OpRegistry::default())?;
+    Ok(conjuncts
+        .into_iter()
+        .map(|c| SideConjunct {
+            op: format!("Comp_{name}.{}", c.op),
+            footprint: c.footprint,
+        })
+        .collect())
+}
+
+/// The module variable behind each field of a side record's field: `(<C>_pkg_<I>, <P>_<f>)`
+/// and `(<C>_params_<I>, <P>_param_<p>)` to `Comp_<C>.Pkg_Inst_<I>.<f>` (or `.<p>`), as
+/// [`module_var_path`] joins it. A function parameter has no module variable and no entry.
+struct ModuleVars(HashMap<(String, String), String>);
+
+impl ModuleVars {
+    fn of(comp: &Composition, name: &str, prefix: &str) -> Result<Self, EcExportError> {
+        let theory = format!("Comp_{name}");
+        let mangled = instance_mangled_names(comp)?;
+        let mut map = HashMap::new();
+        for (inst, inst_mangled) in comp.pkgs.iter().zip(&mangled) {
+            let var = |v: &str| module_var_path(&theory, inst_mangled, v).join(".");
+            let state = instance_field_name(prefix, inst.name());
+            let mut names = Names::new();
+            for (raw, _, _) in &inst.pkg.state {
+                let v = names.mangle(NameKind::Var, raw)?;
+                let field = pkg_state_field_name(&inst.pkg.name, &v);
+                map.insert((state.clone(), field), var(&v));
+            }
+            let params = params_field_name(prefix, inst.name());
+            for field in param_fields(inst)? {
+                if let Some(v) = &field.var {
+                    map.insert((params.clone(), field.field), var(v));
+                }
+            }
+        }
+        Ok(ModuleVars(map))
+    }
+
+    /// The module variables that `body`, over a side record, reads: each projection
+    /// ``r.`<outer>.`<inner>`` with an entry.
+    fn footprint(&self, body: &EcExpr) -> BTreeSet<String> {
+        let mut out = BTreeSet::new();
+        for (record, inner) in projections(body) {
+            if let EcExpr::Field { expr, field } = record {
+                if matches!(**expr, EcExpr::Var(_)) {
+                    out.extend(self.0.get(&(field.clone(), inner.to_string())).cloned());
+                }
+            }
+        }
+        out
+    }
+
+    /// The module variables of `inst` that the template `template` (one of `templates`) reads:
+    /// each projection ``s.`<f>`` or ``p.`<p>`` of its body, in the state and the params field
+    /// of `inst`.
+    fn template_footprint(
+        &self,
+        inst: &PackageInstance,
+        prefix: &str,
+        templates: &[EcItem],
+        template: &str,
+    ) -> BTreeSet<String> {
+        let body = templates.iter().find_map(|item| match item {
+            EcItem::OpDef { name, body, .. } if name == template => Some(body),
+            _ => None,
+        });
+        let outers = [
+            instance_field_name(prefix, inst.name()),
+            params_field_name(prefix, inst.name()),
+        ];
+        let mut out = BTreeSet::new();
+        for (record, inner) in body.map(projections).unwrap_or_default() {
+            if matches!(record, EcExpr::Var(_)) {
+                for outer in &outers {
+                    out.extend(self.0.get(&(outer.clone(), inner.to_string())).cloned());
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Each record projection ``e.`f`` in `body`, as `(e, f)`, outermost first.
+fn projections(body: &EcExpr) -> Vec<(&EcExpr, &str)> {
+    let mut out = Vec::new();
+    let mut stack = vec![body];
+    while let Some(e) = stack.pop() {
+        if let EcExpr::Field { expr, field } = e {
+            out.push((&**expr, field.as_str()));
+        }
+        stack.extend(e.children());
+    }
+    out
 }
 
 /// The fields of the side record `<C>_side` (see [`composition_items`]) and the name of its
@@ -1412,5 +1575,118 @@ mod tests {
             &base,
             &format!("{base}/Eq_C_1_D_1.ec"),
         );
+    }
+
+    const STORY93: &str = "testdata/easycrypt/story93";
+
+    /// Story 93: the conjuncts of `side_inv_C` of the story-93 project, and the items of
+    /// `Comp_C.ec` that [`composition_items`] writes.
+    fn story93() -> (Vec<SideConjunct>, Vec<EcItem>) {
+        let (theorem, project) = load_project(STORY93, "Proof");
+        let game = theorem.find_game_instance("C_0").unwrap();
+        let ctx = SideCtx {
+            theorem_consts: &theorem.consts,
+            project,
+            params_records: super::super::params_record_packages(&theorem),
+        };
+        let conjuncts = side_conjuncts(game, "C", &ctx).unwrap();
+        let items = composition_items(game, "C", &ctx).unwrap().unwrap();
+        (conjuncts, items)
+    }
+
+    /// The operators that the body of `side_inv_C` applies, in order.
+    fn side_inv_body_ops(items: &[EcItem]) -> Vec<String> {
+        let body = items
+            .iter()
+            .find_map(|item| match item {
+                EcItem::OpDef { name, body, .. } if name == "side_inv_C" => Some(body),
+                _ => None,
+            })
+            .expect("side_inv_C");
+        let EcExpr::Binop { rhs, .. } = body else {
+            panic!("side_inv_C is `!abort => …`: {body:?}");
+        };
+        let mut ops = Vec::new();
+        let mut chain = &**rhs;
+        loop {
+            match chain {
+                EcExpr::Binop {
+                    op: EcBinop::And,
+                    lhs,
+                    rhs,
+                } => {
+                    ops.extend(side_inv_body_ops_of(lhs));
+                    chain = rhs;
+                }
+                last => {
+                    ops.extend(side_inv_body_ops_of(last));
+                    return ops;
+                }
+            }
+        }
+    }
+
+    fn side_inv_body_ops_of(e: &EcExpr) -> Option<String> {
+        match e {
+            EcExpr::App { head, .. } => Some(head.clone()),
+            _ => None,
+        }
+    }
+
+    /// Story 93 §5 test 1: the conjunct list has the order of the body of `side_inv_C`.
+    #[test]
+    fn the_conjunct_list_has_the_order_of_the_side_invariant_body() {
+        let (conjuncts, items) = story93();
+        let ops: Vec<&str> = conjuncts.iter().map(|c| c.op.as_str()).collect();
+        assert_eq!(
+            ops,
+            [
+                "Comp_C.PkgInv_nonneg_of_P_in_C",
+                "Comp_C.links_C",
+                "Comp_C.GameInv_tables_of_C",
+                "Comp_C.GameInv_flag_of_C",
+            ]
+        );
+        let body: Vec<String> = side_inv_body_ops(&items)
+            .into_iter()
+            .map(|op| format!("Comp_C.{op}"))
+            .collect();
+        assert_eq!(ops, body);
+    }
+
+    /// Story 93 §5 test 2: a game invariant that reads two tables of one instance has the two
+    /// module variables in its footprint, as the precondition's record literal writes them. A
+    /// package invariant reads the field of its instance; the links read the parameter.
+    #[test]
+    fn the_footprint_of_a_conjunct_holds_the_module_variables_it_reads() {
+        let (conjuncts, _) = story93();
+        let footprints: Vec<Vec<&str>> = conjuncts
+            .iter()
+            .map(|c| c.footprint.iter().map(String::as_str).collect())
+            .collect();
+        assert_eq!(
+            footprints,
+            [
+                vec!["Comp_C.Pkg_Inst_P.ctr"],
+                vec!["Comp_C.Pkg_Inst_P.b"],
+                vec!["Comp_C.Pkg_Inst_P.keys", "Comp_C.Pkg_Inst_P.seen"],
+                vec![],
+            ]
+        );
+    }
+
+    /// Story 93 §5 test 2, against the export: each module variable of a footprint is read, at
+    /// a memory, in the precondition of the oracle lemma.
+    #[test]
+    fn the_footprints_name_the_module_variables_of_the_exported_precondition() {
+        let (conjuncts, _) = story93();
+        let exported = export(STORY93, "Proof").unwrap();
+        let oracle = file(&exported, "Eq_C_0_C_1_Inc.ec");
+        for var in conjuncts.iter().flat_map(|c| &c.footprint) {
+            assert!(
+                oracle.contains(&format!("{var}{{1}}")),
+                "{var} in:\n{oracle}"
+            );
+        }
     }
 }

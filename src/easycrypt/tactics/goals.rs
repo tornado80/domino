@@ -6,7 +6,10 @@
 //! front goal is read in full; of the goals behind it only their [`GoalKind`] is known
 //! (ADR 0009).
 
+use std::collections::BTreeSet;
+
 use crate::easycrypt::json::{Form, Goal, GoalKind, Instr, Side};
+use crate::writers::easycrypt::invariant::{SideConjunct, SideConjuncts};
 
 /// A program goal: `equiv[ S1 ~ S2 : pre ==> post ]`, or `hoare[ S : pre ==> post ]` in a
 /// side-invariant lemma (story 69).
@@ -188,17 +191,25 @@ fn atom_text(form: &Form) -> Option<String> {
         "local" => form.name.clone(),
         "pvar" => {
             let side = form.mem.as_deref()?.trim_start_matches('&');
-            let var = match form.scope.as_deref() {
-                Some("global") => {
-                    let path = form.path.as_deref()?;
-                    path.strip_prefix("Top.").unwrap_or(path).replace("./", ".")
-                }
-                _ => form.name.clone()?,
+            let var = match global_var(form) {
+                Some((var, _)) => var,
+                None => form.name.clone()?,
             };
             Some(format!("{var}{{{side}}}"))
         }
         _ => None,
     }
+}
+
+/// A module variable as a goal prints it without its memory (`Comp_C.Pkg_Inst_I.x` for the
+/// path `Top.Comp_C.Pkg_Inst_I./x`), and its memory (`&hr`). `None` for any other node.
+fn global_var(form: &Form) -> Option<(String, &str)> {
+    if form.kind != "pvar" || form.scope.as_deref() != Some("global") {
+        return None;
+    }
+    let path = form.path.as_deref()?;
+    let var = path.strip_prefix("Top.").unwrap_or(path).replace("./", ".");
+    Some((var, form.mem.as_deref()?))
 }
 
 /// A term as EasyCrypt reads it (story 90 §3.6): an atom ([`atom_text`]), `oget t`, a map read
@@ -357,15 +368,268 @@ pub(super) fn pruned_crush_sentence(goal: &Goal, drop_ops: &[String]) -> Option<
 /// Whether the head operator of `premise` is one of `drop_ops`, compared by qualified name: EasyCrypt
 /// may print the operator with more qualifiers before it (`Top.Comp_C.side_inv_C`).
 fn is_dropped(premise: &Form, drop_ops: &[String]) -> bool {
-    let Some(op) = op_name(premise).filter(|_| premise.kind == "app") else {
-        return false;
-    };
-    drop_ops.iter().any(|d| {
-        op == d
-            || op
-                .strip_suffix(d.as_str())
-                .is_some_and(|p| p.ends_with('.'))
+    dropped_op(premise, drop_ops).is_some()
+}
+
+/// The name of `drop_ops` that is the head operator of `premise` ([`is_dropped`]).
+fn dropped_op<'d>(premise: &Form, drop_ops: &'d [String]) -> Option<&'d str> {
+    let op = op_name(premise).filter(|_| premise.kind == "app")?;
+    drop_ops
+        .iter()
+        .find(|d| {
+            op == d.as_str()
+                || op
+                    .strip_suffix(d.as_str())
+                    .is_some_and(|p| p.ends_with('.'))
+        })
+        .map(String::as_str)
+}
+
+/// The invariant selection of a goal (story 93 §3.2), sent after `move=> /> <mems>.` like
+/// [`pruned_crush_sentence`]. A premise `side_inv_<C> r` of `drop_ops` is kept when `r` reads a
+/// memory of the conclusion, the abort premise `!Comp_<C>.Game_<C>.abort_flag{m}` of that memory
+/// `m` is a premise too, and a conjunct of `conjuncts` (the list under that operator) has a
+/// footprint that meets the tables of the conclusion (its module variables). The kept premise is
+/// opened with the abort premise, and only the selected conjuncts are named:
+///
+/// `move=> h0 hs1; have := hs1; rewrite /<side_inv> /= => /(_ h0) [#] _ g1_1; clear hs1;
+/// move: h0 g1_1; rewrite /<selected ops> /=; smt().`
+///
+/// Every other premise of `drop_ops` gets `_`, the rest are moved back as in the pruned crush.
+/// `None` if no premise is kept.
+pub(super) fn selection_sentence(
+    goal: &Goal,
+    drop_ops: &[String],
+    conjuncts: &SideConjuncts,
+) -> Option<String> {
+    let (slots, concl) = walk_premises(&goal.concl);
+    let (tables, mems): (BTreeSet<String>, BTreeSet<&str>) = global_vars(concl).into_iter().unzip();
+    let premises: Vec<&Form> = slots.iter().filter_map(Slot::premise).collect();
+    let mut opened: Vec<Opened> = Vec::new();
+    for (i, premise) in premises.iter().enumerate() {
+        let selected = dropped_op(premise, drop_ops)
+            .and_then(|op| select(premise, op, conjuncts.get(op)?, &premises, &tables, &mems));
+        opened.extend(selected.map(|s| Opened { premise: i, ..s }));
+    }
+    if opened.is_empty() {
+        return None;
+    }
+    Some(Selection::name(goal, &slots, &premises, drop_ops, &opened).sentence(&opened))
+}
+
+/// A binder or a premise of a conclusion, in order.
+enum Slot<'g> {
+    Binder(&'g str),
+    Premise(&'g Form),
+}
+
+impl<'g> Slot<'g> {
+    fn premise(&self) -> Option<&'g Form> {
+        match self {
+            Slot::Premise(p) => Some(p),
+            Slot::Binder(_) => None,
+        }
+    }
+}
+
+/// The binders and premises of `form` in order (a `forall` between two premises too), and the
+/// conclusion after them.
+fn walk_premises(form: &Form) -> (Vec<Slot<'_>>, &Form) {
+    let mut slots = Vec::new();
+    let mut form = form;
+    loop {
+        if let Some((names, body)) = as_forall(form) {
+            slots.extend(names.into_iter().map(Slot::Binder));
+            form = body;
+        } else if let Some((premise, rest)) = as_implication(form) {
+            slots.push(Slot::Premise(premise));
+            form = rest;
+        } else {
+            return (slots, form);
+        }
+    }
+}
+
+/// Each module variable of `form` at its memory ([`global_var`]).
+fn global_vars(form: &Form) -> Vec<(String, &str)> {
+    let mut out: Vec<(String, &str)> = global_var(form).into_iter().collect();
+    for child in form.children() {
+        out.extend(global_vars(child));
+    }
+    out
+}
+
+/// A side-invariant premise that the selection opens: its index among the premises, its
+/// operator, the index of its abort premise, the number of its conjuncts, and the indexes of
+/// the selected conjuncts with their operators.
+struct Opened<'c> {
+    premise: usize,
+    op: &'c str,
+    abort: usize,
+    count: usize,
+    selected: Vec<(usize, &'c str)>,
+}
+
+/// The selection of the side-invariant premise `premise` of operator `op` (§3.2 steps 2–3), its
+/// `premise` index not yet set; `None` if its record reads no memory of the conclusion, if no
+/// abort premise of that memory is in `premises`, or if no conjunct meets `tables`.
+fn select<'c>(
+    premise: &Form,
+    op: &'c str,
+    conjuncts: &'c [SideConjunct],
+    premises: &[&Form],
+    tables: &BTreeSet<String>,
+    mems: &BTreeSet<&str>,
+) -> Option<Opened<'c>> {
+    let mem = global_vars(premise)
+        .into_iter()
+        .map(|(_, m)| m)
+        .find(|m| mems.contains(m))?;
+    let theory = op.rsplit_once('.')?.0;
+    let abort = premises.iter().position(|p| is_abort(p, theory, mem))?;
+    let selected: Vec<(usize, &str)> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !c.footprint.is_disjoint(tables))
+        .map(|(j, c)| (j, c.op.as_str()))
+        .collect();
+    (!selected.is_empty()).then_some(Opened {
+        premise: 0,
+        op,
+        abort,
+        count: conjuncts.len(),
+        selected,
     })
+}
+
+/// Whether `premise` is `!<theory>.Game_<C>.abort_flag{mem}`.
+fn is_abort(premise: &Form, theory: &str, mem: &str) -> bool {
+    let negation = premise.kind == "app"
+        && matches!(app_op_leaf(premise), Some("!" | "[!]"))
+        && premise.args.len() == 1;
+    negation
+        && global_var(&premise.args[0]).is_some_and(|(var, m)| {
+            m == mem
+                && var
+                    .strip_prefix(theory)
+                    .is_some_and(|rest| rest.starts_with(".Game_"))
+                && var.ends_with(".abort_flag")
+        })
+}
+
+/// The names of a selection sentence: the `move=>` names, the names moved back, and the name
+/// of each premise.
+struct Selection {
+    intro: Vec<String>,
+    kept: Vec<String>,
+    names: Vec<String>,
+    conjunct_names: Vec<Vec<String>>,
+}
+
+impl Selection {
+    /// Names the slots as [`pruned_crush_sentence`] does; a premise that `opened` opens is
+    /// `hs<k>`, and its selected conjuncts `g<k>_<j>`, which take its place among the kept.
+    fn name(
+        goal: &Goal,
+        slots: &[Slot<'_>],
+        premises: &[&Form],
+        drop_ops: &[String],
+        opened: &[Opened<'_>],
+    ) -> Self {
+        let mut sel = Selection {
+            intro: Vec::new(),
+            kept: Vec::new(),
+            names: Vec::new(),
+            conjunct_names: Vec::new(),
+        };
+        let mut i = 0;
+        for slot in slots {
+            let name = match slot {
+                Slot::Binder(name) if name.starts_with('&') => sel.fresh(goal, name),
+                Slot::Binder(_) => {
+                    let x = sel.fresh(goal, &format!("x{}", sel.kept.len()));
+                    sel.kept.push(x.clone());
+                    x
+                }
+                Slot::Premise(_) => {
+                    let name = sel.premise_name(goal, i, premises, drop_ops, opened);
+                    i += 1;
+                    name
+                }
+            };
+            sel.intro.push(name);
+        }
+        sel
+    }
+
+    fn fresh(&self, goal: &Goal, base: &str) -> String {
+        let used: Vec<String> = self
+            .intro
+            .iter()
+            .chain(self.conjunct_names.iter().flatten())
+            .cloned()
+            .collect();
+        fresh_name_besides(goal, base, &used)
+    }
+
+    /// The name of premise `i`; an opened premise also names its conjuncts.
+    fn premise_name(
+        &mut self,
+        goal: &Goal,
+        i: usize,
+        premises: &[&Form],
+        drop_ops: &[String],
+        opened: &[Opened<'_>],
+    ) -> String {
+        let k = self.kept.len();
+        let name = if let Some(o) = opened.iter().find(|o| o.premise == i) {
+            let hs = self.fresh(goal, &format!("hs{k}"));
+            let gs: Vec<String> = o
+                .selected
+                .iter()
+                .map(|(j, _)| self.fresh(goal, &format!("g{k}_{j}")))
+                .collect();
+            self.kept.extend(gs.iter().cloned());
+            self.conjunct_names.push(gs);
+            hs
+        } else if is_dropped(premises[i], drop_ops) {
+            "_".to_string()
+        } else {
+            let h = self.fresh(goal, &format!("h{k}"));
+            self.kept.push(h.clone());
+            h
+        };
+        self.names.push(name.clone());
+        name
+    }
+
+    /// The sentence: `move=>`, one `have` for each opened premise, `move:`, the unfold of the
+    /// selected operators, `smt()`.
+    fn sentence(&self, opened: &[Opened<'_>]) -> String {
+        let mut parts = vec![format!("move=> {}", self.intro.join(" "))];
+        let mut ops: Vec<&str> = Vec::new();
+        for (o, gs) in opened.iter().zip(&self.conjunct_names) {
+            let hs = &self.names[o.premise];
+            let mut pattern = vec!["_"; o.count];
+            for ((j, op), g) in o.selected.iter().zip(gs) {
+                pattern[*j] = g;
+                if !ops.contains(op) {
+                    ops.push(op);
+                }
+            }
+            parts.push(format!(
+                "have := {hs}; rewrite /{} /= => /(_ {}) [#] {}; clear {hs}",
+                o.op,
+                self.names[o.abort],
+                pattern.join(" ")
+            ));
+        }
+        parts.push(format!("move: {}", self.kept.join(" ")));
+        let unfold: Vec<String> = ops.iter().map(|op| format!("/{op}")).collect();
+        parts.push(format!("rewrite {} /=", unfold.join(" ")));
+        parts.push("smt().".to_string());
+        parts.join("; ")
+    }
 }
 
 #[cfg(test)]
@@ -558,6 +822,106 @@ mod tests {
         assert_eq!(
             pruned_crush_sentence(&goal, &[]).as_deref(),
             Some("move=> h01; move: h01; smt().")
+        );
+    }
+
+    const SIDE_INV_H: &str = "Comp_H.side_inv_H";
+
+    /// A module variable of `Comp_H` at memory `mem`.
+    fn gvar(path: &str, mem: &str) -> String {
+        format!(r#"{{"kind":"pvar","scope":"global","path":"Top.Comp_H.{path}","mem":"&{mem}"}}"#)
+    }
+
+    /// `!Comp_H.Game_H.abort_flag{mem}`.
+    fn not_abort(mem: &str) -> String {
+        app("Top.Logic.[!]", &[gvar("Game_H./abort_flag", mem)])
+    }
+
+    /// `Comp_H.side_inv_H` applied to a record that reads `ctr{mem}`.
+    fn side_inv_at(mem: &str) -> String {
+        let record = app("Top.Comp_H.H_side", &[gvar("Pkg_Inst_K./ctr", mem)]);
+        app("Top.Comp_H.side_inv_H", &[record])
+    }
+
+    /// `P d_Kmac{mem}`.
+    fn reads_kmac(mem: &str) -> String {
+        app("Top.P", &[gvar("Pkg_Inst_K./d_Kmac", mem)])
+    }
+
+    fn conjunct(op: &str, footprint: &[&str]) -> SideConjunct {
+        SideConjunct {
+            op: format!("Comp_H.{op}"),
+            footprint: footprint
+                .iter()
+                .map(|v| format!("Comp_H.Pkg_Inst_K.{v}"))
+                .collect(),
+        }
+    }
+
+    /// The conjuncts of `side_inv_H`: only `GameInv_b_of_H` reads `d_Kmac`.
+    fn story93_conjuncts() -> SideConjuncts {
+        let list = vec![
+            conjunct("PkgInv_a_of_K_in_H", &["ctr"]),
+            conjunct("GameInv_b_of_H", &["d_Kmac", "d_PRF"]),
+            conjunct("GameInv_c_of_H", &["d_PRF"]),
+        ];
+        [(SIDE_INV_H.to_string(), list)].into_iter().collect()
+    }
+
+    fn selection(goal: &Goal) -> Option<String> {
+        selection_sentence(goal, &[SIDE_INV_H.into()], &story93_conjuncts())
+    }
+
+    #[test]
+    fn the_selection_names_only_the_conjuncts_that_read_a_table_of_the_conclusion() {
+        let goal = goal_of(&implies(
+            &not_abort("hr"),
+            &implies(&atom("A"), &implies(&side_inv_at("hr"), &reads_kmac("hr"))),
+        ));
+        assert_eq!(
+            selection(&goal).as_deref(),
+            Some(concat!(
+                "move=> h0 h1 hs2; ",
+                "have := hs2; rewrite /Comp_H.side_inv_H /= => /(_ h0) [#] _ g2_1 _; clear hs2; ",
+                "move: h0 h1 g2_1; rewrite /Comp_H.GameInv_b_of_H /=; smt()."
+            ))
+        );
+    }
+
+    #[test]
+    fn without_an_abort_premise_a_table_or_a_selected_conjunct_there_is_no_selection() {
+        let no_abort = goal_of(&implies(&side_inv_at("hr"), &reads_kmac("hr")));
+        assert_eq!(selection(&no_abort), None);
+        let no_table = goal_of(&implies(
+            &not_abort("hr"),
+            &implies(&side_inv_at("hr"), &atom("B")),
+        ));
+        assert_eq!(selection(&no_table), None);
+        let other = app("Top.P", &[gvar("Pkg_Inst_K./d_Other", "hr")]);
+        let none_selected = goal_of(&implies(
+            &not_abort("hr"),
+            &implies(&side_inv_at("hr"), &other),
+        ));
+        assert_eq!(selection(&none_selected), None);
+    }
+
+    #[test]
+    fn a_branch_condition_that_reads_only_memory_2_keeps_only_the_side_invariant_of_2() {
+        let concl = reads_kmac("2");
+        let goal = goal_of(&implies(
+            &not_abort("1"),
+            &implies(
+                &not_abort("2"),
+                &implies(&side_inv_at("1"), &implies(&side_inv_at("2"), &concl)),
+            ),
+        ));
+        assert_eq!(
+            selection(&goal).as_deref(),
+            Some(concat!(
+                "move=> h0 h1 _ hs2; ",
+                "have := hs2; rewrite /Comp_H.side_inv_H /= => /(_ h1) [#] _ g2_1 _; clear hs2; ",
+                "move: h0 h1 g2_1; rewrite /Comp_H.GameInv_b_of_H /=; smt()."
+            ))
         );
     }
 

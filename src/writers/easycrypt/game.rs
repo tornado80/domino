@@ -407,7 +407,7 @@ fn build_import_adapter(
 /// `package.rs`'s naming precedent, so two differently-named instances that
 /// happened to mangle to the same name are caught as a hard collision
 /// instead of silently colliding.
-fn instance_mangled_names(comp: &Composition) -> Result<Vec<String>, EcExportError> {
+pub(super) fn instance_mangled_names(comp: &Composition) -> Result<Vec<String>, EcExportError> {
     let mut inst_names = Names::new();
     let mut inst_mangled: Vec<String> = Vec::with_capacity(comp.pkgs.len());
     for inst in &comp.pkgs {

@@ -1,0 +1,40 @@
+theorem Proof {
+    instance C_0 = C {
+        params {
+            c: true,
+        }
+    }
+
+    instance C_1 = C {
+        params {
+            c: true,
+        }
+    }
+
+    gamehops {
+        equivalence C_0 C_1 {
+            invariant: [
+                ./theorem/invariant.smt2
+            ]
+
+            Inc: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    same-output:  [no-abort]
+                    invariant:    [no-abort]
+                }
+            }
+            Get: {
+                randomness: none
+
+                lemmas {
+                    equal-aborts: []
+                    same-output:  [no-abort]
+                    invariant:    [no-abort]
+                }
+            }
+        }
+    }
+}

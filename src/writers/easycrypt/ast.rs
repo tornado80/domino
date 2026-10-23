@@ -324,6 +324,49 @@ pub enum EcBinop {
 }
 
 impl EcExpr {
+    /// The direct sub-expressions, in source order. A walk of an expression tree uses this list,
+    /// so that no walk misses a variant.
+    pub fn children(&self) -> Vec<&EcExpr> {
+        match self {
+            EcExpr::Var(_)
+            | EcExpr::Qualified { .. }
+            | EcExpr::Int(_)
+            | EcExpr::Bool(_)
+            | EcExpr::Unit
+            | EcExpr::None_(_)
+            | EcExpr::MapEmpty
+            | EcExpr::Glob(_)
+            | EcExpr::GlobEq(_) => Vec::new(),
+            EcExpr::Tuple(items) | EcExpr::App { args: items, .. } => items.iter().collect(),
+            EcExpr::Proj { expr, .. }
+            | EcExpr::Field { expr, .. }
+            | EcExpr::Some_(expr)
+            | EcExpr::Oget(expr)
+            | EcExpr::Unop { arg: expr, .. }
+            | EcExpr::Quant { body: expr, .. } => vec![expr],
+            EcExpr::RecordLit { fields } => fields.iter().map(|(_, v)| v).collect(),
+            EcExpr::MapGet { map: a, key: b }
+            | EcExpr::MapRem { map: a, key: b }
+            | EcExpr::Binop { lhs: a, rhs: b, .. }
+            | EcExpr::Let {
+                value: a, body: b, ..
+            }
+            | EcExpr::OracleHoare {
+                pre: a, post: b, ..
+            } => vec![a, b],
+            EcExpr::MapSet { map, key, value } => vec![map, key, value],
+            EcExpr::If {
+                cond,
+                then_expr,
+                else_expr,
+            } => vec![cond, then_expr, else_expr],
+            EcExpr::Pr { args, event, .. } => args.iter().chain([&**event]).collect(),
+            EcExpr::OracleEquiv { inv, assumed, .. } => {
+                std::iter::once(&**inv).chain(assumed.iter()).collect()
+            }
+        }
+    }
+
     /// `[a, b, c]` -> `a op (b op c)`; `None` for no operands. Right-nested
     /// because EasyCrypt's `/\`, `\/` and `=>` are right-associative (story
     /// 43 §3.1), so the chain renders without parentheses; it is also how

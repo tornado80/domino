@@ -290,11 +290,7 @@ fn build_side_record_lit(
 /// judgement).
 fn module_var(layout: &CompLayout, idx: usize, var: String, mem: Option<u8>) -> EcExpr {
     EcExpr::Qualified {
-        path: vec![
-            layout.comp_theory.clone(),
-            format!("Pkg_Inst_{}", layout.inst_mangled[idx]),
-            var,
-        ],
+        path: invariant::module_var_path(&layout.comp_theory, &layout.inst_mangled[idx], &var),
         mem,
     }
 }

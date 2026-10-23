@@ -32,7 +32,7 @@ use super::live::{Closing, LiveHandle};
 use super::script::{Mark, Script};
 use super::ResumeMode;
 use crate::easycrypt::job::{AdmitRecord, ClosedNode};
-use crate::writers::easycrypt::invariant::{state_relation_op_name, InvariantOp};
+use crate::writers::easycrypt::invariant::{state_relation_op_name, InvariantOp, SideConjuncts};
 
 type R<T> = Result<T, SessionError>;
 
@@ -558,8 +558,9 @@ fn part_view(
 pub(super) const BASE_SMT_LEMMAS: [&str; 5] = ["get_setE", "mem_set", "remE", "mem_rem", "emptyE"];
 
 /// The length of the fallback sequence: the crush `move=> /> <binders> *; smt().` (story 86),
-/// `smt().` with the premise unfolded, `smt(hints).`, then the pruned crush (story 92).
-const FALLBACKS: usize = 4;
+/// `smt().` with the premise unfolded, `smt(hints).`, the pruned crush (story 92), then the
+/// invariant selection (story 93).
+const FALLBACKS: usize = 5;
 
 /// The length of the part fallback sequence ([`Prover::atom`]); the fourth is the key case
 /// split.
@@ -720,6 +721,11 @@ pub(super) struct Prover<'a> {
     ///
     /// [`side_inv_drop_ops`]: crate::writers::easycrypt::invariant::side_inv_drop_ops
     pub drop_ops: &'a [String],
+    /// The conjuncts of each side invariant of [`Self::drop_ops`], with their footprints (from
+    /// [`side_conjuncts`]): what the invariant selection keeps (story 93).
+    ///
+    /// [`side_conjuncts`]: crate::writers::easycrypt::invariant::side_conjuncts
+    pub conjuncts: &'a SideConjuncts,
     /// The operators unfolded inside a leaf part ([`leaf_part_ops`] for an oracle lemma, the
     /// side invariant operators for a side-invariant lemma), matched by the last component of
     /// their name: a `StateRelation_` operator starts a [`Part::Relation`], an operator with a
@@ -1287,28 +1293,55 @@ impl Prover<'_> {
 
     /// The pruned crush of a side goal (story 92 §3.2): `move=> /> <binders>.`, then
     /// [`goals::pruned_crush_sentence`] on the goal it leaves, which drops the premises of
-    /// [`Self::drop_ops`] and moves the others back into the goal before `smt()`. Both
-    /// sentences are undone unless the goal closes. `Ok(false)`, with nothing sent, on a goal
-    /// without a premise.
-    fn try_pruned_crush(&mut self) -> R<bool> {
+    /// [`Self::drop_ops`] and moves the others back into the goal before `smt()`. The pruned
+    /// sentence is undone unless the goal closes; the open stays, and `opened` gets the goal it
+    /// left, for the invariant selection (story 93). The caller undoes the open. `Ok(false)`,
+    /// with nothing sent, on a goal without a premise.
+    fn try_pruned_crush(&mut self, opened: &mut Option<Goal>) -> R<bool> {
         let Some(names) = self.premise_binders() else {
             return Ok(false);
         };
         let before = self.count();
-        let snap = self.snap();
         if !self.send(&format!("move=> /> {names}."), Want::Full)? {
             return Ok(false);
         }
         if self.count() < before {
             return Ok(true);
         }
+        *opened = self.front().cloned();
         let sentence = self
             .front()
             .and_then(|g| goals::pruned_crush_sentence(g, self.drop_ops));
-        if let Some(sentence) = sentence {
-            if self.send(&sentence, Want::Status)? && self.count() + 1 == before {
-                return Ok(true);
-            }
+        match sentence {
+            Some(sentence) => self.try_close(&[&sentence]),
+            None => Ok(false),
+        }
+    }
+
+    /// The invariant selection of the goal that the pruned crush opened (story 93 §3.2):
+    /// [`goals::selection_sentence`], undone unless the goal closes. `Ok(false)`, with nothing
+    /// sent, when the selection keeps no premise.
+    fn try_selection(&mut self, opened: &Goal) -> R<bool> {
+        match goals::selection_sentence(opened, self.drop_ops, self.conjuncts) {
+            Some(sentence) => self.try_close(&[&sentence]),
+            None => Ok(false),
+        }
+    }
+
+    /// Fallbacks 4 and 5 (stories 92, 93): the pruned crush, then the invariant selection on
+    /// the goal that it opened, with no new read. The open is undone unless one of them closes
+    /// the goal.
+    fn pruned_fallbacks(&mut self) -> R<bool> {
+        let snap = self.snap();
+        let mut opened = None;
+        if self.fallback(4, "pruned crush", |p| p.try_pruned_crush(&mut opened))? {
+            return Ok(true);
+        }
+        let Some(goal) = opened else {
+            return Ok(false);
+        };
+        if self.fallback(5, "invariant selection", |p| p.try_selection(&goal))? {
+            return Ok(true);
         }
         self.rollback(snap)?;
         Ok(false)
@@ -1322,9 +1355,10 @@ impl Prover<'_> {
         })
     }
 
-    /// The fallback sequence (§3.5, story 92 §3.1): the crush (story 86), `smt().` with the
-    /// premise introduced and the invariant unfolded in it, the hint list, then the pruned
-    /// crush. The pruned crush is last: a goal that an earlier fallback closes never reaches it.
+    /// The fallback sequence (§3.5, story 92 §3.1, story 93 §3.2): the crush (story 86),
+    /// `smt().` with the premise introduced and the invariant unfolded in it, the hint list, the
+    /// pruned crush, then the invariant selection. The pruned crush and the selection are last:
+    /// a goal that an earlier fallback closes never reaches them.
     fn fallbacks(&mut self) -> R<bool> {
         self.as_role(Role::Reduce, Self::reduce_to_ambient)?;
         if self.fallback(1, "move=> /> <binders> *; smt()", Self::try_crush)? {
@@ -1340,7 +1374,7 @@ impl Prover<'_> {
         if self.fallback(3, &shown, |p| p.try_close(&[&hints]))? {
             return Ok(true);
         }
-        self.fallback(4, "pruned crush", Self::try_pruned_crush)
+        self.pruned_fallbacks()
     }
 
     /// Runs `f`, a closing attempt, and tells the live page what it was and how it ended.

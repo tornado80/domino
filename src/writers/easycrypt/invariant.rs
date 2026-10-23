@@ -16,7 +16,7 @@
 //! `Expr`/`Stmt`, and does the real translation eagerly inside the trait's
 //! `handle_definefun`/`handle_define_state_relation` overrides.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
@@ -532,6 +532,18 @@ pub(crate) fn side_inv_op_name(comp: &str) -> String {
 /// The side record of a composition: `<C>_side`, the state of its packages and its abort flag.
 pub(crate) fn side_record_type_name(comp: &str) -> String {
     format!("{comp}_side")
+}
+
+/// The path of the module variable `var` of instance `<Inst>` of composition `<C>`:
+/// `Comp_<C>`, `Pkg_Inst_<Inst>`, `<var>`, all three mangled. The precondition's record literal
+/// reads it (`proof.rs`), and a goal prints it, without its memory, as the three joined by `.`
+/// (story 93: the footprint of a side conjunct).
+pub(super) fn module_var_path(comp_theory: &str, inst_mangled: &str, var: &str) -> Vec<String> {
+    vec![
+        comp_theory.to_string(),
+        format!("Pkg_Inst_{inst_mangled}"),
+        var.to_string(),
+    ]
 }
 
 /// A field of [`pkg_state_type_name`]: `<Pkg>_<mangled state field>`.
@@ -1429,6 +1441,47 @@ pub fn side_inv_drop_ops(comps: &[&crate::package::Composition]) -> Vec<String> 
         }
     }
     ops
+}
+
+/// One conjunct of `side_inv_<C>` (story 93 §3.1), for the invariant selection of a side goal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SideConjunct {
+    /// `Comp_<C>.GameInv_<N>_of_<C>`, `Comp_<C>.links_<C>`, `Comp_<C>.PkgInv_<N>_of_<I>_in_<C>`
+    pub op: String,
+    /// the module variables the conjunct reads, as goals print them (no memory):
+    /// `Comp_<C>.Pkg_Inst_<I>.<var>`
+    pub footprint: BTreeSet<String>,
+}
+
+/// The conjuncts of each `side_inv_<C>`, keyed by the operator as [`side_inv_drop_ops`] names it.
+pub type SideConjuncts = BTreeMap<String, Vec<SideConjunct>>;
+
+/// The conjuncts of `side_inv_<C>` of each composition of `comps` that has side invariants, in
+/// the order of its body (story 93 §3.1), keyed by `Comp_<C>.side_inv_<C>`. The conjuncts come
+/// from the function that also builds `side_inv_<C>` ([`composition_items`]), for the first game
+/// instance of the composition in `theorem`, as the export writes it.
+pub fn side_conjuncts(
+    theorem: &Theorem<'_>,
+    project: &impl Project,
+    comps: &[&crate::package::Composition],
+) -> Result<SideConjuncts, EcExportError> {
+    let ctx = SideCtx {
+        theorem_consts: &theorem.consts,
+        project,
+        params_records: params_record_packages(theorem),
+    };
+    let mut out = SideConjuncts::new();
+    for comp in comps.iter().filter(|c| side::has_side_invariants(c)) {
+        let name = super::names::mangle_name(NameKind::Module, &comp.name);
+        let game = theorem
+            .instances
+            .iter()
+            .find(|g| g.game().name == comp.name)
+            .expect("a composition of the theorem has a game instance");
+        let key = format!("Comp_{name}.{}", side_inv_op_name(&name));
+        out.insert(key, side::side_conjuncts(game, &name, &ctx)?);
+    }
+    Ok(out)
 }
 
 /// The operators of a side-invariant job of `comp`: [`side_invariant_ops`], and, when the

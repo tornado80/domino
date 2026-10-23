@@ -1410,6 +1410,7 @@ mod live {
             hints: &[],
             unfold_ops: &["inv".to_string(), "params_inv".to_string()],
             drop_ops: &[],
+            conjuncts: &Default::default(),
             part_ops: &[],
             timeouts: Timeouts {
                 general: Duration::from_secs(60),
@@ -3442,6 +3443,7 @@ done
         hints: &[],
         unfold_ops: &["inv".to_string()],
         drop_ops: &["Comp_H.side_inv_H".to_string()],
+        conjuncts: &Default::default(),
         part_ops: &[],
         timeouts: Timeouts {
             general: Duration::from_secs(10),
@@ -3700,6 +3702,7 @@ done
         hints: &[],
         unfold_ops: &["inv".to_string()],
         drop_ops: &["Comp_H.side_inv_H".to_string()],
+        conjuncts: &story93_conjuncts(),
         part_ops,
         timeouts: Timeouts {
             general: Duration::from_secs(10),
@@ -6216,6 +6219,102 @@ fn the_pruned_crush_closes_a_side_goal_and_nothing_else_is_sent() {
     assert!(run.admits.is_empty());
     assert!(run.script.contains("move=> /> &1 &2."), "{}", run.script);
     assert!(run.script.contains(PRUNED), "{}", run.script);
+}
+
+/// Story 93: the conjuncts of `Comp_H.side_inv_H` that [`run_fake`] gives the prover: one game
+/// invariant that reads `d_Kmac`, one that reads `d_PRF`.
+fn story93_conjuncts() -> crate::writers::easycrypt::invariant::SideConjuncts {
+    use crate::writers::easycrypt::invariant::SideConjunct;
+    let conjunct = |op: &str, var: &str| SideConjunct {
+        op: format!("Comp_H.{op}"),
+        footprint: [format!("Comp_H.Pkg_Inst_K.{var}")].into_iter().collect(),
+    };
+    let list = vec![
+        conjunct("GameInv_b_of_H", "d_Kmac"),
+        conjunct("GameInv_c_of_H", "d_PRF"),
+    ];
+    [("Comp_H.side_inv_H".to_string(), list)]
+        .into_iter()
+        .collect()
+}
+
+/// Story 93: the goal after `move=> /> &1 &2.`:
+/// `!Comp_H.Game_H.abort_flag{1} => Comp_H.side_inv_H {ctr{1}} => P d_Kmac{1}`.
+fn opened_with_tables() -> String {
+    let var = |path: &str| {
+        format!(r#"{{"kind":"pvar","scope":"global","path":"Top.Comp_H.{path}","mem":"&1"}}"#)
+    };
+    formula(&format!(
+        r#"{{"kind":"app","pp":"i","op":"Top.Logic.=>","args":[
+            {{"kind":"app","pp":"n","op":"Top.Logic.[!]","args":[{abort}]}},
+            {{"kind":"app","pp":"i","op":"Top.Logic.=>","args":[
+                {{"kind":"app","pp":"s","op":"Top.Comp_H.side_inv_H","args":[
+                    {{"kind":"app","pp":"r","op":"Top.Comp_H.H_side","args":[{ctr}]}}]}},
+                {{"kind":"app","pp":"p","op":"Top.P","args":[{kmac}]}}]}}]}}"#,
+        abort = var("Game_H./abort_flag"),
+        ctr = var("Pkg_Inst_K./ctr"),
+        kmac = var("Pkg_Inst_K./d_Kmac"),
+    ))
+}
+
+/// Story 93: the pruned crush and the invariant selection of [`opened_with_tables`].
+const PRUNED_93: &str = "move=> h0 _; move: h0; smt().";
+const SELECTION_93: &str = concat!(
+    "move=> h0 hs1; have := hs1; rewrite /Comp_H.side_inv_H /= => /(_ h0) [#] g1_0 _; ",
+    "clear hs1; move: h0 g1_0; rewrite /Comp_H.GameInv_b_of_H /=; smt()."
+);
+
+/// The side goal of story 86 opened to [`opened_with_tables`], and `arms` for the selection.
+fn run_selection(arms: &str) -> LeafRun {
+    let goals = [
+        ("side", proof_of(&side_goal(DEEP_PREMISE), 1)),
+        ("intro", proof_of(&introduced(DEEP_PREMISE), 1)),
+        ("opened", proof_of(&opened_with_tables(), 1)),
+    ];
+    let arms = format!(
+        r#"
+    "move => &1 &2 hpre.") g=intro; ans;;
+    "move=> /> &1 &2.") g=opened; ans;;
+    "pragma Goals:printall.") n=$((n-1)); ans;;
+    admit.) g=none; ans;;{arms}"#
+    );
+    run_side_goal(&goals, "side", &arms)
+}
+
+#[test]
+fn after_a_failed_pruned_crush_the_selection_closes_the_side_goal_without_a_new_read() {
+    let run = run_selection(&format!("\n    \"{SELECTION_93}\") g=none; ans;;"));
+    let sent = side_goal_fallbacks(&run);
+    assert_eq!(
+        sent[sent.len() - 3..],
+        ["move=> /> &1 &2.", PRUNED_93, SELECTION_93]
+    );
+    assert!(run.requests.contains(&format!("status {SELECTION_93}")));
+    // no read after the one of the pruned crush
+    let open = run
+        .requests
+        .iter()
+        .position(|r| r == "full move=> /> &1 &2.")
+        .unwrap();
+    assert!(
+        !run.requests[open + 1..]
+            .iter()
+            .any(|r| r.starts_with("full ")),
+        "{:?}",
+        run.requests
+    );
+    assert!(run.admits.is_empty());
+    assert!(run.script.contains(SELECTION_93), "{}", run.script);
+    assert!(!run.script.contains(PRUNED_93), "{}", run.script);
+}
+
+#[test]
+fn a_failed_selection_is_rolled_back_and_the_side_goal_is_admitted() {
+    let run = run_selection("");
+    assert_eq!(side_goal_fallbacks(&run).last(), Some(&SELECTION_93));
+    assert_eq!(run.admits.len(), 1);
+    assert_eq!(run.admits[0].reason, AdmitReason::DominoVerifiedEcFailed);
+    assert!(!run.script.contains("move=> />"), "{}", run.script);
 }
 
 #[test]

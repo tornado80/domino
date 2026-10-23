@@ -1,0 +1,24 @@
+package P {
+    invariant: [ ./packages/P.smt2 ]
+
+    params {
+        b: Bool,
+    }
+
+    state {
+        ctr: Integer,
+        seen: Table(Integer, Bool),
+        keys: Table(Integer, Integer),
+    }
+
+    oracle Inc() -> Integer {
+        if b {
+            ctr <- (ctr + 1);
+        }
+        return ctr;
+    }
+
+    oracle Get() -> Integer {
+        return ctr;
+    }
+}
