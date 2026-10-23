@@ -1,4 +1,4 @@
-# Story 90 — The case split substitutes the binder, merges equal keys, and a timed-out part gets more time
+# Story 90 — The case split names or substitutes the key equation, merges equal keys, and a timed-out part gets more time
 
 **Epic:** EasyCrypt Export — read `docs/stories/easycrypt/00-overview.md` first.
 **Branch:** `amir/easycrypt-export`
@@ -9,7 +9,10 @@
 investigation, §1). The owner's review of the first draft (same day): the retry is **off by default**
 and turned on by passing its timeout, and the timeout goes into the `smt` call itself
 (`smt timeout=N wantedlemmas=(…)`), not through the `prover` command, so the prover timeout
-never changes. Open questions in §7; §3 uses the recommended answers.
+never changes. Amended on 2026-10-23 at the owner's request ("amend the stories"), after measuring
+the hand proofs of commit `bd8901f` in `ec4whs` (§1.1). In the side tree, the split first tries
+one sentence with named cases (§3.5). An index that is a term over a binder, not only a binder,
+gets a key pair (§3.6). Open questions in §7; §3 uses the recommended answers.
 
 A **tactics** story, Rust only. Translation does not change. Test-first.
 
@@ -54,9 +57,44 @@ So with 1–3 the hop would go from 84 admits to 28. The scripts and output of t
 are in the investigation notes (session of 2026-10-22). §6 asks for the same numbers from a real
 run.
 
+### 1.1 The side tree wants the opposite (measured 2026-10-23)
+
+Commit `bd8901f` in `ec4whs` (`SideInv_H7_{Send1,Send2,Send4,Send5}_Lotta.ec`) closes every
+admit of `--side-inv H7` by hand. Six of them, all game-invariant parts, are closed with one
+sentence:
+
+```
+case (ctr0{hr} = ctr1) => cteq; smt(get_setE).
+```
+
+The equation is **named and kept**, nothing is substituted, there's no crush, and one `smt` after
+`;` closes both cases. One of the six cases is on a term, not a binder:
+`case (ctr0{hr} = oget d_First{hr}.[sid0]) => cteq; smt(get_setE).` (Send5 J3). Each leaf was
+measured alone, at EasyCrypt's default 3 s:
+
+| Leaf | Attempt | Result |
+|---|---|---|
+| The six hand-proved side leaves | the named split as written in the `_Lotta` files | all close (2–5 s per compile) |
+| `SideInv_H7_Send1.ec` J1, first conjunct after `do split` (where Domino puts it) | `case (ctr0{hr} = ctr1) => cteq; smt(get_setE).` | closes (2.3 s) |
+| same | same, with Domino's five hints | closes |
+| same | `case (ctr1 = ctr0{hr}) => [->>\|?]`, then the crush in each case (§3.1) | **fails** |
+| The 23 split parts of H6_1_1 ~ H7_0 (38 case admits, 3 parts closed today) | named split, `smt(get_setE)` | **0 of 23**. It also fails on the 3 parts Domino closes today. |
+| same | named split, Domino's five hints | 0 of 23 |
+| same | named split, then the crush | 11 of 23 parts (16 of 38 case admits) |
+| same | `[->>\|?]` and the crush in each case (§1) | 28 of 38 case admits |
+
+So no single case sentence works in both trees. In a hop, smt needs the crush to open the
+`exists` that `sp` wraps around the 400 KB precondition, and substitution beats a named
+equation. In the side tree, the context is small and the crush hurts. Send1 J1, which story 91
+was written for, closes with the named split and no invariant instance.
+
 ## 2. What the split and the fallbacks should do
 
-1. The case sentence substitutes: `case (b = k) => [->>|?].`
+0. In the side tree (and in the package-invariant tree, which has the same one-memory shape), the
+   split first sends **one** sentence with named cases that closes every case with `smt(<hints>)`
+   (§3.5). If it's accepted, the part is closed. Otherwise the split goes on as below.
+1. The case sentence substitutes: `case (b = k) => [->>|?].` (A key pair whose index is a term,
+   not a binder, gets named cases, §3.6.)
 2. Before the split, keys of one binder that EasyCrypt can prove equal are merged: one `case` per
    class of equal keys, with the equation kept as a named hypothesis.
 3. **On demand** (`--smt-retry-timeout <SECONDS>`): a part whose last closing sentence failed with
@@ -172,6 +210,64 @@ lemma list moves into the `wantedlemmas` option:
   `Closing::Fallback { k, of }` unchanged; the transcript tells it apart by its sentences.
 - `scripts/proof_statistics.py` counts retries and how many of them closed, per hop and per side
   invariant.
+- The summary line also counts parts closed by the named split (§3.5): `… ; 6 parts closed by a
+  named split`.
+
+### 3.5 In the side tree, a named split first
+
+Only in the trees with one memory (`--side-inv`, `--pkg-inv`: `hoare` lemmas at `{hr}`), as the
+first attempt of the key case split (part fallback 4), after the equal keys are merged (§3.2):
+
+```
+case (<b1> = <k1>) => <h1>; case (<b2> = <k2>) => <h2>; smt(<hints>).
+```
+
+- One `case … => <hi>;` per key pair, in `key_pairs` order. `<hi>` is `fresh_name(goal, "hc")`, and
+  then `hc1`, … for the later pairs. The pairs come after the merge, so a merged key gets no
+  `case`.
+- `;` sends each `case` to every goal of the one before it, and `smt(<hints>)` to every case. It's
+  one sentence. Either all cases close and EasyCrypt accepts it (the goal count drops), or it's
+  refused and leaves nothing.
+- `<hints>` is the part's hint list, as in `smt(<hints>)`. Measured: `get_setE` alone and the five
+  hints both close Send1 J1 (§1.1).
+- No crush and no `move:`: the premises stay where the leaf put them. In the hand proofs they're
+  still in the conclusion. Where Domino places it, after `move => hpre3`, they're in the
+  context. Both close (§1.1).
+- Only for parts with at most 2 key pairs (`MAX_NAMED_PAIRS` = 2), so at most 4 `smt` calls in the
+  sentence and at most 12 s at the default timeout. A part with more pairs goes straight to the
+  per-case split (§7 Q5).
+- Not retried with `--smt-retry-timeout`: a retry would give each of up to 4 calls the long
+  timeout. The per-case split that follows has the retry.
+- The leaf budget is checked before it, as before a case's crush.
+- If it's refused, the split goes on as in §2 steps 1–3: per-case bullets, each closed or
+  admitted on its own (story 89). The per-case split is what tells a hand prover which case is
+  hard.
+
+Not in hops: there it closed 0 of 23 parts (§1.1) and would only add up to 4 failing `smt` per
+split part (§7 Q4).
+
+### 3.6 A key pair on a term index
+
+Today `collect_key_pairs` (`goals.rs`) makes a pair only when the read index is a binder:
+`index.kind == "local"` and in `binders`. In `SideInv_H7_Send5.ec` J3 and J9 the read is
+`d_State.[ctr0 <- v].[oget d_First.[sid0]]`. The index is a term over the binder `sid0`, so
+there's no pair and no split. Both are closed by hand with a split on
+`ctr0{hr} = oget d_First{hr}.[sid0]` (§1.1; story 91 §1 for J9).
+
+- A read whose index is not a binder, but is a term that mentions a binder from `binders` (as a
+  free local), gets a pair `(index term, key)`. `KeyPair` gets `index: String` and
+  `binder: Option<String>`, which is `Some` only when the index is a binder.
+- The term is printed by a new `term_text` in `goals.rs`, an extension of `atom_text`: atoms,
+  `oget t`, a map read `t.[u]`, and a tuple projection ``t.`n``, printed with the operator paths
+  as `atom_text` prints program variables. For any other shape it returns `None`, and that read
+  gets no pair, as today. The printed term must re-parse in the leaf. A unit test compares it
+  with the text EasyCrypt prints for the measured index.
+- The named split (§3.5) treats both kinds alike.
+- In the per-case split, a pair with `binder == None` can't be substituted: `->>` needs a variable.
+  Its case sentence is `case (<index> = <k>) => [<h>|<h>].` (named in both cases). A pair with a
+  binder keeps `[->>|?]`. The filter on later pairs in the `=` case (§3.1) applies only to pairs
+  of the same binder. A named equation removes nothing.
+- The case note prints the term as the case sentence does (` (case oget … .[sid0] = ctr0{hr})`).
 
 ## 4. Rejected alternatives
 
@@ -187,9 +283,18 @@ lemma list moves into the `wantedlemmas` option:
 - **`rewrite -<h>` in the `=` case** (turn `ctr0{2}` into `ctr0{1}` so both reads become
   `get_set_sameE`). It worked by hand, but `->>` plus `<h>` in the context closed every measured
   case without it, and it's one more sentence that can fail.
-- **`[hc|hc]`** (name the equation and keep it, no substitution). smt would see `ctr1 = ctr0{2}`,
-  but `get_setE` reads would not reduce syntactically, and the crush's `/>` would not use it.
-  `->>` gives smt a smaller goal.
+- **Named cases (`[hc|hc]`) instead of `->>` in hops.** The first draft rejected them because
+  `get_setE` reads don't reduce syntactically. In the hops that holds: named cases close 0 of 23
+  parts, or 16 of 38 case admits with the crush, against 28 of 38 with `->>` (§1.1). In the side
+  tree it's the other way round, so §3.5 uses named cases there, as a first attempt.
+- **The named split in every tree.** It closed nothing in the hops (§1.1), including the 3 parts
+  closed today. There it would only cost up to 4 failing `smt` per split part.
+- **The named split instead of the per-case split in the side tree** (no bullets). When it fails,
+  it doesn't say which case is hard. Story 89 keeps the closed cases and admits only the hard
+  one, and story 91 works on the `=` case alone.
+- **A ladder in each case of the per-case split** (`smt(<hints>)` on a named case, then the crush).
+  It costs a failing `smt` in every case of every hop part, and the side tree is served by the
+  one-sentence attempt before the bullets.
 - **`prover timeout=N.` before the retry and `prover timeout=3.` after it** (the first draft).
   It works mid-proof, but it changes the prover setting for everything that follows. A failed
   retry would then depend on EasyCrypt's undo restoring the setting, and the reset has to know
@@ -226,6 +331,19 @@ lemma list moves into the `wantedlemmas` option:
 - [ ] `--ec-timeout 30 --smt-retry-timeout 30`: `prove` refuses to start, naming both options.
 - [ ] Leaf budget spent: no retry.
 - [ ] `report.txt` counts retries with the option (§3.4) and is unchanged without it.
+- [ ] Side tree, one key pair, scripted accept: the first split sentence is
+      `case (ctr1 = ctr0{hr}) => hc; smt(<hints>).`, and no bullet is sent.
+- [ ] Side tree, two pairs: `case (…) => hc; case (…) => hc1; smt(<hints>).`. `hc` taken:
+      `fresh_name` gives the next name.
+- [ ] Side tree, named split refused: the per-case split follows, with `[->>|?]`, as in the hop.
+- [ ] Side tree, three pairs: no named split.
+- [ ] Hop tree: no named split, the first split sentence is `case … => [->>|?].`
+- [ ] Named split with `--smt-retry-timeout`: the named split isn't retried.
+- [ ] `key_pairs`: a read `m.[k <- v].[oget d_First.[sid0]]` with `sid0` in `binders` gives the pair
+      `(oget d_First.[sid0], k)` with `binder == None`. A term index with no binder in it gives
+      no pair. A term `term_text` can't print gives no pair.
+- [ ] Per-case split, term pair: the case sentence is `case (<index> = <k>) => [hc|hc].`, and in the
+      `=` case the later pairs are kept.
 
 ## 6. Acceptance criteria
 
@@ -246,12 +364,13 @@ lemma list moves into the `wantedlemmas` option:
       game-invariant admits of the run of 2026-10-21 (each leaf alone, the crush
       `move: hpre … hpre4 => />` unchanged): `smt(<hints>)` closes 0 at 3 s, and
       `smt timeout=30 wantedlemmas=(<hints>)` closes 7, in 4–15 s of smt each. The eighth (Send1
-      J1, `fresh_sid_authenticated_by_mac2`) fails at 120 s. With
-      `case (ctr1 = ctr{hr}) => [->>|?]` its `<>` case closes at 3 s. Its `=` case needs the
-      old `early_fresh_session_has_no_complete_transcript` at the written key `ctr{hr}`, which
-      smt doesn't find even at 30 s, but which closes in 2 s when given explicitly (`have := hef
-      ctr{hr}`). That is a follow-up (instantiate the old invariant at the written key), not this
-      story.
+      J1, `fresh_sid_authenticated_by_mac2`) fails at 120 s. With `[->>|?]` its `=` case fails,
+      but the named split of §3.5 closes it at 3 s (§1.1).
+- [ ] `--side-inv H7 --force`, **without** the option: the parts the hand proofs of `bd8901f` close
+      with a named split (Send1 J1, Send4 J1, J2, J6, Send5 J3) close by §3.5 and §3.6. Report
+      the parts closed by a named split, those refused, and the change in EasyCrypt time.
+- [ ] `--side-inv H2` and `H6` with `--force`, without the option: the same numbers. No side
+      invariant gets more admits than in the run of 2026-10-22.
 - [ ] `Proof_Statistics.md` in `ec4whs` updated, with the retries counted.
 
 ## 7. Open questions
@@ -266,3 +385,8 @@ lemma list moves into the `wantedlemmas` option:
 3. **Retry the first fallbacks too (`smt().`, `smt(<hints>).`)?** Recommended: no. The crush is
    the last fallback and has the most help (`/>`). A retry of each would triple the cost of a
    failing part.
+4. **The named split in hops too?** Recommended: no (§1.1: 0 of 23). Revisit if a hop with a small
+   precondition shows otherwise.
+5. **`MAX_NAMED_PAIRS` = 2?** Every measured side-tree split has one pair. Recommended: 2, to keep
+   the sentence under `--ec-timeout` at the default prover timeout. Raise it if §6 shows parts
+   with three pairs that the per-case split doesn't close.

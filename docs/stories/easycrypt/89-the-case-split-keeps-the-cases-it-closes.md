@@ -10,6 +10,12 @@ projections; without it the split reaches only 12 parts of `ec4whs`).
 that fails we also admit but don't remove the casing", and "use the move as the only fallback
 for each case". Open questions in §7. §3 uses the recommended answers; §7 Q1 is where the
 recommendation differs from the request.
+**Amended by:** story 90 (2026-10-22, 2026-10-23). Two statements here turned out wrong in the
+`ec4whs` measurements. §3.2's "`->` substitutes the binder" doesn't hold: `->` rewrites the
+conclusion only (story 90 §1). §4's "the crush alone in each case" is right for hops but wrong
+for the side tree, where the crush makes the case fail and a named case with `smt(<hints>)`
+closes it (story 90 §1.1). Story 90 changes the case sentence and adds a first attempt before
+the per-case split. This story's text stays as it was implemented.
 
 A **tactics** story, Rust only. Test-first.
 

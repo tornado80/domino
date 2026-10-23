@@ -3,11 +3,15 @@
 **Epic:** EasyCrypt Export — read `docs/stories/easycrypt/00-overview.md` first.
 **Branch:** `amir/easycrypt-export`
 **Depends on:** 66 (the key case split), 69 and 77 (side invariants, `side_inv_<C>`), 89 (each case
-closed or admitted on its own), 90 (`[->>|?]`; the retry with a longer smt timeout).
+closed or admitted on its own), 90 (`[->>|?]`; the retry with a longer smt timeout; the named split
+of §3.5; key pairs on a term index, §3.6).
 **Blocks:** nothing.
 **ADR:** none.
 **Decisions:** owner's request of 2026-10-22 ("create a story for instantiating the old invariant at
-the written key"), after the H7 side-invariant measurements of story 90 §6. Open questions in §7;
+the written key"), after the H7 side-invariant measurements of story 90 §6. Amended on 2026-10-23
+at the owner's request ("amend the stories"). Story 90's named split closes the leaf this story
+was first written for (Send1 J1). The evidence is now Send5 J9, from the hand proofs of commit
+`bd8901f` (§1). The `<k>` of the instance is read after the crush (§3.2). Open questions in §7;
 §3 uses the recommended answers.
 
 A **translation** change (one lemma per game invariant in `Comp_<C>.ec`) and a **tactics**
@@ -29,9 +33,38 @@ A side-invariant leaf proves a game invariant `forall ctr, … d_State.[ctr] …
   folded: an op over a record, then a conjunction of ops, each a `forall` over a binder. smt
   doesn't find the instance.
 
-Evidence: the one game-invariant admit of `--side-inv H7` that story 90's retry doesn't close
-(run of 2026-10-21, `SideInv_H7_Send1.ec` J1, `fresh_sid_authenticated_by_mac2`). Each leaf was
-taken alone (`easycrypt llm -upto`, every other leaf admitted):
+### 1.1 Send5 J9: an `=` case that only an instance closes (measured 2026-10-23)
+
+`SideInv_H7_Send5.ec` J9 (`fresh_accepted_first_has_second`) reads
+`d_State.[ctr0 <- v].[oget d_First.[sid0]]`. With story 90 §3.6 it gets the pair
+`(oget d_First{hr}.[sid0], ctr0{hr})`. The hand proof (`SideInv_H7_Send5_Lotta.ec`) splits on that
+equation, closes the `<>` case with `smt(get_setE)`, and in the `=` case unfolds `side_inv_H7`
+and instantiates an old invariant by hand. Measured on the leaf alone at 3 s, after the crush
+without smt (§3.2 step 1: the key then reads `ctr{hr}`):
+
+| Attempt | Result |
+|---|---|
+| Today: the crush `move: hpre … hpre4 => />; smt(<hints>).` | fails (`smt: timeout`) |
+| Named split, `smt(<hints>)` in both cases (story 90 §3.5) | fails |
+| `=` case: the step-3 sentence for each of the 12 invariants at the goal's binder `sid0` | none closes |
+| `=` case: the step-3 sentence for each of the 12 invariants at the key `ctr{hr}`, `rewrite -heq` | **`session_freshness_matches_honesty` closes** (12 s for the compile); the 11 others fail or don't apply |
+
+The closing invariant is one of the four candidates of §3.3. Of the 11 others at `ctr{hr}`:
+
+- five apply, but `smt` doesn't close;
+- four aren't a `forall` at the head (`fresh_accepted_first_has_second`, `mac3_…`, `mac4_…` and
+  `fresh_sid_authenticated_by_mac2`: "expecting a proof-term, not a formula");
+- two have a binder of another type (a tuple).
+
+### 1.2 Send1 J1: the first evidence, now closed by story 90
+
+The first draft of this story was written for this leaf: the one game-invariant admit of
+`--side-inv H7` that story 90's retry doesn't close (run of 2026-10-21, `SideInv_H7_Send1.ec` J1,
+`fresh_sid_authenticated_by_mac2`). Since 2026-10-23 story 90's named split
+(`case (ctr0{hr} = ctr1) => hc; smt(<hints>).`) closes it at 3 s with no instance (story 90
+§1.1). The measurements of the first draft stay here because they show why the instance is
+given one invariant at a time, with the old value substituted. Each leaf was taken alone
+(`easycrypt llm -upto`, every other leaf admitted):
 
 | Attempt | Result |
 |---|---|
@@ -49,9 +82,9 @@ Before `Send1` that session is a fresh initiator with `mess = 0`, and
 Two things follow from the last two rows: the instance must be given **one invariant at a time**
 (§3.3), and the old value must be substituted into it (§3.2).
 
-How much this buys is not known beyond this leaf. It's the last game-invariant admit of H7 once
-story 90 is in. Since stories 88–89 the split reaches many more side-invariant parts (108 parts
-of H2, H6 and H7 in the run of 2026-10-21). §6 measures.
+How much this buys is not known beyond J9. With story 90 (§3.5, §3.6) it's the last
+game-invariant admit of H7 that needs an instance. Since stories 88–89 the split reaches many
+more side-invariant parts (108 parts of H2, H6 and H7 in the run of 2026-10-21). §6 measures.
 
 ## 2. What the `=` case should do
 
@@ -88,8 +121,10 @@ This is a byte change of every `Comp_<C>.ec` with game invariants. Export tests 
 
 ### 3.2 Tactics: the instance attempt
 
-In `close_case`, only for a case whose path ends in an `=` entry (`binder = key`), only in the
-side tree (a `hoare` lemma `SideInv_<C>_<O>`, memory `{hr}`), when the closing sentence failed:
+In `close_case` of the per-case split, only for a case whose path ends in an `=` entry
+(`binder = key`, or `index = key` for a term pair of story 90 §3.6), only in the side tree (a
+`hoare` lemma `SideInv_<C>_<O>`, memory `{hr}`), when the closing sentence failed. The named
+split of story 90 §3.5 has already been refused at that point: it's tried before the bullets.
 
 1. Send `move: <premises> => />.` (the crush without its `smt`). Read the full front goal. Its
    conclusion is a chain `P1 => … => Pn => Q`. Send `move=> hw1 … hwn.` with fresh names
@@ -97,9 +132,12 @@ side tree (a `hoare` lemma `SideInv_<C>_<O>`, memory `{hr}`), when the closing s
 2. Read the hypotheses and find:
    - `hinv`: a hypothesis whose head is the op `Comp_<C>.side_inv_<C>`;
    - `habort`: a hypothesis `!Comp_<C>.Game_<C>.abort_flag{hr}`;
-   - `heq` (optional): a hypothesis `t = oget m.[k]`, where `m.[k]` is the written map (same
-     operator path and memory as in the update the split was made on) read at the case's key
-     `k`.
+   - `<k>`: the key of the written map's update (`m.[<k> <- v]`, same operator path and memory
+     as in the update the split was made on), **as it reads after step 1**. The crush
+     substitutes the `sp` equations, so the split's key `ctr0{hr}` becomes `ctr{hr}`. In both
+     measured leaves (Send1 J1, Send5 J9) the instance that closes is at `ctr{hr}`. If the
+     update isn't found, fall back to the split's key.
+   - `heq` (optional): a hypothesis `t = oget m.[<k>]`, the written map read at `<k>`.
 
    Without `hinv` or `habort` there's no attempt. Go to step 4.
 3. For each candidate invariant `<p>` (§3.3), send one sentence:
@@ -121,6 +159,13 @@ Checked by hand on `SideInv_H7_Send1.ec` J1 (`<k>` = `ctr{hr}`, `heq` the premis
 `<p>` = `early__fresh__session__has__no__complete__transcript` closes the `=` case, and with the
 crush on the `<>` case both cases close in 3 s.
 
+Checked by hand on `SideInv_H7_Send5.ec` J9 (§1.1): after `move: hpre hpre1 hpre2 hpre3 hpre4 =>
+/>.` and `move=> heq hinv habort hw4 … hw11.` (`<k>` = `ctr{hr}`), with
+`case (ctr{hr} = oget d_First{hr}.[sid0]) => hc; 2: smt(<hints>).`, the step-3 sentence with
+`<p>` = `session__freshness__matches__honesty` closes the `=` case. The measurement put the crush
+before the `case`, whereas Domino sends the `case` first and the crush in the case. §6 asks for
+the measurement in Domino's order.
+
 ### 3.3 Which invariants are candidates
 
 A game invariant of `<C>` is a candidate if its body, as Domino translated it, is
@@ -133,8 +178,10 @@ In `H7`, for writes to `d_State` at `ctr`, that gives four of twelve:
 `session_freshness_matches_honesty`, `early_fresh_session_has_no_complete_transcript`.
 
 They're tried **one at a time**, in `side_inv_<C>` order. All four at once doesn't close the
-measured case, even at 30 s (§1). Each attempt costs one sentence with one `smt` at the run's
-timeout.
+measured case, even at 30 s (§1.2). Each attempt costs one sentence with one `smt` at the run's
+timeout. The two measured leaves are closed by different candidates:
+`early_fresh_session_has_no_complete_transcript` for Send1 J1 and
+`session_freshness_matches_honesty` for Send5 J9.
 
 ### 3.4 Leaf budget and reports
 
@@ -161,6 +208,14 @@ timeout.
   `s` by unification, and `/(_ <k>)` fixes the binder.
 - **Instantiate in the `<>` case too, at the binder.** The `<>` cases measured so far close
   without it (story 90 §1, §6). Possible follow-up.
+- **Instantiate at the goal's own binder** (the claim's `sid0`, the old version of the invariant
+  being proved). In Send5 J9 none of the 12 invariants closes the `=` case this way (§1.1). The
+  key is where the program read the old state.
+- **Multi-binder invariants and side goals.** The hand proofs of `bd8901f` also instantiate
+  invariants with several binders (Send4 J3: `inv kid0{hr} d_U0{hr} d_V0{hr} (oget ni_{hr})
+  (oget nr0{hr}) vnn`), at program variables (Send2 J3: `inv ctr{hr}`). Those are `rcond`
+  side goals, not `=` cases of a split, and the values aren't a split's key. They need their
+  own story, with the side-goal tactics (§7 Q4).
 - **Hops.** In an `Eq_*` leaf the precondition's `side_inv_<C>` are already unfolded (`rewrite …
   in hpre`), and the relation's conjuncts are ops over two records. The same idea needs other
   lemmas and another way to find the hypothesis. Out of scope (§7 Q2).
@@ -182,6 +237,12 @@ timeout.
 - [ ] Candidates: an invariant whose `int` binder indexes `d_State` is a candidate for a write to
       `d_State`; an invariant that reads only `d_First`, one with two binders, and one whose
       binder has another type are not.
+- [ ] `<k>` after the crush: the split's key is `ctr0{hr}`, and after step 1 the update reads
+      `m.[ctr{hr} <- v]`. The sentence instantiates at `ctr{hr}`, and `heq` is found at
+      `ctr{hr}`. No such update: the split's key.
+- [ ] The `=` case of a term pair (story 90 §3.6, `[hc|hc]`): the attempt runs as for a binder
+      pair.
+- [ ] The named split (story 90 §3.5) accepted: no attempt.
 - [ ] `<>` cases and hop leaves (`Eq_*`): no attempt.
 - [ ] Leaf budget spent: no attempt.
 - [ ] `report.txt` counts the cases closed this way.
@@ -189,8 +250,13 @@ timeout.
 ## 6. Acceptance criteria
 
 - [ ] All tests of §5 green; `cargo clippy` clean.
-- [ ] `ec4whs`: `--side-inv H7 --force`, with `--smt-retry-timeout 30` (story 90): `SideInv_H7_Send1.ec`
-      J1 closes; report the H7 admits (target 0 game-invariant admits), how many `=` cases close
+- [ ] Measure first, by hand, in Domino's order: in `SideInv_H7_Send5.ec` J9,
+      `case (oget d_First{hr}.[sid0] = ctr0{hr}) => [hc|hc].`, the `<>` bullet with the crush,
+      and the `=` bullet with step 1 and the step-3 sentence for
+      `session__freshness__matches__honesty`. Record whether it closes and at which `<k>`.
+- [ ] `ec4whs`: `--side-inv H7 --force`, with `--smt-retry-timeout 30` (story 90):
+      `SideInv_H7_Send5.ec` J9 closes, and Send1 J1 is closed by the named split, with no
+      attempt. Report the H7 admits (target: 0 game-invariant admits), how many `=` cases close
       this way, attempts sent and rejected, and the change in EasyCrypt time.
 - [ ] The same for `--side-inv H2` and `H6`, with and without the retry.
 - [ ] All side-invariant files compile with the new `Comp_<C>.ec` lemmas; every hop that
@@ -207,3 +273,7 @@ timeout.
 3. **Also try instances at the keys of the other writes in the same leaf** (a leaf that writes
    `d_State` and `d_First`)? Recommended: no, only the case's key, to keep the attempts at one per
    candidate.
+4. **Side goals and multi-binder instances** (the `rcond` side goals of Send2 J3 and Send4 J3,
+   closed by hand in `bd8901f`)? Recommended: a separate story. The values there come from the
+   program (`ctr{hr}`, `kid0{hr}`, …), not from a split, and the side goals are first cut down
+   by the recipe that drops the `side_inv` premises.
