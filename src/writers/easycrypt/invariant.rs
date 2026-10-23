@@ -1415,6 +1415,22 @@ pub fn side_invariant_ops(
     Ok(ops)
 }
 
+/// The side invariants a side goal's pruned crush drops (story 92): `Comp_<C>.side_inv_<C>` of
+/// each composition of `comps` that has side invariants, in order, each name once. These are
+/// the operators the precondition applies (`side_inv_app` in `proof.rs`) and the first item of
+/// [`side_invariant_ops`].
+pub fn side_inv_drop_ops(comps: &[&crate::package::Composition]) -> Vec<String> {
+    let mut ops: Vec<String> = Vec::new();
+    for comp in comps.iter().filter(|c| side::has_side_invariants(c)) {
+        let name = super::names::mangle_name(NameKind::Module, &comp.name);
+        let op = format!("Comp_{name}.{}", side_inv_op_name(&name));
+        if !ops.contains(&op) {
+            ops.push(op);
+        }
+    }
+    ops
+}
+
 /// The operators of a side-invariant job of `comp`: [`side_invariant_ops`], and, when the
 /// package invariants come from the package lemmas and the walked goal is only the game
 /// invariants (story 77), `game_inv_<C>` after `side_inv_<C>`, so that the walk unfolds the

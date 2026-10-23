@@ -92,7 +92,7 @@ use crate::writers::easycrypt::export::{
     EquivalenceReport, ExportedTheorem, PkgInvReport, SideInvReport,
 };
 use crate::writers::easycrypt::invariant::{
-    invariant_ops, leaf_part_ops, package_invariant_ops, side_job_ops,
+    invariant_ops, leaf_part_ops, package_invariant_ops, side_inv_drop_ops, side_job_ops,
 };
 use crate::writers::easycrypt::lower::inline_oracle_ec;
 use crate::writers::easycrypt::progress::{NopProgressBoard, ProgressBoard};
@@ -1984,6 +1984,12 @@ where
         }
     };
     let unfold_ops: Vec<String> = unfold.into_iter().map(|op| op.name).collect();
+    // story 92: the side invariants of the precondition, which the pruned crush drops
+    let drop_ops = match kind {
+        JobKind::Equivalence => side_inv_drop_ops(&[left.game(), right.game()]),
+        JobKind::SideInvariants(_) => side_inv_drop_ops(&[left.game()]),
+        JobKind::PackageInvariants(_) => Vec::new(),
+    };
     // the listings the alignment check compares with: only an equivalence has a router to align
     let listings = match kind {
         JobKind::Equivalence => Some((
@@ -2036,6 +2042,7 @@ where
         tree: &tree,
         hints: &options.smt_hints,
         unfold_ops: &unfold_ops,
+        drop_ops: &drop_ops,
         part_ops: &part_ops,
         quick_close: options.quick_close,
         oracle,

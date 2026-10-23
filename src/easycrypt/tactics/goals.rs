@@ -305,6 +305,69 @@ pub(super) fn fresh_name_besides(goal: &Goal, base: &str, used: &[String]) -> St
         .expect("an unused name exists")
 }
 
+/// The pruned crush of a goal (story 92 §3.2), sent after `move=> /> <mems>.`: each binder and
+/// premise of the conclusion named in order, each premise whose head operator is in `drop_ops`
+/// given `_`, and every other name moved back into the goal before `smt()`:
+/// `move=> x0 h0 _ h1; move: x0 h0 h1; smt().` A `forall` between two premises is walked too.
+/// Each name is fresh against the hypotheses of `goal`. A memory binder keeps its name and stays
+/// in the context. `None` if the conclusion has no premise.
+pub(super) fn pruned_crush_sentence(goal: &Goal, drop_ops: &[String]) -> Option<String> {
+    let mut intro: Vec<String> = Vec::new();
+    let mut kept: Vec<String> = Vec::new();
+    let mut premises = 0;
+    let mut form = &goal.concl;
+    loop {
+        if let Some((names, body)) = as_forall(form) {
+            for name in names {
+                let fresh = if name.starts_with('&') {
+                    fresh_name_besides(goal, name, &intro)
+                } else {
+                    let x = fresh_name_besides(goal, &format!("x{}", kept.len()), &intro);
+                    kept.push(x.clone());
+                    x
+                };
+                intro.push(fresh);
+            }
+            form = body;
+        } else if let Some((premise, rest)) = as_implication(form) {
+            premises += 1;
+            if is_dropped(premise, drop_ops) {
+                intro.push("_".into());
+            } else {
+                let h = fresh_name_besides(goal, &format!("h{}", kept.len()), &intro);
+                kept.push(h.clone());
+                intro.push(h);
+            }
+            form = rest;
+        } else {
+            break;
+        }
+    }
+    if premises == 0 {
+        return None;
+    }
+    let intro = intro.join(" ");
+    Some(if kept.is_empty() {
+        format!("move=> {intro}; smt().")
+    } else {
+        format!("move=> {intro}; move: {}; smt().", kept.join(" "))
+    })
+}
+
+/// Whether the head operator of `premise` is one of `drop_ops`, compared by qualified name: EasyCrypt
+/// may print the operator with more qualifiers before it (`Top.Comp_C.side_inv_C`).
+fn is_dropped(premise: &Form, drop_ops: &[String]) -> bool {
+    let Some(op) = op_name(premise).filter(|_| premise.kind == "app") else {
+        return false;
+    };
+    drop_ops.iter().any(|d| {
+        op == d
+            || op
+                .strip_suffix(d.as_str())
+                .is_some_and(|p| p.ends_with('.'))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,6 +474,91 @@ mod tests {
         let form = quant(r#"{"name":"&m","ident":{"name":"&m","tag":2},"kind":"mem"}"#);
         let (names, _) = as_forall(&form).unwrap();
         assert_eq!(names, ["&m"]);
+    }
+
+    fn implies(a: &str, b: &str) -> String {
+        format!(r#"{{"kind":"app","op":"Top.Logic.=>","args":[{a},{b}]}}"#)
+    }
+
+    fn forall(names: &[&str], body: &str) -> String {
+        let binders: Vec<String> = names
+            .iter()
+            .map(|n| format!(r#"{{"name":"{n}","kind":"var"}}"#))
+            .collect();
+        format!(
+            r#"{{"kind":"quant","quantifier":"forall","binders":[{}],"body":{body}}}"#,
+            binders.join(",")
+        )
+    }
+
+    fn atom(op: &str) -> String {
+        app(op, &[])
+    }
+
+    fn goal_of(concl: &str) -> Goal {
+        serde_json::from_str(&format!(r#"{{"id":1,"concl":{concl}}}"#)).unwrap()
+    }
+
+    const SIDE_INV: &str = "Comp_H5.side_inv_H5";
+
+    /// `forall (a b : int), A => side_inv_H5 r => B => forall z, C => D`.
+    fn story92_goal(side_inv: &str) -> Goal {
+        let tail = implies(&atom("C"), &atom("D"));
+        let inner = implies(&atom("B"), &forall(&["z"], &tail));
+        goal_of(&forall(
+            &["a", "b"],
+            &implies(&atom("A"), &implies(side_inv, &inner)),
+        ))
+    }
+
+    #[test]
+    fn the_pruned_crush_drops_the_side_invariant_and_reverts_the_rest_in_order() {
+        let side_inv = app(&format!("Top.{SIDE_INV}"), &[local("r")]);
+        let sentence = pruned_crush_sentence(&story92_goal(&side_inv), &[SIDE_INV.into()]);
+        assert_eq!(
+            sentence.as_deref(),
+            Some("move=> x0 x1 h2 _ h3 x4 h5; move: x0 x1 h2 h3 x4 h5; smt().")
+        );
+    }
+
+    #[test]
+    fn without_drop_ops_the_pruned_crush_drops_nothing() {
+        let side_inv = app(&format!("Top.{SIDE_INV}"), &[local("r")]);
+        let sentence = pruned_crush_sentence(&story92_goal(&side_inv), &[]);
+        assert_eq!(
+            sentence.as_deref(),
+            Some("move=> x0 x1 h2 h3 h4 x5 h6; move: x0 x1 h2 h3 h4 x5 h6; smt().")
+        );
+    }
+
+    #[test]
+    fn a_side_invariant_applied_to_a_record_literal_is_dropped() {
+        // parentheses leave no node in the formula tree: the application is the premise
+        let record = r#"{"kind":"record","fields":[]}"#.to_string();
+        let side_inv = app(SIDE_INV, &[record]);
+        let sentence = pruned_crush_sentence(&story92_goal(&side_inv), &[SIDE_INV.into()]);
+        assert!(sentence.unwrap().starts_with("move=> x0 x1 h2 _ "));
+    }
+
+    #[test]
+    fn a_goal_without_a_premise_has_no_pruned_crush_and_one_with_only_dropped_premises_no_move() {
+        let none = goal_of(&forall(&["a"], &atom("A")));
+        assert_eq!(pruned_crush_sentence(&none, &[SIDE_INV.into()]), None);
+        let only = goal_of(&implies(&atom(SIDE_INV), &atom("A")));
+        assert_eq!(
+            pruned_crush_sentence(&only, &[SIDE_INV.into()]).as_deref(),
+            Some("move=> _; smt().")
+        );
+    }
+
+    #[test]
+    fn the_pruned_crush_names_are_fresh_against_the_hypotheses() {
+        let mut goal = goal_of(&implies(&atom("A"), &atom("B")));
+        goal.hyps = serde_json::from_str(r#"[{"name":"h0","kind":"hyp"}]"#).unwrap();
+        assert_eq!(
+            pruned_crush_sentence(&goal, &[]).as_deref(),
+            Some("move=> h01; move: h01; smt().")
+        );
     }
 
     fn local(name: &str) -> String {

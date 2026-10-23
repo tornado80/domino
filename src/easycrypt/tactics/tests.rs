@@ -1409,6 +1409,7 @@ mod live {
             tree: &tree,
             hints: &[],
             unfold_ops: &["inv".to_string(), "params_inv".to_string()],
+            drop_ops: &[],
             part_ops: &[],
             timeouts: Timeouts {
                 general: Duration::from_secs(60),
@@ -3440,6 +3441,7 @@ done
         tree: &tree,
         hints: &[],
         unfold_ops: &["inv".to_string()],
+        drop_ops: &["Comp_H.side_inv_H".to_string()],
         part_ops: &[],
         timeouts: Timeouts {
             general: Duration::from_secs(10),
@@ -3697,6 +3699,7 @@ done
         tree: &tree,
         hints: &[],
         unfold_ops: &["inv".to_string()],
+        drop_ops: &["Comp_H.side_inv_H".to_string()],
         part_ops,
         timeouts: Timeouts {
             general: Duration::from_secs(10),
@@ -6151,35 +6154,68 @@ fn side_goal_fallbacks(run: &LeafRun) -> Vec<&str> {
         .collect()
 }
 
-#[test]
-fn a_side_goal_tries_the_crush_after_the_quick_close_then_the_four_fallbacks() {
+/// Story 92: the goal after `move=> /> &1 &2.`: `A => Comp_H.side_inv_H r => g`.
+fn opened() -> String {
+    formula(
+        r#"{"kind":"app","pp":"i","op":"Top.Logic.=>","args":[
+            {"kind":"app","pp":"A","op":"Top.A"},
+            {"kind":"app","pp":"i","op":"Top.Logic.=>","args":[
+                {"kind":"app","pp":"s","op":"Top.Comp_H.side_inv_H","args":[{"kind":"local","name":"r"}]},
+                {"kind":"app","pp":"g","op":"Top.g"}]}]}"#,
+    )
+}
+
+/// Story 92: the pruned crush of [`opened`].
+const PRUNED: &str = "move=> h0 _; move: h0; smt().";
+
+/// The side goal of story 86, the goals of its fallbacks, and `arms` for the pruned crush.
+fn run_pruned(arms: &str) -> LeafRun {
     let goals = [
         ("side", proof_of(&side_goal(DEEP_PREMISE), 1)),
         ("intro", proof_of(&introduced(DEEP_PREMISE), 1)),
+        ("opened", proof_of(&opened(), 1)),
     ];
-    let arms = r#"
+    let arms = format!(
+        r#"
     "move => &1 &2 hpre.") g=intro; ans;;
+    "move=> /> &1 &2.") g=opened; ans;;
     "pragma Goals:printall.") n=$((n-1)); ans;;
-    admit.) g=none; ans;;"#;
-    let run = run_side_goal(&goals, "side", arms);
+    admit.) g=none; ans;;{arms}"#
+    );
+    run_side_goal(&goals, "side", &arms)
+}
+
+#[test]
+fn a_side_goal_tries_the_crush_after_the_quick_close_then_the_three_fallbacks() {
+    let run = run_pruned("");
     let hints = "smt(get_setE mem_set remE mem_rem emptyE).";
     assert_eq!(
         side_goal_fallbacks(&run),
         [
             "auto => /#.",
             "move=> /> &1 &2 *; smt().",
-            "smt().",
             "move => &1 &2 hpre.",
             // the premise is cut above `inv`: it may mention it, so the unfold is sent
             "rewrite /inv in hpre.",
             "smt().",
             hints,
-            "move => &1 &2 hpre.",
-            "rewrite /inv in hpre.",
-            hints,
+            "move=> /> &1 &2.",
+            PRUNED,
         ]
     );
+    assert!(run.requests.contains(&"full move=> /> &1 &2.".to_string()));
     assert_eq!(run.admits.len(), 1);
+    assert_eq!(run.admits[0].reason, AdmitReason::DominoVerifiedEcFailed);
+    assert!(!run.script.contains("move=> />"), "{}", run.script);
+}
+
+#[test]
+fn the_pruned_crush_closes_a_side_goal_and_nothing_else_is_sent() {
+    let run = run_pruned(&format!("\n    \"{PRUNED}\") g=none; ans;;"));
+    assert_eq!(side_goal_fallbacks(&run).last(), Some(&PRUNED));
+    assert!(run.admits.is_empty());
+    assert!(run.script.contains("move=> /> &1 &2."), "{}", run.script);
+    assert!(run.script.contains(PRUNED), "{}", run.script);
 }
 
 #[test]
@@ -6202,15 +6238,26 @@ fn the_crush_closes_a_side_goal_and_nothing_else_is_sent() {
 
 #[test]
 fn a_crush_that_leaves_a_goal_open_is_rolled_back_and_fallback_2_follows() {
-    let goals = [("side", proof_of(&side_goal(DEEP_PREMISE), 1))];
+    let goals = [
+        ("side", proof_of(&side_goal(DEEP_PREMISE), 1)),
+        ("intro", proof_of(&introduced(DEEP_PREMISE), 1)),
+    ];
     // `/>` splits the goal and `smt()` closes only one of the two: the count does not drop
     let arms = r#"
     "move=> /> &1 &2 *; smt().") ans;;
+    "move => &1 &2 hpre.") g=intro; ans;;
     "smt().") g=none; ans;;"#;
     let run = run_side_goal(&goals, "side", arms);
+    // story 92: fallback 2 is `smt().` with the premise unfolded
     assert_eq!(
         side_goal_fallbacks(&run),
-        ["auto => /#.", "move=> /> &1 &2 *; smt().", "smt()."]
+        [
+            "auto => /#.",
+            "move=> /> &1 &2 *; smt().",
+            "move => &1 &2 hpre.",
+            "rewrite /inv in hpre.",
+            "smt()."
+        ]
     );
     assert!(run.admits.is_empty());
     assert!(!run.script.contains("move=> />"), "{}", run.script);
@@ -6222,10 +6269,11 @@ fn a_side_goal_without_a_premise_gets_no_crush() {
         "side",
         proof_of(&formula(r#"{"kind":"app","pp":"g","op":"Top.g"}"#), 1),
     )];
-    let arms = r#"
-    "smt().") g=none; ans;;"#;
-    let run = run_side_goal(&goals, "side", arms);
-    assert_eq!(side_goal_fallbacks(&run), ["auto => /#.", "smt()."]);
+    let hints = "smt(get_setE mem_set remE mem_rem emptyE).";
+    let arms = format!("\n    \"{hints}\") g=none; ans;;");
+    let run = run_side_goal(&goals, "side", &arms);
+    // story 92: no crush, no premise to unfold, no pruned crush
+    assert_eq!(side_goal_fallbacks(&run), ["auto => /#.", hints]);
 }
 
 /// Story 86: EasyCrypt accepts `rewrite /inv in hpre.` when `inv` is not in `hpre`, and warns

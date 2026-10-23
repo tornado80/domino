@@ -1154,6 +1154,25 @@ mod tests {
         assert!(!q.contains("pkgparams"), "{q}");
     }
 
+    /// Story 92 §3.3: the pruned crush of an equivalence job drops the side invariant of each
+    /// side, and each name it drops is the one the precondition applies.
+    #[test]
+    fn the_drop_list_of_an_equivalence_holds_both_side_invariants_of_the_precondition() {
+        let (theorem, _) = super::super::tests::load_project(PARAMS, "Proof");
+        let left = theorem.find_game_instance("left").unwrap();
+        let right = theorem.find_game_instance("right").unwrap();
+        let drop = super::super::side_inv_drop_ops(&[left.game(), right.game()]);
+        assert_eq!(drop, ["Comp_G.side_inv_G", "Comp_H.side_inv_H"]);
+        let exported = export(PARAMS, "Proof").unwrap();
+        let proof = file(&exported, "Eq_left_right.ec");
+        for op in &drop {
+            assert!(proof.contains(op.as_str()), "{op} in:\n{proof}");
+        }
+        // one composition on both sides: its name once
+        let twice = super::super::side_inv_drop_ops(&[left.game(), left.game()]);
+        assert_eq!(twice, ["Comp_G.side_inv_G"]);
+    }
+
     /// Story 78: each variant's package lemma fills the function field with its own operator.
     #[test]
     fn each_variants_package_lemma_applies_the_template_to_its_own_function() {

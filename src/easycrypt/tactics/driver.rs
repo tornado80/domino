@@ -558,8 +558,8 @@ fn part_view(
 pub(super) const BASE_SMT_LEMMAS: [&str; 5] = ["get_setE", "mem_set", "remE", "mem_rem", "emptyE"];
 
 /// The length of the fallback sequence: the crush `move=> /> <binders> *; smt().` (story 86),
-/// then `smt()` and `smt(hints)`, each also with the premise unfolded.
-const FALLBACKS: usize = 5;
+/// `smt().` with the premise unfolded, `smt(hints).`, then the pruned crush (story 92).
+const FALLBACKS: usize = 4;
 
 /// The length of the part fallback sequence ([`Prover::atom`]); the fourth is the key case
 /// split.
@@ -714,6 +714,12 @@ pub(super) struct Prover<'a> {
     /// [`invariant_ops`]: crate::writers::easycrypt::invariant::invariant_ops
     /// [`side_invariant_ops`]: crate::writers::easycrypt::invariant::side_invariant_ops
     pub unfold_ops: &'a [String],
+    /// The side invariants in the precondition (`Comp_<C>.side_inv_<C>`, from
+    /// [`side_inv_drop_ops`]): the premises the pruned crush drops (story 92). Empty for a
+    /// package-invariant job.
+    ///
+    /// [`side_inv_drop_ops`]: crate::writers::easycrypt::invariant::side_inv_drop_ops
+    pub drop_ops: &'a [String],
     /// The operators unfolded inside a leaf part ([`leaf_part_ops`] for an oracle lemma, the
     /// side invariant operators for a side-invariant lemma), matched by the last component of
     /// their name: a `StateRelation_` operator starts a [`Part::Relation`], an operator with a
@@ -1279,44 +1285,62 @@ impl Prover<'_> {
         Ok(false)
     }
 
-    /// The fallback sequence (§3.5): the crush (story 86), then `smt()`, then the same with the
-    /// premise introduced and the invariant unfolded in it, then the hint list likewise.
+    /// The pruned crush of a side goal (story 92 §3.2): `move=> /> <binders>.`, then
+    /// [`goals::pruned_crush_sentence`] on the goal it leaves, which drops the premises of
+    /// [`Self::drop_ops`] and moves the others back into the goal before `smt()`. Both
+    /// sentences are undone unless the goal closes. `Ok(false)`, with nothing sent, on a goal
+    /// without a premise.
+    fn try_pruned_crush(&mut self) -> R<bool> {
+        let Some(names) = self.premise_binders() else {
+            return Ok(false);
+        };
+        let before = self.count();
+        let snap = self.snap();
+        if !self.send(&format!("move=> /> {names}."), Want::Full)? {
+            return Ok(false);
+        }
+        if self.count() < before {
+            return Ok(true);
+        }
+        let sentence = self
+            .front()
+            .and_then(|g| goals::pruned_crush_sentence(g, self.drop_ops));
+        if let Some(sentence) = sentence {
+            if self.send(&sentence, Want::Status)? && self.count() + 1 == before {
+                return Ok(true);
+            }
+        }
+        self.rollback(snap)?;
+        Ok(false)
+    }
+
+    /// Runs fallback `k` of the sequence as a closing attempt, the live page showing `shown`.
+    fn fallback(&mut self, k: usize, shown: &str, f: impl FnOnce(&mut Self) -> R<bool>) -> R<bool> {
+        let closing = Closing::Fallback { k, of: FALLBACKS };
+        self.as_role(Role::SideGoalFallback(k), |p| {
+            p.closing_attempt(closing, shown, f)
+        })
+    }
+
+    /// The fallback sequence (§3.5, story 92 §3.1): the crush (story 86), `smt().` with the
+    /// premise introduced and the invariant unfolded in it, the hint list, then the pruned
+    /// crush. The pruned crush is last: a goal that an earlier fallback closes never reaches it.
     fn fallbacks(&mut self) -> R<bool> {
         self.as_role(Role::Reduce, Self::reduce_to_ambient)?;
-        let crush = Closing::Fallback {
-            k: 1,
-            of: FALLBACKS,
-        };
-        let closed = self.as_role(Role::SideGoalFallback(1), |p| {
-            p.closing_attempt(crush, "move=> /> <binders> *; smt()", Self::try_crush)
-        })?;
-        if closed {
+        if self.fallback(1, "move=> /> <binders> *; smt()", Self::try_crush)? {
+            return Ok(true);
+        }
+        if self.fallback(2, "smt() (premise unfolded)", |p| {
+            p.try_with_premise("smt().")
+        })? {
             return Ok(true);
         }
         let hints = self.hint_sentence();
-        for (i, tail) in ["smt().", hints.as_str()].into_iter().enumerate() {
-            let k = 2 * i + 2;
-            let shown = tail.trim_end_matches('.');
-            let plain = Closing::Fallback { k, of: FALLBACKS };
-            let closed = self.as_role(Role::SideGoalFallback(k), |p| {
-                p.closing_attempt(plain, shown, |p| p.try_close(&[tail]))
-            })?;
-            if closed {
-                return Ok(true);
-            }
-            let unfolded = Closing::Fallback {
-                k: k + 1,
-                of: FALLBACKS,
-            };
-            let shown = format!("{shown} (premise unfolded)");
-            let closed = self.as_role(Role::SideGoalFallback(k + 1), |p| {
-                p.closing_attempt(unfolded, &shown, |p| p.try_with_premise(tail))
-            })?;
-            if closed {
-                return Ok(true);
-            }
+        let shown = hints.trim_end_matches('.').to_string();
+        if self.fallback(3, &shown, |p| p.try_close(&[&hints]))? {
+            return Ok(true);
         }
-        Ok(false)
+        self.fallback(4, "pruned crush", Self::try_pruned_crush)
     }
 
     /// Runs `f`, a closing attempt, and tells the live page what it was and how it ended.
