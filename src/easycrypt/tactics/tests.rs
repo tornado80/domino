@@ -4134,6 +4134,46 @@ fn a_claim_that_fails_in_domino_is_admitted_at_once_and_a_part_without_a_claim_i
     assert_eq!(whole.domino, DominoView::Fails);
 }
 
+/// What the part of [`key_split_fake`] reads, the hypotheses its goals have, and the fake's
+/// extra arms.
+#[derive(Default)]
+struct SplitFake<'a> {
+    reads: Vec<(&'a str, String)>,
+    hyps: &'a [&'a str],
+    extra: &'a str,
+}
+
+impl<'a> SplitFake<'a> {
+    /// Reads at the keys `k` and `j` (`Comp_H3.M.k{2}`, …), at the binders of `binders`.
+    fn at(binders: &[&str], extra: &'a str) -> SplitFake<'a> {
+        let reads = ["k", "j"]
+            .into_iter()
+            .zip(binders)
+            .map(|(k, b)| (k, fake_local(b)));
+        SplitFake {
+            reads: reads.collect(),
+            extra,
+            ..SplitFake::default()
+        }
+    }
+}
+
+fn fake_local(n: &str) -> String {
+    format!(r#"{{"kind":"local","name":"{n}"}}"#)
+}
+
+/// `m.[Comp_H3.M.<key>{2} <- v].[<index>]`.
+fn map_read(key: &str, index: &str) -> String {
+    let key =
+        format!(r#"{{"kind":"pvar","scope":"global","path":"Top.Comp_H3.M./{key}","mem":"&2"}}"#);
+    let set = format!(
+        r#"{{"kind":"app","op":"Top.FMap._.[_<-_]","args":[{},{key},{}]}}"#,
+        fake_local("m"),
+        fake_local("v")
+    );
+    format!(r#"{{"kind":"app","op":"Top.FMap._.[_]","args":[{set},{index}]}}"#)
+}
+
 /// Story 66: `forall c d, P (m.[k{2} <- v]).[c] (m.[j{2} <- v]).[d]` after `auto` (two pairs
 /// when `two`, else only the read at `c`), with a fake EasyCrypt in which only the key cases
 /// close (`p1` is the part, `nK` is K goals after a `case`). Story 89: the crush of case `i`
@@ -4148,64 +4188,66 @@ fn run_key_split_with(
     budget: Option<Duration>,
     pairs: Vec<PairRecord>,
 ) -> LeafRun {
-    let second = if two { "d" } else { "" };
-    key_split_fake(refuse, "", second, closes, slow, pairs, |p| {
-        p.leaf_budget = budget;
-        p.prove_node(0).unwrap();
-        assert_eq!(p.count(), 0, "the leaf is closed");
-    })
+    let binders: &[&str] = if two { &["c", "d"] } else { &["c"] };
+    key_split_fake(
+        refuse,
+        &SplitFake::at(binders, ""),
+        closes,
+        slow,
+        pairs,
+        |p| {
+            p.leaf_budget = budget;
+            p.prove_node(0).unwrap();
+            assert_eq!(p.count(), 0, "the leaf is closed");
+        },
+    )
 }
 
 /// The fake EasyCrypt of [`run_key_split_with`], and a prover on it that `act` drives. The
-/// second read is at binder `second` (`c` or `d`; none when empty); the arms of `extra` come
-/// first.
+/// part reads `m.[K <- v].[I]` for each `(K, I)` of `fake.reads` (`I` a formula), and its
+/// goals have hypotheses named `fake.hyps`; the arms of `fake.extra` come first.
 fn key_split_fake(
     refuse: &str,
-    extra: &str,
-    second: &str,
+    fake: &SplitFake<'_>,
     closes: &[usize],
     slow: u32,
     pairs: Vec<PairRecord>,
     act: impl FnOnce(&mut super::driver::Prover<'_>),
 ) -> LeafRun {
-    let local = |n: &str| format!(r#"{{"kind":"local","name":"{n}"}}"#);
-    let key = |n: &str| {
-        format!(r#"{{"kind":"pvar","scope":"global","path":"Top.Comp_H3.M./{n}","mem":"&2"}}"#)
-    };
-    let read = |k: &str, b: &str| {
-        let set = format!(
-            r#"{{"kind":"app","op":"Top.FMap._.[_<-_]","args":[{},{},{}]}}"#,
-            local("m"),
-            key(k),
-            local("v")
-        );
-        format!(
-            r#"{{"kind":"app","op":"Top.FMap._.[_]","args":[{set},{}]}}"#,
-            local(b)
-        )
-    };
-    let second = if second.is_empty() {
-        local("d")
-    } else {
-        read("j", second)
-    };
-    let body = format!(
-        r#"{{"kind":"app","pp":"","op":"Top.P","args":[{},{second}]}}"#,
-        read("k", "c"),
-    );
+    let reads: Vec<String> = fake.reads.iter().map(|(k, i)| map_read(k, i)).collect();
+    let mut args = reads.join(",");
+    if fake.reads.len() < 2 {
+        args += &format!(",{}", fake_local("d"));
+    }
+    let body = format!(r#"{{"kind":"app","pp":"","op":"Top.P","args":[{args}]}}"#);
     let binder = |n: &str| format!(r#"{{"name":"{n}","kind":"var","type":{{"pp":"int"}}}}"#);
     let all = format!(
         r#"{{"kind":"quant","pp":"","quantifier":"forall","binders":[{},{}],"body":{body}}}"#,
         binder("c"),
         binder("d")
     );
+    let hyps: Vec<String> = fake
+        .hyps
+        .iter()
+        .map(|h| {
+            format!(
+                r#"{{"name":"{h}","kind":"hyp","form":{}}}"#,
+                fake_local("t")
+            )
+        })
+        .collect();
+    let part = format!(
+        r#"{{"id":1,"hyps":[{}],"concl":{body},"text":"f"}}"#,
+        hyps.join(",")
+    );
+    let extra = fake.extra;
     let goals = [
         ("start", proof_of(&program_with_ifs(&[], &[]), 1)),
         ("all", proof_of(&formula(&all), 1)),
-        ("p1", proof_of(&formula(&body), 1)),
-        ("n1", proof_of(&formula(&body), 1)),
-        ("n2", proof_of(&formula(&body), 2)),
-        ("n3", proof_of(&formula(&body), 3)),
+        ("p1", proof_of(&part, 1)),
+        ("n1", proof_of(&part, 1)),
+        ("n2", proof_of(&part, 2)),
+        ("n3", proof_of(&part, 3)),
     ];
     let closes: Vec<String> = closes.iter().map(ToString::to_string).collect();
     let closes = closes.join(" ");
@@ -4390,12 +4432,19 @@ fn the_cases_after_the_leaf_budget_are_admitted_without_a_crush() {
 /// with one label are split, each with an admitted case. The report counts two parts.
 #[test]
 fn the_report_counts_each_split_part_once() {
-    let run = key_split_fake("refuse-none", "", "", &[2, 4], 0, vec![], |p| {
-        p.prove_node(0).unwrap();
-        p.session.send("start.", Want::Full).unwrap();
-        p.prove_node(0).unwrap();
-        assert_eq!(p.count(), 0, "the leaf is closed");
-    });
+    let run = key_split_fake(
+        "refuse-none",
+        &SplitFake::at(&["c"], ""),
+        &[2, 4],
+        0,
+        vec![],
+        |p| {
+            p.prove_node(0).unwrap();
+            p.session.send("start.", Want::Full).unwrap();
+            p.prove_node(0).unwrap();
+            assert_eq!(p.count(), 0, "the leaf is closed");
+        },
+    );
     let claims: Vec<_> = run.admits.iter().map(|a| a.claim.as_str()).collect();
     let case = "equal-output+invariant (case c = Comp_H3.M.k{2})";
     assert_eq!(claims, [case, case], "{:?}", run.admits);
@@ -4409,10 +4458,17 @@ const RETRY: &str =
 
 /// [`key_split_fake`] with both reads at binder `c`, so one binder has the keys `k` and `j`.
 fn run_one_binder_two_keys(extra: &str, closes: &[usize]) -> LeafRun {
-    key_split_fake("refuse-none", extra, "c", closes, 0, vec![], |p| {
-        p.prove_node(0).unwrap();
-        assert_eq!(p.count(), 0, "the leaf is closed");
-    })
+    key_split_fake(
+        "refuse-none",
+        &SplitFake::at(&["c", "c"], extra),
+        closes,
+        0,
+        vec![],
+        |p| {
+            p.prove_node(0).unwrap();
+            assert_eq!(p.count(), 0, "the leaf is closed");
+        },
+    )
 }
 
 /// Story 90 §3.2: EasyCrypt proves the two keys of `c` equal: one `have`, one `case`, two
@@ -4459,11 +4515,18 @@ fn an_undone_split_undoes_the_have() {
 /// `retry` (shell commands). `timeout` is `--smt-retry-timeout`.
 fn run_retry(crush: &str, retry: &str, timeout: Option<u32>) -> LeafRun {
     let extra = format!("    \"{CRUSH}\") {crush};;\n    \"{RETRY}\") {retry};;");
-    key_split_fake("refuse-none", &extra, "", &[], 0, vec![], |p| {
-        p.smt_retry_timeout = timeout;
-        p.prove_node(0).unwrap();
-        assert_eq!(p.count(), 0, "the leaf is closed");
-    })
+    key_split_fake(
+        "refuse-none",
+        &SplitFake::at(&["c"], &extra),
+        &[],
+        0,
+        vec![],
+        |p| {
+            p.smt_retry_timeout = timeout;
+            p.prove_node(0).unwrap();
+            assert_eq!(p.count(), 0, "the leaf is closed");
+        },
+    )
 }
 
 #[test]
@@ -4579,8 +4642,8 @@ fn the_report_counts_retries_and_named_splits_only_when_there_are_any() {
 const NAMED: &str = "smt(get_setE mem_set remE mem_rem emptyE).";
 
 /// [`key_split_fake`] in a side tree (one memory).
-fn run_side(extra: &str, second: &str, closes: &[usize], retry: Option<u32>) -> LeafRun {
-    key_split_fake("refuse-none", extra, second, closes, 0, vec![], |p| {
+fn run_side(fake: &SplitFake<'_>, closes: &[usize], retry: Option<u32>) -> LeafRun {
+    key_split_fake("refuse-none", fake, closes, 0, vec![], |p| {
         p.judgement = super::driver::Judgement::Hoare;
         p.smt_retry_timeout = retry;
         p.prove_node(0).unwrap();
@@ -4594,8 +4657,7 @@ fn run_side(extra: &str, second: &str, closes: &[usize], retry: Option<u32>) -> 
 fn a_side_tree_split_first_tries_one_named_sentence() {
     let named = format!("case (c = Comp_H3.M.k{{2}}) => hc; {NAMED}");
     let run = run_side(
-        &format!("    \"{named}\") g=none; ans;;"),
-        "",
+        &SplitFake::at(&["c"], &format!("    \"{named}\") g=none; ans;;")),
         &[],
         Some(30),
     );
@@ -4613,14 +4675,18 @@ fn a_side_tree_split_first_tries_one_named_sentence() {
 fn two_pairs_in_a_side_tree_name_their_cases_hc_and_hc1() {
     let named =
         format!("case (c = Comp_H3.M.k{{2}}) => hc; case (d = Comp_H3.M.j{{2}}) => hc1; {NAMED}");
-    let run = run_side(&format!("    \"{named}\") g=none; ans;;"), "d", &[], None);
+    let run = run_side(
+        &SplitFake::at(&["c", "d"], &format!("    \"{named}\") g=none; ans;;")),
+        &[],
+        None,
+    );
     assert!(run.script.contains(&named), "{}", run.script);
 }
 
 /// Story 90 §3.5: the named split is refused: the per-case split follows, as in a hop.
 #[test]
 fn a_refused_named_split_is_followed_by_the_per_case_split() {
-    let run = run_side("", "", &[1, 2], Some(30));
+    let run = run_side(&SplitFake::at(&["c"], ""), &[1, 2], Some(30));
     let named = format!("case (c = Comp_H3.M.k{{2}}) => hc; {NAMED}");
     let i = run.said.iter().position(|s| s.contains(&named));
     let j = run
@@ -4646,6 +4712,98 @@ fn a_hop_tree_has_no_named_split() {
         "{:?}",
         run.said
     );
+}
+
+/// Story 90 §3.2: `hk` is a hypothesis already: the `have` is named `hk1`.
+#[test]
+fn a_taken_hk_gives_the_have_the_next_name() {
+    let have = HAVE.replace("have hk :", "have hk1 :");
+    let extra = format!("    \"{have}\") ans;;");
+    let fake = SplitFake {
+        hyps: &["hk"],
+        ..SplitFake::at(&["c", "c"], &extra)
+    };
+    let run = key_split_fake("refuse-none", &fake, &[1, 2], 0, vec![], |p| {
+        p.prove_node(0).unwrap();
+    });
+    assert!(run.script.contains(&have), "{}", run.script);
+}
+
+/// Story 90 §3.2, §3.3: with no premises, the `have` is `by done.` and the retry has no
+/// `move:`.
+#[test]
+fn without_premises_the_have_is_by_done_and_the_retry_is_smt_alone() {
+    use super::driver::{have_equal, retry_smt, with_premises};
+    assert_eq!(
+        have_equal("hk", "k", "k'", &[]),
+        "have hk : k = k' by done."
+    );
+    assert_eq!(
+        with_premises(&[], &retry_smt(30, "get_setE mem_set")),
+        "smt timeout=30 wantedlemmas=(get_setE mem_set)."
+    );
+    let hpre = ["hpre".to_string()];
+    assert_eq!(
+        with_premises(&hpre, &retry_smt(30, "get_setE")),
+        "move: hpre => />; smt timeout=30 wantedlemmas=(get_setE)."
+    );
+}
+
+/// Story 90 §3.5: in a side tree, three pairs (after the refused merges) give no named split.
+#[test]
+fn three_pairs_in_a_side_tree_give_no_named_split() {
+    let fake = SplitFake {
+        reads: vec![
+            ("k", fake_local("c")),
+            ("j", fake_local("d")),
+            ("i", fake_local("d")),
+        ],
+        ..SplitFake::default()
+    };
+    let run = key_split_fake("refuse-none", &fake, &[], 0, vec![], |p| {
+        p.judgement = super::driver::Judgement::Hoare;
+        p.prove_node(0).unwrap();
+    });
+    assert!(
+        run.said.iter().any(|s| s.contains("have hk")),
+        "{:?}",
+        run.said
+    );
+    assert!(
+        !run.said.iter().any(|s| s.contains("=> hc;")),
+        "{:?}",
+        run.said
+    );
+}
+
+/// Story 90 §3.6: two pairs on the term index `oget d_First{2}.[c]`: each case is named
+/// (`[hc|hc]`), and the `=` case keeps the later pair, which has no binder to substitute.
+#[test]
+fn a_term_pair_splits_with_named_cases_and_keeps_the_later_pairs() {
+    let first = r#"{"kind":"pvar","scope":"local","name":"d_First","mem":"&2"}"#;
+    let read = format!(
+        r#"{{"kind":"app","op":"Top.FMap._.[_]","args":[{first},{}]}}"#,
+        fake_local("c")
+    );
+    let term = format!(r#"{{"kind":"app","op":"Top.Logic.oget","args":[{read}]}}"#);
+    let fake = SplitFake {
+        reads: vec![("k", term.clone()), ("j", term)],
+        ..SplitFake::default()
+    };
+    let run = key_split_fake("refuse-none", &fake, &[1, 2, 3, 4], 0, vec![], |p| {
+        p.prove_node(0).unwrap();
+        assert_eq!(p.count(), 0, "the leaf is closed");
+    });
+    let case_k = "case (oget d_First{2}.[c] = Comp_H3.M.k{2}) => [hc|hc].";
+    let case_j = "case (oget d_First{2}.[c] = Comp_H3.M.j{2}) => [hc|hc].";
+    let have = "have hk : Comp_H3.M.k{2} = Comp_H3.M.j{2} by move: hpre => />.";
+    assert_eq!(
+        split_said(&run),
+        [have, case_k, case_j, CRUSH, CRUSH, case_j, CRUSH, CRUSH],
+        "{:?}",
+        run.said
+    );
+    assert!(run.admits.is_empty(), "{:?}", run.admits);
 }
 
 /// Story 66: more than six pairs, and fallback 4 does not run.
@@ -5514,12 +5672,13 @@ mod side_invariants_from_package_lemmas {
                 .created()
                 .unwrap()
         };
+        // a file time has the kernel's tick: two writes in one tick have one time
         assert!(
-            modified("progress/PkgInv_Wrap/report.txt") < created("progress/SideInv_G"),
+            modified("progress/PkgInv_Wrap/report.txt") <= created("progress/SideInv_G"),
             "the package job ends before the side job starts"
         );
         assert!(
-            created("progress/Eq_left_right") < modified("progress/PkgInv_Cnt/report.txt"),
+            created("progress/Eq_left_right") <= modified("progress/PkgInv_Cnt/report.txt"),
             "the proof job starts at once"
         );
     }
@@ -5792,9 +5951,13 @@ mod progress_board {
         rows
     }
 
-    /// Each row has lockstep, a node, a sentence and the end of lockstep, on its own key.
+    /// Each oracle row has lockstep, a node, a sentence and the end of lockstep, on its own key.
     fn assert_rows_are_not_silent(rows: &BTreeMap<(String, String), Vec<String>>) {
         for (key, events) in rows {
+            // a fixed lemma's row (story 84) has items, and no lockstep or node
+            if events.iter().any(|e| e.starts_with("item ")) {
+                continue;
+            }
             for kind in ["lockstep ", "node ", "sentence ", "lockstep-end "] {
                 assert!(
                     events.iter().any(|e| e.starts_with(kind)),

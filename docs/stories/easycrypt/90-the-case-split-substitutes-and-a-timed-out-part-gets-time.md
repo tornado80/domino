@@ -398,10 +398,11 @@ Done: §3.1–§3.6 in `driver.rs`, `goals.rs`, `mod.rs`, the CLI, and `scripts/
 `run_tactics` (after the in-memory translation). The live page shows the retry with
 `attempt_shown`.
 
-Tests of §5 that are not written: `hk` taken (`fresh_name_besides` gives `hk1`), the two
-no-premises sentences (`by done.` and the retry without `move:`), three pairs with no named
-split, and the per-case split on a term pair (`[hc|hc]`). `term_text` and the term pair have
-unit tests in `goals.rs` only. The `term_text` output is compared with the text of §3.6, not
-with text that EasyCrypt printed.
+All tests of §5 are written. The two no-premises sentences are tested on the sentence builders
+(`have_equal`, `retry_smt`, `with_premises`), because a leaf always has the premise `hpre`. The
+term index is checked with EasyCrypt: `testdata/easycrypt/story90/` holds the goal that EasyCrypt
+printed for the Send5 J3 read shape. `term_text` gives `oget d_First{hr}.[s]`, the same text as
+EasyCrypt prints, and with `DOMINO_EASYCRYPT` set, EasyCrypt accepts
+`case (oget d_First{hr}.[s] = ctr0{hr}) => [hc|hc].` in that leaf.
 
 Not done: all of §6 (the `ec4whs` runs and the measurement by hand).

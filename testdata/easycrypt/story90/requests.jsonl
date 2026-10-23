@@ -1,0 +1,8 @@
+{"sentence": "require import AllCore FMap.", "want": "status"}
+{"sentence": "module M = { var d_State : (int, int) fmap proc f(ctr0 : int, sid0 : int, d_First : (int, int) fmap) : bool = { d_State <- d_State.[ctr0 <- 1]; return true; } }.", "want": "status"}
+{"sentence": "lemma story90 : hoare[M.f : true ==> forall sid0', M.d_State.[sid0'] = None].", "want": "status"}
+{"sentence": "proof.", "want": "status"}
+{"sentence": "proc.", "want": "status"}
+{"sentence": "conseq (_ : _ ==> forall s, M.d_State.[oget d_First.[s]] = None).", "want": "status"}
+{"sentence": "admit.", "want": "status"}
+{"sentence": "auto => &hr hpre s /=.", "want": "full"}

@@ -591,6 +591,58 @@ mod tests {
         assert!(first_read(&odd).is_empty());
     }
 
+    /// Story 90 §3.6: the goal EasyCrypt printed after `auto => &hr hpre s /=.` on the read of
+    /// Send5 J3 (`testdata/easycrypt/story90/requests.jsonl` gives the lemma): the index prints
+    /// as EasyCrypt prints it.
+    #[test]
+    fn the_term_index_prints_as_easycrypt_prints_it() {
+        let answer = include_str!("../../../testdata/easycrypt/story90/term_index_goal.json");
+        let goal = parse_response(answer)
+            .unwrap()
+            .proof
+            .unwrap()
+            .front
+            .unwrap();
+        let pairs = key_pairs(&goal.concl, &binders(&["s"]));
+        let [pair] = pairs.as_slice() else {
+            panic!("{pairs:?}")
+        };
+        assert_eq!(pair.index, "oget d_First{hr}.[s]");
+        assert_eq!(pair.binder, None);
+        assert_eq!(pair.key, "ctr0{hr}");
+        assert!(
+            goal.concl.pp.contains(&format!(".[{}]", pair.index)),
+            "{}",
+            goal.concl.pp
+        );
+    }
+
+    /// Story 90 §3.6, with a `-json` EasyCrypt (`DOMINO_EASYCRYPT`): the `case` on the printed
+    /// term index re-parses in the leaf, and gives two goals.
+    #[test]
+    fn easycrypt_accepts_the_case_on_the_printed_term_index() {
+        use crate::easycrypt::json::Status;
+        use crate::easycrypt::session::{json_binary_configured, Session, Want};
+        if !json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::start(dir.path()).unwrap();
+        let requests = include_str!("../../../testdata/easycrypt/story90/requests.jsonl");
+        for line in requests.lines() {
+            let req: serde_json::Value = serde_json::from_str(line).unwrap();
+            let sentence = req["sentence"].as_str().unwrap();
+            let r = session.send(sentence, Want::Full).unwrap();
+            assert_eq!(r.status, Status::Ok, "{sentence}");
+        }
+        let pairs = key_pairs(&session.front().unwrap().concl, &binders(&["s"]));
+        let case = format!("case ({}) => [hc|hc].", pairs[0].equation());
+        let r = session.send(&case, Want::Status).unwrap();
+        assert_eq!(r.status, Status::Ok, "{case}");
+        assert_eq!(session.count(), 2);
+    }
+
     #[test]
     fn a_stub_projection_has_no_children() {
         let stub = form(r#"{"kind":"proj","stub":true}"#);

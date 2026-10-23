@@ -644,6 +644,32 @@ impl Resume {
     }
 }
 
+/// `smt` prefixed with the crush's `move: <premises> => />;` when there are premises.
+pub(super) fn with_premises(premises: &[String], smt: &str) -> String {
+    if premises.is_empty() {
+        smt.to_string()
+    } else {
+        format!("move: {} => />; {smt}", premises.join(" "))
+    }
+}
+
+/// The `smt` call of a retry (story 90 §3.3): `smt(<hints>)` with timeout `t`, the hint list
+/// moved into `wantedlemmas`.
+pub(super) fn retry_smt(t: u32, hints: &str) -> String {
+    format!("smt timeout={t} wantedlemmas=({hints}).")
+}
+
+/// The `have` that asks EasyCrypt whether two keys are equal (story 90 §3.2), by the crush with
+/// no smt, or by `done` with no premises.
+pub(super) fn have_equal(name: &str, key: &str, other: &str, premises: &[String]) -> String {
+    let by = if premises.is_empty() {
+        "done".to_string()
+    } else {
+        format!("move: {} => />", premises.join(" "))
+    };
+    format!("have {name} : {key} = {other} by {by}.")
+}
+
 /// The leaf part a key case split works on (story 89): where a case's admit goes, and the
 /// sentence that closes a case.
 pub(super) struct CaseLeaf<'p> {
@@ -1356,13 +1382,8 @@ impl Prover<'_> {
         self.with_premises(&self.hint_sentence())
     }
 
-    /// `smt` prefixed with the crush's `move: <premises> => />;` when there are premises.
     fn with_premises(&self, smt: &str) -> String {
-        if self.premises.is_empty() {
-            smt.to_string()
-        } else {
-            format!("move: {} => />; {smt}", self.premises.join(" "))
-        }
+        with_premises(&self.premises, smt)
     }
 
     /// Whether the current leaf's budget is spent.
@@ -1382,8 +1403,7 @@ impl Prover<'_> {
         if self.last_smt != Some(SmtOutcome::Timeout) || self.budget_spent() {
             return Ok(false);
         }
-        let smt = format!("smt timeout={t} wantedlemmas=({}).", self.hint_names());
-        let sentence = self.with_premises(&smt);
+        let sentence = self.with_premises(&retry_smt(t, &self.hint_names()));
         self.stats.retry_timeout = Some(t);
         self.stats.retried += 1;
         if let Some(live) = &self.live {
@@ -2324,11 +2344,6 @@ impl Prover<'_> {
     /// The pairs left, in their order.
     fn merge_equal_keys(&mut self, pairs: Vec<goals::KeyPair>) -> R<Vec<goals::KeyPair>> {
         let outcome = self.last_smt;
-        let by = if self.premises.is_empty() {
-            "done".to_string()
-        } else {
-            format!("move: {} => />", self.premises.join(" "))
-        };
         let mut dropped = vec![false; pairs.len()];
         let mut names = Vec::new();
         for i in 0..pairs.len() {
@@ -2338,7 +2353,7 @@ impl Prover<'_> {
                 }
                 let name = self.fresh_besides("hk", &names);
                 let before = self.count();
-                let have = format!("have {name} : {} = {} by {by}.", pairs[i].key, pairs[j].key);
+                let have = have_equal(&name, &pairs[i].key, &pairs[j].key, &self.premises);
                 if self.send(&have, Want::Head)? && self.count() == before {
                     dropped[j] = true;
                     names.push(name);
