@@ -398,6 +398,23 @@ goal or a leaf part, cheapest first, ending in an admit. Its members are **fallb
 from one.
 _Avoid_: ladder, rung.
 
+**Crush** — a fallback that opens premises with `/>` (equalities substituted, conjunctions and
+existentials taken apart) and then calls the solver. On a side goal, all of the opened premise goes
+to the solver as hypotheses (`move=> /> <mems> *; smt()`); on a leaf part, the premises the leaf
+introduced are moved back first (`move: <premises> => />; smt(<hints>)`).
+
+**Pruned crush** — a crush that names each premise, drops the side-invariant premises, and gives the
+remaining premises to the solver as premises of the goal, not as hypotheses. The solver fails with
+the side invariants present, even folded, and it fails more often when the same facts are hypotheses.
+_Avoid_: drop-and-revert, clean crush.
+
+**Footprint** — the state fields that one conjunct of a side invariant (a package invariant, the
+links, or a game invariant) reads, each named by its package instance and its field.
+
+**Invariant selection** — the fallback that opens the side invariant of the memory in a side goal's
+conclusion and keeps only the conjuncts whose footprint shares a table with that conclusion.
+_Avoid_: sel1, GameInv selection.
+
 **Seal** — to close every goal an oracle still has open with `admit`, so the oracle's proof is
 complete as written even though the walk had not finished it. Sealing is what makes a stopped
 tactics run leave a usable file. It works on a copy of the script and sends nothing to
