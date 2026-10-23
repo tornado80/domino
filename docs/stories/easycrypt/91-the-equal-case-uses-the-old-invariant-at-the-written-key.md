@@ -7,6 +7,11 @@ closed or admitted on its own), 90 (`[->>|?]`; the retry with a longer smt timeo
 of §3.5; key pairs on a term index, §3.6).
 **Blocks:** nothing.
 **ADR:** none.
+**Status:** **closed, not implemented** (owner's decision of 2026-10-23: "it seems story 91 is not
+giving much value"). With story 90's named split (§3.5) and term key pairs (§3.6), the only
+measured leaf it still closes is `SideInv_H7_Send5.ec` J9 (§1.1), and that leaf already has a
+hand proof (`SideInv_H7_Send5_Lotta.ec`). The text stays as a design record. Reopen it if story
+90's §6 runs leave `=`-case admits in the side tree that an old invariant at the key would close.
 **Decisions:** owner's request of 2026-10-22 ("create a story for instantiating the old invariant at
 the written key"), after the H7 side-invariant measurements of story 90 §6. Amended on 2026-10-23
 at the owner's request ("amend the stories"). Story 90's named split closes the leaf this story
