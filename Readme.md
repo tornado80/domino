@@ -18,7 +18,8 @@
 Requirements:
 
 - A somewhat recent Rust toolchain. If you don't have that, look into [rustup].
-- CVC5 installed and in the `PATH` (not needed for building domino, but for running it)
+- CVC5 installed and in the `PATH` (not needed for building domino, but for running it). Tested
+  with cvc5 1.4.2.
 
 Install the tool using `cargo install --git https://github.com/domino-lang/domino domino`.
 Ensure that the installed binary is in your `PATH`. (By default, Cargo installs to (`~/.cargo/bin`).)
@@ -38,7 +39,10 @@ Supported platforms: **Linux** (x86_64, arm64) and **macOS** (x86_64, arm64/Appl
 Building `--features cvc5-lib` needs two things bindgen and the linker have to find:
 
 1. a prebuilt **static cvc5** (`libcvc5.a`, `libcvc5parser.a` and the C API headers), pointed at by
-   `CVC5_LIB_DIR` / `CVC5_INCLUDE_DIR`. We use the crate's `static` feature but *skip* its
+   `CVC5_LIB_DIR` / `CVC5_INCLUDE_DIR`. The helper script downloads cvc5 **1.4.2** (the `cvc5`
+   crate 0.6.1 is written for 1.4.0, and builds and passes its tests with 1.4.2); set
+   `CVC5_VERSION` to use another release, for example `CVC5_VERSION=1.4.0
+   scripts/setup-cvc5-lib.sh`. We use the crate's `static` feature but *skip* its
    build-from-source path (which would need CMake and a cvc5 checkout) by setting `CVC5_LIB_DIR`.
 2. a working **libclang** for bindgen (`LIBCLANG_PATH`, plus `BINDGEN_EXTRA_CLANG_ARGS` if the
    libclang you use ships no builtin headers). On macOS this is the `libclang.dylib` that ships
