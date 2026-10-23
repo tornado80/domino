@@ -139,6 +139,9 @@ pub enum TacticsError {
     #[error("package `{package}` has no package lemmas in this theorem: the theorem does not use it, or it has no package invariant")]
     NoPackageInvariants { package: String },
     /// `prove --side-inv C` for a composition without side invariants, or none of the theorem.
+    /// `--ec-timeout` leaves the retry no margin (story 90 §3.3).
+    #[error("--ec-timeout {ec_timeout} must be at least --smt-retry-timeout {retry} + 10 seconds")]
+    RetryTimeout { ec_timeout: u64, retry: u32 },
     #[error("composition `{composition}` has no side invariants in this theorem: no package of it has a package invariant, and it has no game invariant")]
     NoSideInvariants { composition: String },
 }
@@ -160,6 +163,9 @@ pub struct TacticsOptions {
     /// The most time splitting one leaf by meaning may take before its remaining parts are
     /// admitted; `None` (the default) for no limit.
     pub leaf_budget: Option<Duration>,
+    /// `--smt-retry-timeout` (story 90 §3.3): the smt timeout, in seconds, of the one retry of a
+    /// part's closing sentence that failed with `smt: timeout`; `None` (the default) for no retry.
+    pub smt_retry_timeout: Option<u32>,
     /// What `ec-transcript.jsonl` keeps of EasyCrypt's answers (`--ec-transcript`).
     pub ec_transcript: EcTranscriptMode,
     /// How often `Eq_*.ec` and its report are written (`--write-granularity`).
@@ -213,6 +219,20 @@ impl ResumeMode {
 }
 
 impl TacticsOptions {
+    /// Refuses options a run cannot keep: an `--ec-timeout` under the smt retry timeout plus
+    /// 10 s, which would interrupt the retry before smt ends.
+    pub fn check(&self) -> Result<(), TacticsError> {
+        match self.smt_retry_timeout {
+            Some(retry) if self.ec_timeout < Duration::from_secs(u64::from(retry) + 10) => {
+                Err(TacticsError::RetryTimeout {
+                    ec_timeout: self.ec_timeout.as_secs(),
+                    retry,
+                })
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn stop_requested(&self) -> bool {
         self.stop
             .as_ref()
@@ -351,6 +371,7 @@ impl Default for TacticsOptions {
             lockstep_timeout_ms: None,
             quick_close: true,
             leaf_budget: None,
+            smt_retry_timeout: None,
             ec_transcript: EcTranscriptMode::Capped,
             write_granularity: WriteGranularity::Tactic,
             stop: None,
@@ -629,6 +650,23 @@ impl OracleTactics {
         )
     }
 
+    /// The report line's counts of story 90 §3.4: the parts a named split closed, and the
+    /// retries with their timeout; empty for a count that is 0.
+    pub fn split_and_retry_summary(&self) -> String {
+        let s = &self.stats;
+        let mut out = String::new();
+        if s.named_closed > 0 {
+            out += &format!("; {} parts closed by a named split", s.named_closed);
+        }
+        if let Some(t) = s.retry_timeout {
+            out += &format!(
+                "; {} parts retried with {t} s, {} closed",
+                s.retried, s.retried_closed
+            );
+        }
+        out
+    }
+
     /// The admitted cases of key case splits (story 89), and the parts they are cases of. A
     /// case admit has the note ` (case …)` after its part's claim; the cases of one part are
     /// admitted one after the other, so a run of case admits with one node, one part and one
@@ -817,6 +855,7 @@ where
     P: Project + Sync,
     B: SmtSolverBackend + Sync,
 {
+    options.check()?;
     std::fs::create_dir_all(out_dir)?;
     let out_dir = std::fs::canonicalize(out_dir).unwrap_or_else(|_| out_dir.to_path_buf());
     let started = Instant::now();
@@ -2001,6 +2040,7 @@ where
         quick_close: options.quick_close,
         oracle,
         leaf_budget: options.leaf_budget,
+        smt_retry_timeout: options.smt_retry_timeout,
         deadline: None,
         timeouts: Timeouts {
             general: options.ec_timeout,
@@ -2216,7 +2256,7 @@ impl EquivalenceTactics {
             o.stuck_points,
             secs(o.lockstep_time)
         );
-        let admits = o.admits_summary();
+        let admits = o.admits_summary() + &o.split_and_retry_summary();
         let _ = writeln!(
             out,
             "    goals closed: {}, {admits}, fallbacks: {}, EasyCrypt time {} ({} attempts undone)",

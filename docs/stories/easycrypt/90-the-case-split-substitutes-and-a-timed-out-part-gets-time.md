@@ -390,3 +390,18 @@ there's no pair and no split. Both are closed by hand with a split on
 5. **`MAX_NAMED_PAIRS` = 2?** Every measured side-tree split has one pair. Recommended: 2, to keep
    the sentence under `--ec-timeout` at the default prover timeout. Raise it if §6 shows parts
    with three pairs that the per-case split doesn't close.
+
+## 8. Implementation status (2026-10-23)
+
+Done: §3.1–§3.6 in `driver.rs`, `goals.rs`, `mod.rs`, the CLI, and `scripts/proof_statistics.py`.
+`--ec-timeout` < `--smt-retry-timeout` + 10 is refused by `TacticsOptions::check` at the start of
+`run_tactics` (after the in-memory translation). The live page shows the retry with
+`attempt_shown`.
+
+Tests of §5 that are not written: `hk` taken (`fresh_name_besides` gives `hk1`), the two
+no-premises sentences (`by done.` and the retry without `move:`), three pairs with no named
+split, and the per-case split on a term pair (`[hc|hc]`). `term_text` and the term pair have
+unit tests in `goals.rs` only. The `term_text` output is compared with the text of §3.6, not
+with text that EasyCrypt printed.
+
+Not done: all of §6 (the `ec4whs` runs and the measurement by hand).

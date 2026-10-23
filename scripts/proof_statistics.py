@@ -33,7 +33,8 @@ from datetime import datetime, timezone
 ROLES = ["quick close", "structure", "exit path", "reduce", "split", "part fallback",
          "side-goal fallback", "admit"]
 GOAL_TYPES = ["equal-output", "invariant conjunct", "branch-condition", "side-goal", "other"]
-CASE_SENTENCE = re.compile(r"^(\s*)(\+ )?case \(.*\) => \[->\|\?\]\.\s*$")
+# `[->|?]` before story 90, `[->>|?]` on a binder, `[hc|hc]` on a term index
+CASE_SENTENCE = re.compile(r"^(\s*)(\+ )?case \(.*\) => \[(?:->>?\|\?|(\w+)\|\3)\]\.\s*$")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -81,7 +82,8 @@ def seconds(text):
 
 
 ORACLE_HEAD = re.compile(r"^  (\w+): lockstep (\d+) joint paths, (\d+) nodes, (\d+) stuck points \(([^)]*)\)")
-GOALS = re.compile(r"goals closed: (\d+), (?:no admit|(\d+) admits(?: \(([^)]*)\))?), "
+GOALS = re.compile(r"goals closed: (\d+), (?:no admit|(\d+) admits(?: \(([^)]*)\))?)"
+                   r"(?:; (\d+) parts closed by a named split)?(?:; (\d+) parts retried with \d+ s, (\d+) closed)?, "
                    r"fallbacks: (\d+), EasyCrypt time ([^ ]+) \((\d+) attempts undone\)")
 ROLE = re.compile(r"^\s{6}(" + "|".join(map(re.escape, ROLES)) + r")\s+(\d+)\s+((?:[\d.]+[hms]\s?)+?)\s+(\d+)\s+([\d.]+ (?:B|kB|MB|GB))\s*$")
 EC = re.compile(r"EasyCrypt: tactic ([^(]+)\(smt ([^:]+): translate ([^,]+), prepare ([^,]+), "
@@ -104,7 +106,8 @@ def parse_report(text):
             continue
         if m := GOALS.search(line):
             cur["goals"] = int(m.group(1))
-            cur["ec"] = seconds(m.group(5))
+            cur["named"], cur["retried"], cur["retried_closed"] = (int(m.group(k) or 0) for k in (4, 5, 6))
+            cur["ec"] = seconds(m.group(8))
         elif m := ROLE.match(line):
             cur["roles"][m.group(1)] = (int(m.group(2)), seconds(m.group(3)), int(m.group(4)))
     for name, block in re.findall(r"^  (\w+): lockstep.*?\n(.*?)(?=^  \w+: lockstep|\Z)", text, re.M | re.S):
@@ -327,6 +330,13 @@ def section(jobs, before, side):
         b = old(j)
         rows.append([j["title"], *cells, f"**{sum(c.values())}**" + (f" ({len(admits_of(b))})" if b else "")])
     rows.append(["**Total**", *[f"**{tot[t]}**" for t in GOAL_TYPES], f"**{sum(tot.values())}**"])
+    # Story 90: retries with the longer smt timeout, and parts a named split closed
+    rows = [[j["title"], num(total(j, "retried")), num(total(j, "retried_closed")), num(total(j, "named"))]
+            for j in sel if total(j, "retried") or total(j, "named")]
+    if rows:
+        out += ["### Retries and named splits", "",
+                table([label, "Parts retried", "Retries closed", "Closed by a named split"], rows), ""]
+
     out += ["### Admits by goal type", "",
             "`equal-output` is the record claim `equal-output+invariant`; an invariant conjunct is a claim "
             "`invariant/<predicate>`" + (" (a conjunct of `side_inv_<C>`)" if side else "") + ".", "",

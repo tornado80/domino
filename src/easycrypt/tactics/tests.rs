@@ -1417,6 +1417,7 @@ mod live {
             quick_close: false,
             oracle: "UsefulOracle",
             leaf_budget: None,
+            smt_retry_timeout: None,
             deadline: None,
             stats: OracleStats::default(),
             live: None,
@@ -3447,6 +3448,7 @@ done
         quick_close: true,
         oracle: "O",
         leaf_budget: None,
+        smt_retry_timeout: None,
         deadline: None,
         stats: OracleStats::default(),
         live: None,
@@ -3644,6 +3646,7 @@ fn run_fake(
 d='{}'; n=0; g=none
 ans() {{ n=$((n+1)); eval "g_$n=$g"; printf '{{"version":"domino-json/3","state":%s,"status":"ok","messages":[],"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
 err() {{ printf '{{"version":"domino-json/3","state":%s,"status":"error","messages":[],"error":{{"msg":"no"}},"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
+tmo() {{ printf '{{"version":"domino-json/3","state":%s,"status":"error","messages":[],"error":{{"msg":"no"}},"timing":{{"tactic_ms":1,"serialize_ms":0,"smt":{{"calls":1,"translate_ms":0,"prepare_ms":0,"prover_ms":0,"valid":0,"timeout":1,"unknown":0}}}},"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
 unused() {{ n=$((n+1)); eval "g_$n=$g"; printf '{{"version":"domino-json/3","state":%s,"status":"ok","messages":[{{"level":"warning","text":"unused unfold: /inv"}}],"proof":%s}}\n' $n "$(cat $d/$g.json)"; }}
 while IFS= read -r req; do
   printf '%s\n' "$req" >> "$d/requests"
@@ -3702,6 +3705,7 @@ done
         quick_close: true,
         oracle: "O",
         leaf_budget: None,
+        smt_retry_timeout: None,
         deadline: None,
         stats: OracleStats::default(),
         live: None,
@@ -4144,17 +4148,21 @@ fn run_key_split_with(
     budget: Option<Duration>,
     pairs: Vec<PairRecord>,
 ) -> LeafRun {
-    key_split_fake(refuse, two, closes, slow, pairs, |p| {
+    let second = if two { "d" } else { "" };
+    key_split_fake(refuse, "", second, closes, slow, pairs, |p| {
         p.leaf_budget = budget;
         p.prove_node(0).unwrap();
         assert_eq!(p.count(), 0, "the leaf is closed");
     })
 }
 
-/// The fake EasyCrypt of [`run_key_split_with`], and a prover on it that `act` drives.
+/// The fake EasyCrypt of [`run_key_split_with`], and a prover on it that `act` drives. The
+/// second read is at binder `second` (`c` or `d`; none when empty); the arms of `extra` come
+/// first.
 fn key_split_fake(
     refuse: &str,
-    two: bool,
+    extra: &str,
+    second: &str,
     closes: &[usize],
     slow: u32,
     pairs: Vec<PairRecord>,
@@ -4176,7 +4184,11 @@ fn key_split_fake(
             local(b)
         )
     };
-    let second = if two { read("j", "d") } else { local("d") };
+    let second = if second.is_empty() {
+        local("d")
+    } else {
+        read("j", second)
+    };
     let body = format!(
         r#"{{"kind":"app","pp":"","op":"Top.P","args":[{},{second}]}}"#,
         read("k", "c"),
@@ -4200,8 +4212,9 @@ fn key_split_fake(
     let down = "case $g in n3) g=n2;; n2) g=n1;; *) g=none;; esac; ans";
     let arms = format!(
         r#"
+{extra}
     {refuse}) err;;
-    "auto => &1 &2 hpre.") g=all; ans;;
+    "auto => &1 &2 hpre."|"auto => &hr hpre /=.") g=all; ans;;
     "move => c d /=.") g=p1; ans;;
     "case ("*) case $g in p1) g=n2; ans;; n2) g=n3; ans;; n1) g=n2; ans;; *) err;; esac;;
     "move: hpre => />; smt(get_setE mem_set remE mem_rem emptyE).") case $g in p1) err;; *) c=$((c+1)); [ "$c" = 1 ] && sleep {slow}; case " {closes} " in *" $c "*) {down};; *) err;; esac;; esac;;
@@ -4240,8 +4253,8 @@ fn split_script(run: &LeafRun) -> Vec<&str> {
 #[test]
 fn two_key_pairs_split_into_four_cases_each_a_bullet() {
     let run = run_key_split(&[1, 2, 3, 4]);
-    let case_c = "case (c = Comp_H3.M.k{2}) => [->|?].";
-    let case_d = "case (d = Comp_H3.M.j{2}) => [->|?].";
+    let case_c = "case (c = Comp_H3.M.k{2}) => [->>|?].";
+    let case_d = "case (d = Comp_H3.M.j{2}) => [->>|?].";
     assert_eq!(
         split_said(&run),
         [case_c, case_d, CRUSH, CRUSH, case_d, CRUSH, CRUSH],
@@ -4273,7 +4286,7 @@ fn two_key_pairs_split_into_four_cases_each_a_bullet() {
 fn a_case_that_does_not_close_is_admitted_and_the_split_kept() {
     let pair = leaf_pair(false, Verdict::Verified, &[]);
     let run = run_key_split_with("refuse-none", false, &[2], 0, None, vec![pair]);
-    let case_c = "case (c = Comp_H3.M.k{2}) => [->|?].";
+    let case_c = "case (c = Comp_H3.M.k{2}) => [->>|?].";
     let crush = format!("+ {CRUSH}");
     let script: Vec<_> = split_script(&run)
         .iter()
@@ -4377,7 +4390,7 @@ fn the_cases_after_the_leaf_budget_are_admitted_without_a_crush() {
 /// with one label are split, each with an admitted case. The report counts two parts.
 #[test]
 fn the_report_counts_each_split_part_once() {
-    let run = key_split_fake("refuse-none", false, &[2, 4], 0, vec![], |p| {
+    let run = key_split_fake("refuse-none", "", "", &[2, 4], 0, vec![], |p| {
         p.prove_node(0).unwrap();
         p.session.send("start.", Want::Full).unwrap();
         p.prove_node(0).unwrap();
@@ -4388,6 +4401,251 @@ fn the_report_counts_each_split_part_once() {
     assert_eq!(claims, [case, case], "{:?}", run.admits);
     let report = equivalence_with(vec![oracle_with(run.admits)]).render();
     assert!(report.contains("2 of them cases of 2 parts"), "{report}");
+}
+
+const HAVE: &str = "have hk : Comp_H3.M.k{2} = Comp_H3.M.j{2} by move: hpre => />.";
+const RETRY: &str =
+    "move: hpre => />; smt timeout=30 wantedlemmas=(get_setE mem_set remE mem_rem emptyE).";
+
+/// [`key_split_fake`] with both reads at binder `c`, so one binder has the keys `k` and `j`.
+fn run_one_binder_two_keys(extra: &str, closes: &[usize]) -> LeafRun {
+    key_split_fake("refuse-none", extra, "c", closes, 0, vec![], |p| {
+        p.prove_node(0).unwrap();
+        assert_eq!(p.count(), 0, "the leaf is closed");
+    })
+}
+
+/// Story 90 §3.2: EasyCrypt proves the two keys of `c` equal: one `have`, one `case`, two
+/// cases, and no case on `j`.
+#[test]
+fn keys_easycrypt_proves_equal_are_merged_into_one_case() {
+    let run = run_one_binder_two_keys(&format!("    \"{HAVE}\") ans;;"), &[1, 2]);
+    let case_c = "case (c = Comp_H3.M.k{2}) => [->>|?].";
+    assert_eq!(
+        split_said(&run),
+        [HAVE, case_c, CRUSH, CRUSH],
+        "{:?}",
+        run.said
+    );
+    assert!(run.script.contains(HAVE), "{}", run.script);
+    assert!(run.admits.is_empty(), "{:?}", run.admits);
+}
+
+/// Story 90 §3.2: the `have` is refused: it is not in the script, and the split is on both keys.
+#[test]
+fn a_refused_have_leaves_the_split_on_both_keys() {
+    let run = run_one_binder_two_keys("", &[1, 2, 3]);
+    let case_c = "case (c = Comp_H3.M.k{2}) => [->>|?].";
+    let case_j = "case (c = Comp_H3.M.j{2}) => [->>|?].";
+    assert_eq!(
+        split_said(&run),
+        [HAVE, case_c, CRUSH, case_j, CRUSH, CRUSH],
+        "{:?}",
+        run.said
+    );
+    assert!(!run.script.contains("have "), "{}", run.script);
+}
+
+/// Story 90 §3.2: no case closes: the split is undone, the `have` with it.
+#[test]
+fn an_undone_split_undoes_the_have() {
+    let run = run_one_binder_two_keys(&format!("    \"{HAVE}\") ans;;"), &[]);
+    assert!(run.said.iter().any(|s| s.contains(HAVE)), "{:?}", run.said);
+    assert!(!run.script.contains("have "), "{}", run.script);
+    assert_eq!(run.admits.len(), 1, "{:?}", run.admits);
+}
+
+/// [`key_split_fake`] with one read, a crush that times out, and the retry answered by
+/// `retry` (shell commands). `timeout` is `--smt-retry-timeout`.
+fn run_retry(crush: &str, retry: &str, timeout: Option<u32>) -> LeafRun {
+    let extra = format!("    \"{CRUSH}\") {crush};;\n    \"{RETRY}\") {retry};;");
+    key_split_fake("refuse-none", &extra, "", &[], 0, vec![], |p| {
+        p.smt_retry_timeout = timeout;
+        p.prove_node(0).unwrap();
+        assert_eq!(p.count(), 0, "the leaf is closed");
+    })
+}
+
+#[test]
+fn the_smt_retry_is_off_by_default() {
+    assert_eq!(TacticsOptions::default().smt_retry_timeout, None);
+    let run = run_retry("tmo", "g=none; ans", None);
+    assert!(
+        !run.said.iter().any(|s| s.contains("timeout=")),
+        "{:?}",
+        run.said
+    );
+    assert_eq!(run.admits[0].smt, Some(SmtOutcome::Timeout));
+}
+
+/// Story 90 §3.3: the crush times out, and the retry with the timeout in its `smt` call closes
+/// the part. No `prover` sentence is sent.
+#[test]
+fn a_timed_out_crush_is_retried_with_the_smt_timeout() {
+    let run = run_retry(
+        "tmo",
+        "case $g in p1) g=none; ans;; *) err;; esac",
+        Some(30),
+    );
+    assert!(run.script.contains(RETRY), "{}", run.script);
+    assert!(
+        !run.said.iter().any(|s| s.contains("prover")),
+        "{:?}",
+        run.said
+    );
+    assert!(
+        !run.said.iter().any(|s| s.contains("case (")),
+        "{:?}",
+        run.said
+    );
+    assert!(run.admits.is_empty(), "{:?}", run.admits);
+}
+
+/// Story 90 §3.3: the retry times out too: not in the script, and the admit says `timeout`.
+#[test]
+fn a_failed_retry_is_not_in_the_script_and_the_admit_says_timeout() {
+    let run = run_retry("tmo", "tmo", Some(30));
+    assert!(run.said.iter().any(|s| s.contains(RETRY)), "{:?}", run.said);
+    assert!(!run.script.contains("timeout="), "{}", run.script);
+    let [admit] = run.admits.as_slice() else {
+        panic!("{:?}", run.admits)
+    };
+    assert_eq!(admit.smt, Some(SmtOutcome::Timeout));
+}
+
+/// Story 90 §3.3: a crush that fails with `error` is not retried.
+#[test]
+fn a_crush_that_fails_without_a_timeout_is_not_retried() {
+    let run = run_retry("err", "g=none; ans", Some(30));
+    assert!(
+        !run.said.iter().any(|s| s.contains("timeout=")),
+        "{:?}",
+        run.said
+    );
+}
+
+/// Story 90 §3.3: in a case of the split, a timed-out crush is retried and closes the case.
+#[test]
+fn a_case_whose_crush_times_out_is_retried() {
+    let down = "case $g in n3) g=n2;; n2) g=n1;; *) g=none;; esac; ans";
+    let run = run_retry(
+        "tmo",
+        &format!("case $g in p1) tmo;; *) {down};; esac"),
+        Some(30),
+    );
+    assert!(run.script.contains(&format!("+ {RETRY}")), "{}", run.script);
+    assert!(run.admits.is_empty(), "{:?}", run.admits);
+}
+
+#[test]
+fn an_ec_timeout_without_margin_for_the_retry_is_refused() {
+    let options = TacticsOptions {
+        ec_timeout: Duration::from_secs(30),
+        smt_retry_timeout: Some(30),
+        ..TacticsOptions::default()
+    };
+    let message = options.check().unwrap_err().to_string();
+    assert!(message.contains("--ec-timeout") && message.contains("--smt-retry-timeout"));
+    let enough = TacticsOptions {
+        ec_timeout: Duration::from_secs(40),
+        ..options
+    };
+    assert!(enough.check().is_ok());
+}
+
+#[test]
+fn the_report_counts_retries_and_named_splits_only_when_there_are_any() {
+    let mut oracle = oracle_with(vec![]);
+    let plain = equivalence_with(vec![oracle.clone()]).render();
+    assert!(
+        !plain.contains("retried") && !plain.contains("named"),
+        "{plain}"
+    );
+    oracle.stats.retry_timeout = Some(30);
+    oracle.stats.retried = 12;
+    oracle.stats.retried_closed = 9;
+    oracle.stats.named_closed = 6;
+    let report = equivalence_with(vec![oracle]).render();
+    assert!(
+        report.contains("; 6 parts closed by a named split"),
+        "{report}"
+    );
+    assert!(
+        report.contains("; 12 parts retried with 30 s, 9 closed"),
+        "{report}"
+    );
+}
+
+const NAMED: &str = "smt(get_setE mem_set remE mem_rem emptyE).";
+
+/// [`key_split_fake`] in a side tree (one memory).
+fn run_side(extra: &str, second: &str, closes: &[usize], retry: Option<u32>) -> LeafRun {
+    key_split_fake("refuse-none", extra, second, closes, 0, vec![], |p| {
+        p.judgement = super::driver::Judgement::Hoare;
+        p.smt_retry_timeout = retry;
+        p.prove_node(0).unwrap();
+        assert_eq!(p.count(), 0, "the leaf is closed");
+    })
+}
+
+/// Story 90 §3.5: in a side tree, one pair: the named split closes the part, and no bullet is
+/// sent.
+#[test]
+fn a_side_tree_split_first_tries_one_named_sentence() {
+    let named = format!("case (c = Comp_H3.M.k{{2}}) => hc; {NAMED}");
+    let run = run_side(
+        &format!("    \"{named}\") g=none; ans;;"),
+        "",
+        &[],
+        Some(30),
+    );
+    assert!(run.script.contains(&named), "{}", run.script);
+    assert!(
+        !run.said.iter().any(|s| s.contains("[->>|?]")),
+        "{:?}",
+        run.said
+    );
+    assert!(run.admits.is_empty(), "{:?}", run.admits);
+}
+
+/// Story 90 §3.5: two pairs give two named cases, `hc` and `hc1`.
+#[test]
+fn two_pairs_in_a_side_tree_name_their_cases_hc_and_hc1() {
+    let named =
+        format!("case (c = Comp_H3.M.k{{2}}) => hc; case (d = Comp_H3.M.j{{2}}) => hc1; {NAMED}");
+    let run = run_side(&format!("    \"{named}\") g=none; ans;;"), "d", &[], None);
+    assert!(run.script.contains(&named), "{}", run.script);
+}
+
+/// Story 90 §3.5: the named split is refused: the per-case split follows, as in a hop.
+#[test]
+fn a_refused_named_split_is_followed_by_the_per_case_split() {
+    let run = run_side("", "", &[1, 2], Some(30));
+    let named = format!("case (c = Comp_H3.M.k{{2}}) => hc; {NAMED}");
+    let i = run.said.iter().position(|s| s.contains(&named));
+    let j = run
+        .said
+        .iter()
+        .position(|s| s.contains("case (c = Comp_H3.M.k{2}) => [->>|?]."));
+    assert!(i.is_some() && i < j, "{:?}", run.said);
+    // the named split is not retried
+    assert!(
+        !run.said.iter().any(|s| s.contains("hc; smt timeout=")),
+        "{:?}",
+        run.said
+    );
+    assert!(run.admits.is_empty(), "{:?}", run.admits);
+}
+
+/// Story 90 §3.5: in a hop, no named split.
+#[test]
+fn a_hop_tree_has_no_named_split() {
+    let run = run_key_split(&[1, 2, 3, 4]);
+    assert!(
+        !run.said.iter().any(|s| s.contains("=> hc;")),
+        "{:?}",
+        run.said
+    );
 }
 
 /// Story 66: more than six pairs, and fallback 4 does not run.

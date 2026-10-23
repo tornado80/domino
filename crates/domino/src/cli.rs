@@ -222,6 +222,10 @@ pub(crate) struct EcProve {
     /// admitted. Off unless given; each sentence is still bounded by `--ec-timeout`.
     #[clap(long)]
     pub(crate) leaf_budget: Option<u64>,
+    /// Retry a part's closing sentence once, with this smt timeout in seconds, after it failed
+    /// with `smt: timeout`. Off unless given; `--ec-timeout` must be at least this plus 10.
+    #[clap(long, value_parser = clap::value_parser!(u32).range(1..))]
+    pub(crate) smt_retry_timeout: Option<u32>,
     /// Skip the quick close (`auto => /#.` on every program goal), so the walk of the joint
     /// tree is exercised even where one tactic closes an oracle. For testing.
     #[clap(long, alias = "no-rung0")]

@@ -1154,6 +1154,7 @@ fn easycrypt_prove<P: project::Project + Sync>(
             lockstep_timeout_ms: None,
             quick_close: !p.no_quick_close,
             leaf_budget: p.leaf_budget.map(std::time::Duration::from_secs),
+            smt_retry_timeout: p.smt_retry_timeout,
             ec_transcript: match p.ec_transcript {
                 EcTranscriptArg::Capped => EcTranscriptMode::Capped,
                 EcTranscriptArg::Full => EcTranscriptMode::Full,

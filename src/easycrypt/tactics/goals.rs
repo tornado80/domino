@@ -153,12 +153,25 @@ pub(super) fn may_mention_op(form: &Form, name: &str) -> bool {
 /// The most pairs a key case split takes: `2^6` cases.
 pub(super) const MAX_KEY_PAIRS: usize = 6;
 
-/// A binder over the keys of an updated map, and the written key (story 66): the split
-/// `case (binder = key)`. Both are EasyCrypt text.
+/// The most pairs a named split takes (story 90 §3.5): at most 4 `smt` calls in its sentence.
+pub(super) const MAX_NAMED_PAIRS: usize = 2;
+
+/// The read index of an updated map, and a written key (story 66): the split
+/// `case (index = key)`. Both are EasyCrypt text. The index is a binder (`binder` is `Some`, the
+/// same text), or a term over binders (story 90 §3.6, `binder` is `None`), which a `case` can
+/// name but not substitute.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct KeyPair {
-    pub binder: String,
+    pub index: String,
+    pub binder: Option<String>,
     pub key: String,
+}
+
+impl KeyPair {
+    /// `index = key`, the equation a `case` splits on.
+    pub(super) fn equation(&self) -> String {
+        format!("{} = {}", self.index, self.key)
+    }
 }
 
 /// Whether the operator path ends in the operator `name` (an FMap operator name has dots:
@@ -188,6 +201,37 @@ fn atom_text(form: &Form) -> Option<String> {
     }
 }
 
+/// A term as EasyCrypt reads it (story 90 §3.6): an atom ([`atom_text`]), `oget t`, a map read
+/// `t.[u]`, or a tuple projection ``t.`n``. A read and a projection bind tighter than `oget`,
+/// so only an `oget` under another term is in parentheses. `None` for any other shape.
+fn term_text(form: &Form) -> Option<String> {
+    let inner = |f: &Form| {
+        let text = term_text(f)?;
+        Some(if op_is(f, "oget") {
+            format!("({text})")
+        } else {
+            text
+        })
+    };
+    if form.kind == "proj" {
+        return Some(format!("{}.`{}", inner(form.arg.as_deref()?)?, form.index?));
+    }
+    if op_is(form, "oget") && form.args.len() == 1 {
+        return Some(format!("oget {}", inner(&form.args[0])?));
+    }
+    if op_ends(form, "_.[_]") && form.args.len() == 2 {
+        let index = term_text(&form.args[1])?;
+        return Some(format!("{}.[{index}]", inner(&form.args[0])?));
+    }
+    atom_text(form)
+}
+
+/// Whether a local named in `binders` occurs in `form`.
+fn mentions_binder(form: &Form, binders: &[String]) -> bool {
+    (form.kind == "local" && form.name.as_ref().is_some_and(|n| binders.contains(n)))
+        || form.children().any(|c| mentions_binder(c, binders))
+}
+
 /// The atom keys written into `map` by a chain of updates `m.[k1 <- v1].[k2 <- v2]…`.
 fn written_keys(map: &Form) -> Vec<String> {
     let mut keys = Vec::new();
@@ -205,9 +249,10 @@ fn map_access(form: &Form) -> Option<(&Form, &Form)> {
     (read && form.args.len() == 2).then(|| (&form.args[0], &form.args[1]))
 }
 
-/// The pairs of a key case split on `form` (story 66 §3.1): a binder in `binders` that is the
-/// index of a read or a membership test on an updated map, with each atom key written into that
-/// map. In the order they occur, without duplicates.
+/// The pairs of a key case split on `form` (story 66 §3.1): the index of a read or a membership
+/// test on an updated map, with each atom key written into that map, where the index is a binder
+/// in `binders` or a term [`term_text`] prints that mentions one (story 90 §3.6). In the order
+/// they occur, without duplicates.
 pub(super) fn key_pairs(form: &Form, binders: &[String]) -> Vec<KeyPair> {
     let mut pairs = Vec::new();
     collect_key_pairs(form, binders, &mut pairs);
@@ -216,14 +261,20 @@ pub(super) fn key_pairs(form: &Form, binders: &[String]) -> Vec<KeyPair> {
 
 fn collect_key_pairs(form: &Form, binders: &[String], pairs: &mut Vec<KeyPair>) {
     if let Some((map, index)) = map_access(form) {
-        if let Some(binder) = (index.kind == "local")
+        let binder = (index.kind == "local")
             .then_some(index.name.as_ref())
             .flatten()
-            .filter(|b| binders.contains(b))
-        {
+            .filter(|b| binders.contains(b));
+        let text = match binder {
+            Some(b) => Some(b.clone()),
+            None if mentions_binder(index, binders) => term_text(index),
+            None => None,
+        };
+        if let Some(text) = text {
             for key in written_keys(map) {
                 let pair = KeyPair {
-                    binder: binder.clone(),
+                    index: text.clone(),
+                    binder: binder.cloned(),
                     key,
                 };
                 if !pairs.contains(&pair) {
@@ -239,7 +290,12 @@ fn collect_key_pairs(form: &Form, binders: &[String], pairs: &mut Vec<KeyPair>) 
 
 /// A hypothesis name that no hypothesis of the goal has.
 pub(super) fn fresh_name(goal: &Goal, base: &str) -> String {
-    let taken = |n: &str| goal.hyps.iter().any(|h| h.name == n);
+    fresh_name_besides(goal, base, &[])
+}
+
+/// [`fresh_name`], also not one of `used`: names given in sentences the goal does not show yet.
+pub(super) fn fresh_name_besides(goal: &Goal, base: &str, used: &[String]) -> String {
+    let taken = |n: &str| goal.hyps.iter().any(|h| h.name == n) || used.iter().any(|u| u == n);
     if !taken(base) {
         return base.to_string();
     }
@@ -399,7 +455,8 @@ mod tests {
         assert_eq!(
             pairs,
             [KeyPair {
-                binder: "c".into(),
+                index: "c".into(),
+                binder: Some("c".into()),
                 key: "Comp_H3.Pkg_Inst_KX.k{2}".into()
             }]
         );
@@ -461,7 +518,8 @@ mod tests {
         assert_eq!(
             ctr_pairs(&ne),
             [KeyPair {
-                binder: "ctr1".into(),
+                index: "ctr1".into(),
+                binder: Some("ctr1".into()),
                 key: "ctr0{hr}".into()
             }]
         );
@@ -501,6 +559,36 @@ mod tests {
         ] {
             assert!(may_mention_op(&form(&json), "inv"), "{json}");
         }
+    }
+
+    /// Story 90 §3.6: `d.[ctr0{hr} <- v].[oget d_First{hr}.[sid0]]`.
+    fn first_read(index: &str) -> Vec<KeyPair> {
+        let ctr0 = r#"{"kind":"pvar","scope":"local","name":"ctr0","mem":"&hr"}"#;
+        let first = r#"{"kind":"pvar","scope":"local","name":"d_First","mem":"&hr"}"#;
+        let oget = app("Top.Core.oget", &[read(first, index)]);
+        key_pairs(
+            &form(&read(&set(&local("d"), ctr0), &oget)),
+            &binders(&["sid0"]),
+        )
+    }
+
+    #[test]
+    fn a_read_at_a_term_over_a_binder_gives_a_named_pair() {
+        assert_eq!(
+            first_read(&local("sid0")),
+            [KeyPair {
+                index: "oget d_First{hr}.[sid0]".into(),
+                binder: None,
+                key: "ctr0{hr}".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_term_index_without_a_binder_or_that_does_not_print_gives_no_pair() {
+        assert!(first_read(&local("other")).is_empty());
+        let odd = app("Top.Int.+", &[local("sid0"), local("sid0")]);
+        assert!(first_read(&odd).is_empty());
     }
 
     #[test]

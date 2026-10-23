@@ -267,6 +267,13 @@ pub struct OracleStats {
     pub fallbacks: usize,
     /// Sentences EasyCrypt refused or that were undone.
     pub attempts_undone: usize,
+    /// Parts closed by a named key case split in one sentence (story 90 §3.5).
+    pub named_closed: usize,
+    /// The smt timeout of the retries (story 90 §3.3), set by the first retry.
+    pub retry_timeout: Option<u32>,
+    /// Closing sentences retried with that timeout, and how many of the retries closed.
+    pub retried: usize,
+    pub retried_closed: usize,
     /// Where the EasyCrypt time went (story 57). Empty until the oracle is done: the session
     /// holds the sums while the walk runs.
     pub time: TimeByRole,
@@ -698,6 +705,9 @@ pub(super) struct Prover<'a> {
     /// The most time splitting one leaf by meaning may take (`--leaf-budget`), or `None` for
     /// no limit: each sentence is still bounded by its timeout, so a leaf always ends.
     pub leaf_budget: Option<Duration>,
+    /// The smt timeout of the one retry of a closing sentence that timed out
+    /// (`--smt-retry-timeout`, story 90 §3.3), or `None` for no retry.
+    pub smt_retry_timeout: Option<u32>,
     /// When the current leaf's budget runs out.
     pub deadline: Option<std::time::Instant>,
     pub stats: OracleStats,
@@ -1329,10 +1339,62 @@ impl Prover<'_> {
         }
     }
 
-    fn hint_sentence(&self) -> String {
+    /// The lemma names of `smt(<hints>)`, separated by spaces.
+    fn hint_names(&self) -> String {
         let mut names: Vec<&str> = BASE_SMT_LEMMAS.to_vec();
         names.extend(self.hints.iter().map(String::as_str));
-        format!("smt({}).", names.join(" "))
+        names.join(" ")
+    }
+
+    fn hint_sentence(&self) -> String {
+        format!("smt({}).", self.hint_names())
+    }
+
+    /// The last part fallback: the crush when the leaf introduced premises, else
+    /// `smt(<hints>).`.
+    fn closing_sentence(&self) -> String {
+        self.with_premises(&self.hint_sentence())
+    }
+
+    /// `smt` prefixed with the crush's `move: <premises> => />;` when there are premises.
+    fn with_premises(&self, smt: &str) -> String {
+        if self.premises.is_empty() {
+            smt.to_string()
+        } else {
+            format!("move: {} => />; {smt}", self.premises.join(" "))
+        }
+    }
+
+    /// Whether the current leaf's budget is spent.
+    fn budget_spent(&self) -> bool {
+        self.deadline
+            .is_some_and(|d| std::time::Instant::now() >= d)
+    }
+
+    /// Story 90 §3.3: after the closing sentence failed with `smt: timeout`, the same sentence
+    /// once more with the timeout of `--smt-retry-timeout` in its `smt` call (the call's own
+    /// option: the prover setting does not change). Sends nothing (`false`) without the option,
+    /// after another outcome, or once the leaf budget is spent. `last_smt` is the retry's.
+    fn retry_close(&mut self) -> R<bool> {
+        let Some(t) = self.smt_retry_timeout else {
+            return Ok(false);
+        };
+        if self.last_smt != Some(SmtOutcome::Timeout) || self.budget_spent() {
+            return Ok(false);
+        }
+        let smt = format!("smt timeout={t} wantedlemmas=({}).", self.hint_names());
+        let sentence = self.with_premises(&smt);
+        self.stats.retry_timeout = Some(t);
+        self.stats.retried += 1;
+        if let Some(live) = &self.live {
+            live.attempt_shown(&format!("retry with {t} s prover timeout"));
+        }
+        self.last_smt = None;
+        let closed = self.try_close(&[&sentence])?;
+        if closed {
+            self.stats.retried_closed += 1;
+        }
+        Ok(closed)
     }
 
     /// A side goal (a condition, the side goal of `rcondt`): the quick close, then the fallbacks,
@@ -2152,15 +2214,16 @@ impl Prover<'_> {
 
     /// The part fallback sequence (story 65): `smt().`, `smt(<hints>).`, then the premises the
     /// leaf procedure introduced moved back and crushed (`move: <premises> => />; smt(<hints>).`,
-    /// skipped when there are none), then the key case split ([`Self::key_case_split`]). Else
-    /// an admit that keeps the unfoldings and introductions already made, with the last
-    /// fallback's outcome.
+    /// skipped when there are none), the last of them retried on a timeout
+    /// ([`Self::retry_close`]), then the key case split ([`Self::key_case_split`]). Else an admit
+    /// that keeps the unfoldings and introductions already made, with the last fallback's
+    /// outcome.
     fn atom(&mut self, node: usize, pair: Option<&PairRecord>, part: &Part) -> R<()> {
-        let hints = self.hint_sentence();
-        let mut fallbacks = vec!["smt().".to_string(), hints.clone()];
+        let mut fallbacks = vec!["smt().".to_string(), self.hint_sentence()];
         if !self.premises.is_empty() {
-            fallbacks.push(format!("move: {} => />; {hints}", self.premises.join(" ")));
+            fallbacks.push(self.closing_sentence());
         }
+        let last = fallbacks.len();
         let mut outcome = None;
         for (k, sentence) in (1..).zip(&fallbacks) {
             let role = Role::PartFallback {
@@ -2174,20 +2237,21 @@ impl Prover<'_> {
             let shown = sentence.trim_end_matches('.');
             self.last_smt = None;
             let closed = self.as_role(role, |p| {
-                p.closing_attempt(closing, shown, |p| p.try_close(&[sentence]))
+                p.closing_attempt(closing, shown, |p| {
+                    Ok(p.try_close(&[sentence])? || k == last && p.retry_close()?)
+                })
             })?;
             if closed {
                 return Ok(());
             }
             outcome = self.last_smt;
         }
-        // the crush when there are premises, else `smt(<hints>).`
-        let close = &fallbacks[fallbacks.len() - 1];
+        let close = self.closing_sentence();
         let leaf = CaseLeaf {
             node,
             pair,
             part,
-            close,
+            close: &close,
         };
         if self.key_case_split(&leaf)? {
             return Ok(());
@@ -2196,12 +2260,15 @@ impl Prover<'_> {
         self.admit_part(node, pair, part, "")
     }
 
-    /// Part fallback 4 (story 66, story 89): `case (b = k) => [->|?].` on each pair of
-    /// [`goals::key_pairs`] in turn, each case a bullet closed by [`Self::close_case`]. Kept
-    /// (`true`) if at least one case closed, the other cases admitted; else everything is
-    /// undone, also when EasyCrypt refuses a `case`. It does not run (`false`, `last_smt`
-    /// cleared) with no pair or more than [`goals::MAX_KEY_PAIRS`]; after it ran, `last_smt` is
-    /// the outcome of its last `smt`.
+    /// Part fallback 4 (story 66, story 89, story 90): on the pairs of [`goals::key_pairs`],
+    /// first the keys of one index that EasyCrypt proves equal are merged
+    /// ([`Self::merge_equal_keys`]); in a one-memory tree the named split
+    /// ([`Self::named_split`]) is tried; else a `case` on each pair in turn
+    /// ([`Self::split_cases`]), each case a bullet closed by [`Self::close_case`]. Kept (`true`)
+    /// if the named split or at least one case closed, the other cases admitted; else everything
+    /// is undone, the merges too, also when EasyCrypt refuses a `case`. It does not run
+    /// (`false`, `last_smt` cleared) with no pair or more than [`goals::MAX_KEY_PAIRS`]; after it
+    /// ran, `last_smt` is the outcome of its last `smt`.
     fn key_case_split(&mut self, leaf: &CaseLeaf<'_>) -> R<bool> {
         self.last_smt = None;
         // the opening read the goal at `head` depth: the keys are deep in it
@@ -2225,6 +2292,11 @@ impl Prover<'_> {
         self.as_role(role, |p| {
             p.closing_attempt(closing, &shown, |p| {
                 let snap = p.snap();
+                let pairs = p.merge_equal_keys(pairs)?;
+                if p.judgement.one_program() && p.named_split(&pairs)? {
+                    p.stats.named_closed += 1;
+                    return Ok(true);
+                }
                 let from = p.stats.admits.len();
                 let tally = p.split_cases(leaf, &pairs, &mut Vec::new())?;
                 for a in &mut p.stats.admits[from..] {
@@ -2245,8 +2317,74 @@ impl Prover<'_> {
         })
     }
 
+    /// Story 90 §3.2: for each two keys `k`, `k'` of one index (in the order of `pairs`), asks
+    /// EasyCrypt in the leaf's context, with no smt, whether they are equal:
+    /// `have hk : k = k' by move: <premises> => />.` (`by done.` with no premises). An accepted
+    /// `have` stays in the context and drops the pair of `k'`; a refused one leaves no trace.
+    /// The pairs left, in their order.
+    fn merge_equal_keys(&mut self, pairs: Vec<goals::KeyPair>) -> R<Vec<goals::KeyPair>> {
+        let outcome = self.last_smt;
+        let by = if self.premises.is_empty() {
+            "done".to_string()
+        } else {
+            format!("move: {} => />", self.premises.join(" "))
+        };
+        let mut dropped = vec![false; pairs.len()];
+        let mut names = Vec::new();
+        for i in 0..pairs.len() {
+            for j in i + 1..pairs.len() {
+                if dropped[i] || dropped[j] || pairs[i].index != pairs[j].index {
+                    continue;
+                }
+                let name = self.fresh_besides("hk", &names);
+                let before = self.count();
+                let have = format!("have {name} : {} = {} by {by}.", pairs[i].key, pairs[j].key);
+                if self.send(&have, Want::Head)? && self.count() == before {
+                    dropped[j] = true;
+                    names.push(name);
+                }
+            }
+        }
+        self.last_smt = outcome;
+        Ok(pairs
+            .into_iter()
+            .zip(dropped)
+            .filter_map(|(p, d)| (!d).then_some(p))
+            .collect())
+    }
+
+    /// A hypothesis name for the front goal, not one of `used`.
+    fn fresh_besides(&self, base: &str, used: &[String]) -> String {
+        match self.front() {
+            Some(g) => goals::fresh_name_besides(g, base, used),
+            None => base.to_string(),
+        }
+    }
+
+    /// Story 90 §3.5: with at most [`goals::MAX_NAMED_PAIRS`] pairs, one sentence that names each
+    /// case and closes them all: `case (i1 = k1) => hc; case (i2 = k2) => hc1; smt(<hints>).`.
+    /// Whether EasyCrypt accepted it (it then closed the goal); refused, it leaves nothing. Not
+    /// sent once the leaf budget is spent, and never retried.
+    fn named_split(&mut self, pairs: &[goals::KeyPair]) -> R<bool> {
+        if pairs.len() > goals::MAX_NAMED_PAIRS || self.budget_spent() {
+            return Ok(false);
+        }
+        let mut names = Vec::new();
+        let mut sentence = String::new();
+        for pair in pairs {
+            let name = self.fresh_besides("hc", &names);
+            sentence += &format!("case ({}) => {name}; ", pair.equation());
+            names.push(name);
+        }
+        sentence += &self.hint_sentence();
+        self.try_close(&[&sentence])
+    }
+
     /// The cases of `pairs` on the front goal, as in [`Self::key_case_split`], `path` naming
-    /// the cases already taken: how many cases closed and how many were admitted. `None` when
+    /// the cases already taken: how many cases closed and how many were admitted. A pair whose
+    /// index is a binder is split with `case (b = k) => [->>|?].`, which substitutes the binder
+    /// everywhere, hypotheses included, so the `=` case drops the other pairs of that binder;
+    /// a pair on a term index with `case (t = k) => [hc|hc].`, which keeps them. `None` when
     /// EasyCrypt refused a `case` or it did not give two goals; the caller undoes.
     fn split_cases(
         &mut self,
@@ -2257,10 +2395,17 @@ impl Prover<'_> {
         let Some((first, rest)) = pairs.split_first() else {
             return self.close_case(leaf, path).map(Some);
         };
+        let intro = match first.binder {
+            Some(_) => "[->>|?]".to_string(),
+            None => {
+                let name = self.fresh_besides("hc", &[]);
+                format!("[{name}|{name}]")
+            }
+        };
         let before = self.count();
         let outcome = self.last_smt;
         let sent = self.send(
-            &format!("case ({} = {}) => [->|?].", first.binder, first.key),
+            &format!("case ({}) => {intro}.", first.equation()),
             Want::Head,
         )?;
         self.last_smt = outcome;
@@ -2269,16 +2414,16 @@ impl Prover<'_> {
         }
         let equal: Vec<_> = rest
             .iter()
-            .filter(|p| p.binder != first.binder)
+            .filter(|p| first.binder.is_none() || p.binder != first.binder)
             .cloned()
             .collect();
-        path.push(format!("{} = {}", first.binder, first.key));
+        path.push(first.equation());
         let eq = self.bullet(|p| p.split_cases(leaf, &equal, path))?;
         path.pop();
         let Some(eq) = eq else {
             return Ok(None);
         };
-        path.push(format!("{} <> {}", first.binder, first.key));
+        path.push(format!("{} <> {}", first.index, first.key));
         let ne = self.bullet(|p| p.split_cases(leaf, rest, path))?;
         path.pop();
         Ok(ne.map(|ne| CaseTally {
@@ -2288,24 +2433,22 @@ impl Prover<'_> {
     }
 
     /// One case of a key case split, the cases taken on the way in `path`: closed with
-    /// `leaf.close` alone, else admitted as the part with the case note. Once the leaf budget
-    /// is spent, admitted without sending anything.
+    /// `leaf.close` alone (retried on a timeout, [`Self::retry_close`]), else admitted as the
+    /// part with the case note. Once the leaf budget is spent, admitted without sending
+    /// anything.
     fn close_case(&mut self, leaf: &CaseLeaf<'_>, path: &[String]) -> R<CaseTally> {
         let cases = path.join(", ");
         let admitted = CaseTally {
             closed: 0,
             admitted: 1,
         };
-        if self
-            .deadline
-            .is_some_and(|d| std::time::Instant::now() >= d)
-        {
+        if self.budget_spent() {
             let note = format!(" (case {cases}, leaf time budget spent)");
             self.admit_part(leaf.node, leaf.pair, leaf.part, &note)?;
             return Ok(admitted);
         }
         self.last_smt = None;
-        if self.try_close(&[leaf.close])? {
+        if self.try_close(&[leaf.close])? || self.retry_close()? {
             return Ok(CaseTally {
                 closed: 1,
                 admitted: 0,
