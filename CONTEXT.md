@@ -51,7 +51,17 @@ _Distinguish_: an **exit guard**, which decides nothing.
 **Idealization bit** — a boolean parameter that selects between a real and an idealized behaviour
 of a package. Related instances usually differ only in these bits.
 
-**Equivalence** — a proof step claiming two game instances are perfectly indistinguishable. Its
+**Project** — a directory with an `ssp.toml` and the packages, games and theorems below it.
+_Avoid_: path (as the name of the project option).
+
+**Theorem** — a named sequence of game hops between game instances, in `theorem/*.ssp`.
+_Avoid_: proof (as the name of a theorem).
+
+**Game hop** — one step of a theorem from one game instance to the next: an equivalence, a
+reduction or a conjecture. Game hops are numbered from 0 in the order the theorem lists them.
+_Avoid_: proofstep, proof step.
+
+**Equivalence** — a game hop claiming two game instances are perfectly indistinguishable. Its
 obligations are discharged per exported oracle.
 
 **Claim** — one obligation of an equivalence for one oracle: `invariant`, `same-output` or
@@ -67,7 +77,7 @@ built in, or a definition in the project's SMT-LIB files — and never from how 
 A name that is declared as none of these is an error, not a guess.
 _Avoid_: claim type guessed from a name prefix (`relation…`, `invariant…`).
 
-**Project lemma** — a lemma hand-written in the project's SMT-LIB file and named in a proofstep's
+**Project lemma** — a lemma hand-written in the project's SMT-LIB file and named in a game hop's
 `lemmas` block, declared with `define-lemma`. It is never translated to EasyCrypt.
 _Distinguish_: the built-in facts above, which are a claim kind of their own, not lemmas.
 
@@ -171,7 +181,7 @@ the EasyCrypt listing only.
 _Avoid_: query (a check may take several solver queries), EasyCrypt operator names on the Domino
 listing.
 
-**Debug index** — a page that lists every debugger run on disk below one level: a proofstep, a
+**Debug index** — a page that lists every debugger run on disk below one level: a game hop, a
 theorem, or the project. It shows what is on disk, not what the last run did, so a narrower rerun
 updates its rows and never removes the others. An index exists only at a level the user has run
 the debugger at. _Avoid_: sweep index, global index.
@@ -453,7 +463,7 @@ the program: straight-line code, branches, samplings); a *side-goal fallback*; *
 (opening a leaf into its parts); a *part fallback* (closing one leaf part); an *admit*; an *undo*;
 a *resume* (sending again what an earlier run proved, to bring a closed node back). Time is
 reported by role.
-_Avoid_: step (the report uses "proofstep" for a hop of the theorem), rung.
+_Avoid_: step (a step of a theorem is a game hop), rung.
 
 **Run artifact** — a file a tactics run writes *about itself* rather than as translation output:
 the live page, the EasyCrypt transcript, the per-equivalence report, the alignment report, the
