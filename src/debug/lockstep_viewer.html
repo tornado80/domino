@@ -59,13 +59,16 @@ table.path-tbl .src { color: var(--fg-muted); display: block; white-space: pre-w
 .livechip { animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .45; } }
 @media (prefers-reduced-motion: reduce) { .livechip { animation: none; } }
+#h-title { flex-basis: 100%; }
+#h-claims { border: 0; font: inherit; cursor: pointer; }
+#h-claims:hover { filter: brightness(.95); }
+table.path-tbl td.n { text-align: right; }
 </style>
 </head>
 <body>
 <header>
   <h1 id="h-title"></h1>
   <div class="sub" id="h-sub"></div>
-  <div class="chips" id="h-opts"></div>
   <div class="chips" id="h-summary"></div>
 </header>
 <main class="grid" id="grid">
@@ -85,7 +88,7 @@ table.path-tbl .src { color: var(--fg-muted); display: block; white-space: pre-w
     </div>
     <div id="tree"></div>
   </div>
-  <div class="cell" id="cell-detail"><div class="empty">Select a node or a joint path in the tree.</div></div>
+  <div class="cell" id="cell-detail"></div>
   <div class="cell lcell" id="cell-left"></div>
   <div class="cell lcell" id="cell-right"></div>
   <div class="splitter col" aria-label="column splitter"></div>
@@ -234,32 +237,27 @@ const reasonText = (v, pair) => {
 document.getElementById("h-title").textContent =
   T.one_sided ? `${T.theorem} · ${T.subject}`
   : `${T.theorem} · proofstep ${T.proofstep} · ${T.left_game} == ${T.right_game}`;
+const checked = T.claims.filter(c => !c.admitted);
+// The checked claims by status, in the order the header and the stdout `claims` line give them.
+const STATUSES = [["verified", "verified"], ["inconclusive", "inconclusive"], ["goal-fails", "GOAL FAILS"], ["none-yet", "pending"]];
+const byStatus = st => (T.summary.claims || []).filter(c => c.status === st).length;
 document.getElementById("h-sub").textContent =
-  `oracle ${T.oracle} · ${T.all_claims && T.listing === "domino" ? (T.core ? "all claims of the core claim set" : "all claims") : "claims " + T.claims.filter(c => !c.admitted).map(c => c.name).join(", ")} · lockstep execution on the ${T.listing} listing`;
-{
-  const o = T.options, chips = document.getElementById("h-opts");
-  [["timeout", o.timeout_ms == null ? "off" : o.timeout_ms + "ms"],
-   ["max-paths", o.max_paths == null ? "unlimited" : o.max_paths],
-   ["smt", o.smt == null ? "failures" : o.smt],
-   ["transcript", o.transcript ? "on" : "off"]].forEach(([k, val]) =>
-    chips.appendChild(el("span", "chip", `${k}: ${val}`)));
-}
+  `oracle ${T.oracle} · ${T.all_claims && T.listing === "domino" ? (T.core ? "all claims of the core claim set" : "all claims")
+    : checked.length <= 2 ? checked.map(c => c.name).join(", ") : plural(checked.length, "claim")} · lockstep on the ${T.listing} listing`;
 {
   const s = T.summary, sc = document.getElementById("h-summary");
   const add = (cls, txt) => sc.appendChild(el("span", "chip " + cls, txt));
   if (LIVE) add("amber livechip", "RUNNING — this page refreshes every 2 s");
-  add("", `${plural(s.joint_paths, "joint path")}`);
-  add("", `${s.nodes} nodes`);
-  if (s.pruned_children) add("unreach", `${s.pruned_children} children pruned`);
+  add("", `${plural(s.joint_paths, "joint path")} · ${s.nodes} nodes`);
   add(s.stuck_points ? "fail" : "", `${plural(s.stuck_points, "stuck point")}`);
-  (s.claims || []).forEach(c => {
-    const name = c.claim;
-    add("ok", `${name}: ${c.verified} verified`);
-    if (c.unreachable) add("unreach", `${name}: ${c.unreachable} unreachable` +
-      (c.unreachable_dependency ? ` (${c.unreachable_dependency} by its own dependency)` : ""));
-    if (c.goal_fails) add("fail", `${name}: ${c.goal_fails} goal fails`);
-    if (c.inconclusive) add("amber", `${name}: ${c.inconclusive} inconclusive`);
-  });
+  const groups = STATUSES.map(([st, word]) => [byStatus(st), word]).filter(([n]) => n).map(([n, word]) => `${n} ${word}`);
+  const claims = el("button", "chip " + (byStatus("goal-fails") ? "fail" : byStatus("inconclusive") ? "amber" : "ok"),
+    `${plural((s.claims || []).length, "claim")}: ${groups.join(" · ")} ▸`);
+  claims.id = "h-claims";
+  claims.type = "button";
+  claims.title = "Show the Run summary";
+  claims.onclick = () => showSummary();
+  sc.appendChild(claims);
   const sr = T.stop_reason;
   if (sr && sr.kind !== "completed" && !LIVE) {
     add("fail", "PARTIAL — exploration stopped early" +
@@ -706,6 +704,68 @@ function renderDetail(nodeIdx, childIdx) {
   detail.scrollTop = keepScroll;
 }
 
+// ---- Run summary: the detail cell when nothing is selected ---------------------
+function table(head, rows) {
+  const t = el("table", "path-tbl");
+  const tr = el("tr");
+  head.forEach(h => tr.appendChild(el("th", null, h)));
+  t.appendChild(tr);
+  rows.forEach(cells => {
+    const r = el("tr");
+    cells.forEach(c => {
+      const td = el("td", typeof c === "number" ? "n" : null, c instanceof Node ? null : String(c));
+      if (c instanceof Node) td.appendChild(c);
+      r.appendChild(td);
+    });
+    t.appendChild(r);
+  });
+  return t;
+}
+const STATUS_BADGE = { verified: "verified", inconclusive: "inconclusive", "goal-fails": "goalfails", "none-yet": "unreachable" };
+// The columns of the stdout claims table; the admitted claims last.
+function claimsTable() {
+  const rows = (T.summary.claims || []).map(c => [
+    c.claim, el("span", "badge " + STATUS_BADGE[c.status], STATUSES.find(([st]) => st === c.status)[1]),
+    c.verified, `${c.unreachable - c.unreachable_dependency} / ${c.unreachable_dependency}`, c.goal_fails, c.inconclusive]);
+  T.claims.filter(c => c.admitted).forEach(c => rows.push([c.name, "admitted — not checked", "", "", "", ""]));
+  return table(["claim", "status", "verified", "unreachable (pair / dependency)", "GOAL FAILS", "inconclusive"], rows);
+}
+function runBlock() {
+  const s = T.summary, o = T.options, sr = T.stop_reason, box = el("div");
+  const chips = el("div", "chips");
+  [["timeout", o.timeout_ms == null ? "off" : o.timeout_ms + "ms"],
+   ["max-paths", o.max_paths == null ? "unlimited" : o.max_paths],
+   ["smt", o.smt == null ? "failures" : o.smt],
+   ["transcript", o.transcript ? "on" : "off"]].forEach(([k, val]) => chips.appendChild(el("span", "chip", `${k}: ${val}`)));
+  box.appendChild(chips);
+  const stop = !sr ? (LIVE ? "running" : "unknown") : sr.kind === "completed" ? "completed"
+    : sr.kind === "interrupted" ? "interrupted by Ctrl-C" : `--max-paths ${sr.limit} reached`;
+  box.appendChild(table(["", ""], [
+    ["children pruned", s.pruned_children],
+    ...Object.entries(s.node_kinds || {}).map(([k, n]) => [`${k} nodes`, n]),
+    ["stop reason", stop],
+    ["stuck points", s.stuck_points]]));
+  return box;
+}
+function renderSummary() {
+  const s = T.summary;
+  detail.innerHTML = "";
+  detail.appendChild(el("h2", null, "Run summary"));
+  detail.appendChild(el("div", "path-sub", "Select a node or a joint path in the tree."));
+  addSecToolbar();
+  detail.appendChild(sec("Claims", claimsTable(), true, plural(checked.length, "checked claim")));
+  const rels = Object.entries(s.relation_failures || {});
+  if (rels.length) detail.appendChild(sec("State relations failing", table(["relation", "joint paths"], rels), true));
+  detail.appendChild(sec("Run", runBlock(), false));
+}
+// The claims button: clear the selection; the hash loses `n` and `c`, so a refresh keeps the summary.
+function showSummary() {
+  document.querySelectorAll(".row.sel, .stuck-entry.sel").forEach(r => r.classList.remove("sel"));
+  selection = null;
+  writeHash({ n: null, c: null });
+  renderSummary();
+}
+
 // ---- the listings: built once, repainted per selection ------------------------
 const listings = {
   left: makeListing(document.getElementById("cell-left"), `left · ${T.left_game} · ${T.oracle}`, T.left_listing || "", legend(), T.left_folded),
@@ -803,13 +863,16 @@ function restore() {
   if (h.n != null && Number.isInteger(n) && nodes[n]) {
     const c = h.c != null && Number.isInteger(Number(h.c)) && nodes[n].children[Number(h.c)] && nodes[n].children[Number(h.c)].outcome.kind !== "explored" ? Number(h.c) : null;
     select(n, c, { keepScroll: true });
-  }
+  } else showSummary();
   [[tree, h.ts], [detail, h.ds], [listings.left.pre, h.ls], [listings.right.pre, h.rs]].forEach(([pane, v]) => {
     if (v != null && Number.isFinite(Number(v))) pane.scrollTop = Number(v);
   });
 }
 restore();
-window.addEventListener("hashchange", () => { const h = parseHash(); if (h.n != null && (!selection || String(selection.node) !== h.n || String(selection.child) !== String(h.c))) restore(); });
+window.addEventListener("hashchange", () => {
+  const h = parseHash();
+  if (h.n == null ? selection : !selection || String(selection.node) !== h.n || String(selection.child) !== String(h.c)) restore();
+});
 // Scroll offsets ride in the hash too, so a refresh does not throw the reader back to the top.
 let scrollTimer = null;
 const rememberScroll = () => {

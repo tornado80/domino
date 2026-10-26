@@ -129,25 +129,25 @@ The per-claim table on stdout does not change.
 
 ## 5. Tests first
 
-- [ ] `status()`: one test for each row of the table in §3.1, and one where `goal_fails` and
+- [x] `status()`: one test for each row of the table in §3.1, and one where `goal_fails` and
       `inconclusive` are both more than 0 (gives `goal-fails`).
-- [ ] `trace.json` of a lockstep run has `summary.claims[i].status`, and `schema` is 15.
-- [ ] `trace.json` of a one-sided run (`domino debug --game C`) has the same field.
-- [ ] `render_summary` and `summary.txt` have the `claims` line with the counts of a run with one
+- [x] `trace.json` of a lockstep run has `summary.claims[i].status`, and `schema` is 15.
+- [x] `trace.json` of a one-sided run (`domino debug --game C`) has the same field.
+- [x] `render_summary` and `summary.txt` have the `claims` line with the counts of a run with one
       goal failure and one inconclusive claim.
-- [ ] The page template has the claims button, the function `renderSummary`, and no `h-opts` row in
+- [x] The page template has the claims button, the function `renderSummary`, and no `h-opts` row in
       the header (string checks in `lockstep_viewer.rs`, as the existing tests do).
-- [ ] The page is still a pure function of its inputs (the existing test).
+- [x] The page is still a pure function of its inputs (the existing test).
 
 ## 6. Acceptance criteria
 
-- [ ] All tests of §5 green; `cargo clippy` clean.
+- [x] All tests of §5 green; `cargo clippy` clean.
 - [ ] The owner's check, in a browser: an all-claim `domino debug --lockstep` run on a project with
       more than 5 claims, and one `domino easycrypt debug` run. The header has two rows; the page
       opens on the Run summary; a click on a node shows the node; a click on the claims button shows
       the Run summary again; a refresh keeps each of these.
 - [ ] A live page (`RUNNING`) shows the claims that have no verdict yet as `pending`.
-- [ ] Complexity: `status()` and the summary-line function within budget (`crap_scope` on
+- [x] Complexity: `status()` and the summary-line function within budget (`crap_scope` on
       `src/debug/lockstep_run.rs` and `src/debug/lockstep_report.rs`).
 
 ## 7. Not in this story

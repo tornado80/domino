@@ -78,7 +78,7 @@ use crate::writers::smt::exprs::{SmtAnd, SmtAssert, SmtExpr, SmtNot};
 
 /// Schema version of a lockstep `trace.json`. Sequential traces keep
 /// [`crate::debug::driver::TRACE_SCHEMA`].
-pub const LOCKSTEP_TRACE_SCHEMA: u32 = 14;
+pub const LOCKSTEP_TRACE_SCHEMA: u32 = 15;
 
 /// The least time between two flushes of the partial artifacts while a run is
 /// in progress: at most two a second (story 24). The page refreshes every two
@@ -267,14 +267,70 @@ impl VerdictCounts {
             Verdict::Inconclusive { .. } => self.inconclusive += 1,
         }
     }
+
+    /// The worst verdict of the claim over the joint paths so far. An unreachable verdict
+    /// does not refute the claim, so it counts as verified.
+    pub fn status(&self) -> ClaimStatus {
+        if self.goal_fails > 0 {
+            ClaimStatus::GoalFails
+        } else if self.inconclusive > 0 {
+            ClaimStatus::Inconclusive
+        } else if self.verified + self.unreachable > 0 {
+            ClaimStatus::Verified
+        } else {
+            ClaimStatus::NoneYet
+        }
+    }
 }
 
-/// One claim's verdict counts over the joint paths.
+/// [`VerdictCounts::status`]: what the viewer header and the `claims` summary line count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClaimStatus {
+    Verified,
+    Inconclusive,
+    GoalFails,
+    /// No joint path has a verdict for the claim yet.
+    NoneYet,
+}
+
+/// One claim's verdict counts over the joint paths. Serialised with its
+/// [`status`](VerdictCounts::status), so the page counts statuses and calculates none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "ClaimCountsJson", into = "ClaimCountsJson")]
 pub struct ClaimCounts {
     pub claim: String,
-    #[serde(flatten)]
     pub counts: VerdictCounts,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ClaimCountsJson {
+    claim: String,
+    #[serde(flatten)]
+    counts: VerdictCounts,
+    /// Derived from `counts`; read back for nothing.
+    #[serde(default, skip_deserializing)]
+    status: Option<ClaimStatus>,
+}
+
+impl From<ClaimCounts> for ClaimCountsJson {
+    fn from(c: ClaimCounts) -> Self {
+        let status = Some(c.counts.status());
+        ClaimCountsJson {
+            claim: c.claim,
+            counts: c.counts,
+            status,
+        }
+    }
+}
+
+impl From<ClaimCountsJson> for ClaimCounts {
+    fn from(c: ClaimCountsJson) -> Self {
+        ClaimCounts {
+            claim: c.claim,
+            counts: c.counts,
+        }
+    }
 }
 
 /// How many joint paths got this combination of verdicts, one per claim in
@@ -1004,6 +1060,82 @@ mod tests {
     use crate::project::{DirectoryFiles, DirectoryProject};
     use crate::util::smtsolver::cvc5lib::Cvc5LibBackend;
 
+    fn counts(
+        verified: usize,
+        unreachable: usize,
+        goal_fails: usize,
+        inconclusive: usize,
+    ) -> VerdictCounts {
+        VerdictCounts {
+            verified,
+            unreachable,
+            unreachable_dependency: 0,
+            goal_fails,
+            inconclusive,
+        }
+    }
+
+    #[test]
+    fn a_claim_status_is_its_worst_verdict_so_far() {
+        assert_eq!(counts(3, 1, 1, 0).status(), ClaimStatus::GoalFails);
+        assert_eq!(counts(3, 1, 0, 1).status(), ClaimStatus::Inconclusive);
+        assert_eq!(counts(3, 0, 0, 0).status(), ClaimStatus::Verified);
+        assert_eq!(counts(0, 0, 0, 0).status(), ClaimStatus::NoneYet);
+    }
+
+    #[test]
+    fn a_goal_failure_outranks_an_inconclusive_verdict() {
+        assert_eq!(counts(0, 0, 1, 1).status(), ClaimStatus::GoalFails);
+    }
+
+    #[test]
+    fn a_claim_unreachable_on_every_path_is_verified() {
+        assert_eq!(counts(0, 2, 0, 0).status(), ClaimStatus::Verified);
+    }
+
+    #[test]
+    fn the_trace_gives_each_claim_its_status() {
+        let claim = ClaimCounts {
+            claim: "c".into(),
+            counts: counts(0, 0, 0, 1),
+        };
+        let json = serde_json::to_value(&claim).unwrap();
+        assert_eq!(json["status"], "inconclusive");
+        assert_eq!(json["inconclusive"], 1);
+        let back: ClaimCounts = serde_json::from_value(json).unwrap();
+        assert_eq!(back, claim);
+        assert_eq!(
+            serde_json::to_value(ClaimStatus::NoneYet).unwrap(),
+            "none-yet"
+        );
+    }
+
+    #[test]
+    fn the_claims_line_counts_claims_by_status() {
+        let claim = |name: &str, c| ClaimCounts {
+            claim: name.into(),
+            counts: c,
+        };
+        let summary = LockstepSummary {
+            claims: vec![
+                claim("a", counts(2, 0, 0, 0)),
+                claim("b", counts(1, 0, 1, 0)),
+                claim("c", counts(1, 0, 0, 1)),
+                claim("d", counts(0, 1, 0, 0)),
+            ],
+            ..LockstepSummary::default()
+        };
+        assert_eq!(
+            lockstep_report::claims_line(&summary),
+            "4 (2 verified, 1 inconclusive, 1 GOAL FAILS)"
+        );
+        let none = LockstepSummary {
+            claims: vec![claim("a", counts(0, 0, 0, 0))],
+            ..LockstepSummary::default()
+        };
+        assert_eq!(lockstep_report::claims_line(&none), "1 (1 pending)");
+    }
+
     fn equal_output(p: &PairRecord) -> &Verdict {
         p.verdict_of(EQUAL_OUTPUT).expect("the EasyCrypt claim set")
     }
@@ -1732,6 +1864,10 @@ mod tests {
                 serde_json::from_str(&std::fs::read_to_string(out.join("trace.json")).unwrap())
                     .unwrap();
             assert_eq!(trace["schema"], LOCKSTEP_TRACE_SCHEMA);
+            assert_eq!(LOCKSTEP_TRACE_SCHEMA, 15);
+            for claim in trace["summary"]["claims"].as_array().unwrap() {
+                assert!(claim["status"].is_string(), "{oracle}: {claim}");
+            }
             for key in ["left_lines", "right_lines", "left_frames", "right_frames"] {
                 assert!(trace[key].is_array(), "{oracle}: {key}");
             }
@@ -2214,6 +2350,25 @@ mod tests {
         let text = lockstep_report::render_summary(&run);
         assert!(!text.contains("state relations failing"), "{text}");
         assert!(text.contains("J1"), "{text}");
+    }
+
+    /// Story EC 94: stdout and `summary.txt` count the claims by status in one line.
+    #[test]
+    fn the_summary_and_the_tree_text_count_the_claims_by_status() {
+        let mut run = run_rules("BadState");
+        run.summary.claims = ["a", "b", "c"]
+            .iter()
+            .zip([counts(0, 0, 1, 0), counts(0, 0, 0, 1), counts(1, 0, 0, 0)])
+            .map(|(name, c)| ClaimCounts {
+                claim: name.to_string(),
+                counts: c,
+            })
+            .collect();
+        let line = "claims        3 (1 verified, 1 inconclusive, 1 GOAL FAILS)";
+        let text = lockstep_report::render_summary(&run);
+        assert!(text.contains(line), "{text}");
+        let tree = lockstep_report::render_tree(&run.meta, &run.outcome, &run.summary);
+        assert!(tree.contains(line), "{tree}");
     }
 
     #[test]

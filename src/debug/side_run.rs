@@ -682,6 +682,8 @@ mod tests {
         let trace = std::fs::read_to_string(out.path().join("trace.json")).unwrap();
         assert!(trace.contains("\"one_sided\": true"));
         assert!(trace.contains("\"absent\""));
+        let trace: serde_json::Value = serde_json::from_str(&trace).unwrap();
+        assert_eq!(trace["summary"]["claims"][0]["status"], "goal-fails");
     }
 
     /// Story 73: each named invariant is a check of its own, named by the invariant; a path

@@ -23,7 +23,7 @@ use crate::debug::layout::Layout;
 use crate::debug::lockstep::{
     ChildOutcome, JointNode, JointTree, LockstepOutcome, PairRecord, SideStep, SideView, StuckPoint,
 };
-use crate::debug::lockstep_run::{LockstepMeta, LockstepRun, LockstepSummary};
+use crate::debug::lockstep_run::{ClaimStatus, LockstepMeta, LockstepRun, LockstepSummary};
 use crate::debug::lockstep_viewer;
 use crate::debug::report::format_elapsed;
 use crate::debug::smtout::SmtOut;
@@ -128,6 +128,7 @@ pub fn render_tree(
     }
 
     let _ = writeln!(out, "\n{}", one_line_summary(summary));
+    let _ = writeln!(out, "{:<14}{}", "claims", claims_line(summary));
     if let Some(line) = stop_line(outcome) {
         let _ = writeln!(out, "{line}");
     }
@@ -332,6 +333,30 @@ fn one_line_summary(s: &LockstepSummary) -> String {
     line
 }
 
+/// `12 (10 verified, 1 inconclusive, 1 GOAL FAILS)`: the checked claims, counted by
+/// [`status`](crate::debug::lockstep_run::VerdictCounts::status). A status no claim has is
+/// left out; a claim with no verdict yet is `pending`.
+pub fn claims_line(s: &LockstepSummary) -> String {
+    let count = |status| {
+        s.claims
+            .iter()
+            .filter(|c| c.counts.status() == status)
+            .count()
+    };
+    let groups: Vec<String> = [
+        (ClaimStatus::Verified, "verified"),
+        (ClaimStatus::Inconclusive, "inconclusive"),
+        (ClaimStatus::GoalFails, "GOAL FAILS"),
+        (ClaimStatus::NoneYet, "pending"),
+    ]
+    .into_iter()
+    .map(|(status, word)| (count(status), word))
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, word)| format!("{n} {word}"))
+    .collect();
+    format!("{} ({})", s.claims.len(), groups.join(", "))
+}
+
 fn listing_name(meta: &LockstepMeta) -> &'static str {
     if meta.listing == "easycrypt" {
         "EasyCrypt"
@@ -425,6 +450,7 @@ pub fn render_summary(run: &LockstepRun) -> String {
     };
     let _ = writeln!(s, "{:<14}{status}", "status");
     let _ = writeln!(s, "{:<14}{}", "elapsed", format_elapsed(run.elapsed));
+    let _ = writeln!(s, "{:<14}{}", "claims", claims_line(sm));
 
     s.push_str("\npaths\n");
     let _ = writeln!(
@@ -442,6 +468,57 @@ pub fn render_summary(run: &LockstepRun) -> String {
         "joint nodes", sm.nodes, sm.pruned_children
     );
 
+    write_verdicts(&mut s, meta, sm);
+
+    if !sm.relation_failures.is_empty() {
+        s.push_str("\nstate relations failing (joint paths)\n");
+        for (name, n) in &sm.relation_failures {
+            let _ = writeln!(s, "  {name:<24}{n}");
+        }
+    }
+
+    let _ = writeln!(s, "\nstuck points  {}", outcome.stuck.len());
+    for st in &outcome.stuck {
+        let _ = writeln!(s, "  {}", describe_stuck(st));
+    }
+
+    write_failing(&mut s, outcome);
+
+    let layout = meta.layout;
+    let _ = writeln!(s, "\n{:<14}{}", "artifacts", meta.out_dir);
+    let _ = writeln!(
+        s,
+        "  {:<12}{}        (joint tree: {} nodes, {} joint paths)",
+        "tree",
+        layout.summary(),
+        sm.nodes,
+        sm.joint_paths
+    );
+    let _ = writeln!(
+        s,
+        "  {:<12}{}         (joint-tree viewer)",
+        "viewer",
+        layout.viewer()
+    );
+    let _ = writeln!(s, "  {:<12}{}", "trace", layout.trace());
+    let _ = writeln!(s, "  {:<12}inlined.txt", "listing");
+    if o.smt.as_str() != "none" {
+        let _ = writeln!(
+            s,
+            "  {:<12}{}/               ({})",
+            "smt",
+            layout.rel("smt"),
+            o.smt.as_str()
+        );
+    }
+    if o.transcript {
+        let _ = writeln!(s, "  {:<12}{}", "transcript", layout.rel("transcript.smt2"));
+    }
+    s
+}
+
+/// The verdict table: one column per claim for one or two claims, else one row per claim.
+fn write_verdicts(s: &mut String, meta: &LockstepMeta, sm: &LockstepSummary) {
     let names: Vec<&str> = sm.claims.iter().map(|c| c.claim.as_str()).collect();
     if names.len() <= 2 {
         let _ = writeln!(s, "\nverdicts   ({})", names.join(" / "));
@@ -481,19 +558,10 @@ pub fn render_summary(run: &LockstepRun) -> String {
             );
         }
     }
+}
 
-    if !sm.relation_failures.is_empty() {
-        s.push_str("\nstate relations failing (joint paths)\n");
-        for (name, n) in &sm.relation_failures {
-            let _ = writeln!(s, "  {name:<24}{n}");
-        }
-    }
-
-    let _ = writeln!(s, "\nstuck points  {}", outcome.stuck.len());
-    for st in &outcome.stuck {
-        let _ = writeln!(s, "  {}", describe_stuck(st));
-    }
-
+/// The failing joint paths, at most 20.
+fn write_failing(s: &mut String, outcome: &LockstepOutcome) {
     let failing: Vec<&PairRecord> = outcome.pairs.iter().filter(|p| p.has_failure()).collect();
     if !failing.is_empty() {
         s.push_str("\nfailing joint paths\n");
@@ -518,38 +586,6 @@ pub fn render_summary(run: &LockstepRun) -> String {
             let _ = writeln!(s, "  … and {} more (see summary.txt)", failing.len() - CAP);
         }
     }
-
-    let layout = meta.layout;
-    let _ = writeln!(s, "\n{:<14}{}", "artifacts", meta.out_dir);
-    let _ = writeln!(
-        s,
-        "  {:<12}{}        (joint tree: {} nodes, {} joint paths)",
-        "tree",
-        layout.summary(),
-        sm.nodes,
-        sm.joint_paths
-    );
-    let _ = writeln!(
-        s,
-        "  {:<12}{}         (joint-tree viewer)",
-        "viewer",
-        layout.viewer()
-    );
-    let _ = writeln!(s, "  {:<12}{}", "trace", layout.trace());
-    let _ = writeln!(s, "  {:<12}inlined.txt", "listing");
-    if o.smt.as_str() != "none" {
-        let _ = writeln!(
-            s,
-            "  {:<12}{}/               ({})",
-            "smt",
-            layout.rel("smt"),
-            o.smt.as_str()
-        );
-    }
-    if o.transcript {
-        let _ = writeln!(s, "  {:<12}{}", "transcript", layout.rel("transcript.smt2"));
-    }
-    s
 }
 
 // ---------------------------------------------------------------------------

@@ -1113,8 +1113,13 @@ mod tests {
         for entry in walkdir_files(from) {
             let to = dir.path().join(entry.strip_prefix(from).unwrap());
             std::fs::create_dir_all(to.parent().unwrap()).unwrap();
-            let text = std::fs::read_to_string(&entry).unwrap();
-            std::fs::write(to, text.replace("UsefulOracle", oracle)).unwrap();
+            // a file that is not text (`.DS_Store`) is copied as it is
+            let bytes = std::fs::read(&entry).unwrap();
+            match String::from_utf8(bytes) {
+                Ok(text) => std::fs::write(to, text.replace("UsefulOracle", oracle)),
+                Err(e) => std::fs::write(to, e.into_bytes()),
+            }
+            .unwrap();
         }
         dir
     }

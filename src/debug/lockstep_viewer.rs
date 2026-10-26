@@ -434,6 +434,14 @@ mod tests {
         assert!(!TEMPLATE.contains("function initGrid"));
     }
 
+    /// Story EC 94: the header counts claims in one button; the details are in the Run summary.
+    #[test]
+    fn the_header_has_a_claims_button_and_the_detail_cell_a_run_summary() {
+        assert!(TEMPLATE.contains("claims.id = \"h-claims\""));
+        assert!(TEMPLATE.contains("function renderSummary"));
+        assert!(!TEMPLATE.contains("h-opts"));
+    }
+
     #[test]
     fn rendering_is_a_pure_function_of_its_inputs() {
         let a = render_html("{}", &stuck_rollups(&outcome(), &claims()), false);
