@@ -1,4 +1,4 @@
-theorem kem_dem_cca_ssp, proofstep 0 (Game_MON_CCA_PKE == Game_MOD_CCA_PKE_Real_KEM), oracle PKENC (EasyCrypt)
+theorem kem_dem_cca_ssp, game hop 0 (Game_MON_CCA_PKE == Game_MOD_CCA_PKE_Real_KEM), oracle PKENC (EasyCrypt)
 (left and right line numbers are independent — they index different columns)
 
    1 | (* game instance: Game_MON_CCA_PKE   (package instance: MON_CCA_PKE, package: MON_CCA_PKE) *)  |     1 | (* game instance: Game_MOD_CCA_PKE_Real_KEM   (package instance: MOD_CCA_PKE, package: MOD_CCA_PKE) *)

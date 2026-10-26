@@ -22,9 +22,9 @@ We decided:
    the equivalence's file joins them: `by conseq Eq_X_<O> SideInv_<L>_<O> SideInv_<R>_<O>.` (tested
    on the fork). So an oracle lemma does not need the `SideInv_` files, and a whole-theorem run can
    prove compositions and equivalences in parallel.
-4. **A side-invariant job proves one composition** (`prove --side-inv <C>`). It follows the side tree
+4. **A side-invariant job proves one composition** (`prove --game <C>`). It follows the side tree
    of one-sided execution, the way a proof job follows the joint tree. A proof job never proves
-   side invariants. `prove --proofstep <eq>` stops with a warning if a `SideInv_` file of its
+   side invariants. `prove --gamehop <eq>` stops with a warning if a `SideInv_` file of its
    compositions is missing.
 
 ## Considered options

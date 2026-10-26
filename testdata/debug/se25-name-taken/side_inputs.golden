@@ -1,5 +1,5 @@
 ["game-invariant!main!S!"]
-;;  domino easycrypt debug --side-inv — base frame 
+;;  domino easycrypt debug --game — base frame 
 
 (set-logic ALL)
 

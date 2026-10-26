@@ -2,7 +2,7 @@
 
 //! Sweeping the debugger over a project (story 19 §4.1, §4.7).
 //!
-//! `--proof`, `--proofstep`, `--oracle` and `--claim` are all optional: omitted means *all*,
+//! `--theorem`, `--gamehop`, `--oracle` and `--claim` are all optional: omitted means *all*,
 //! given means *only that*, exactly as in `domino prove`. [`plan`] turns the filters into the
 //! list of oracles to run; each run turns its outcome into a [`SweepEntry`], which it writes as
 //! its result record (`crate::debug::index`).
@@ -42,7 +42,7 @@ impl Skipped {
     /// The one-line note the sweep prints on stderr.
     pub fn note(&self) -> String {
         format!(
-            "debug: skipping {} proofstep {}: a {}, not an equivalence",
+            "debug: skipping {} game hop {}: a {}, not an equivalence",
             self.theorem, self.proofstep, self.kind
         )
     }
@@ -54,7 +54,7 @@ pub struct Plan {
     pub skipped: Vec<Skipped>,
 }
 
-/// The oracles the filters select, theorems in name order, proofsteps and oracles in
+/// The oracles the filters select, theorems in name order, game hops and oracles in
 /// declaration order.
 ///
 /// A proofstep that is a reduction or a conjecture is **skipped** while sweeping; naming it
@@ -133,7 +133,7 @@ pub fn plan<P: Project>(
         if let Some(wanted) = oracle {
             return Err(DebugError::OracleNotExported {
                 oracle: wanted.to_string(),
-                game_inst: "any selected proofstep".to_string(),
+                game_inst: "any selected game hop".to_string(),
             });
         }
     }
@@ -276,7 +276,7 @@ impl SweepEntry {
         }
     }
 
-    /// `theorem / proofstep 0 (Left == Right) / oracle`, or `game C oracle` and
+    /// `theorem / game hop 0 (Left == Right) / oracle`, or `game C oracle` and
     /// `package P oracle` for a run of `domino debug --game` and `--package` (their theorem is
     /// synthetic).
     pub(crate) fn label(&self) -> String {
@@ -289,7 +289,7 @@ impl SweepEntry {
             }
         }
         format!(
-            "{} proofstep {} ({} == {}) {}",
+            "{} game hop {} ({} == {}) {}",
             t.theorem, t.proofstep, t.left, t.right, t.oracle
         )
     }

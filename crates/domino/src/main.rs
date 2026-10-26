@@ -26,7 +26,7 @@ pub(crate) struct Cli {
 }
 
 #[derive(Error, Diagnostic, Debug)]
-#[error("Need to specify a proof when specifying a proofstep")]
+#[error("Need to specify a theorem when specifying a game hop")]
 #[diagnostic(code(cli::incompatible_arguments))]
 pub struct IncompatibleArguments;
 
@@ -87,20 +87,20 @@ pub struct EcDebugNotVerified;
 pub struct TheoremNotFound(pub String);
 
 #[derive(Error, Diagnostic, Debug)]
-#[error("--package cannot be combined with --proof or --proofstep")]
+#[error("--package cannot be combined with --theorem or --gamehop")]
 #[diagnostic(help(
     "a package invariant is proved on its own, for arbitrary package constants, so it is not \
-        part of any particular theorem or proof step. Drop --proof/--proofstep to check just \
+        part of any particular theorem or game hop. Drop --theorem/--gamehop to check just \
         the package, or drop --package to prove the theorem (its package invariants are \
         checked along with it)."
 ))]
 pub struct PackageWithProof;
 
 #[derive(Error, Diagnostic, Debug)]
-#[error("--game cannot be used with --proof or --proofstep")]
+#[error("--game cannot be used with --theorem or --gamehop")]
 #[diagnostic(help(
     "the game invariants of a composition are proved on their own, for every value of its \
-        parameters, so no theorem changes the check (ADR 0021). Drop --proof/--proofstep to \
+        parameters, so no theorem changes the check (ADR 0021). Drop --theorem/--gamehop to \
         check just the composition, or drop --game to prove the theorem (it proves the game \
         invariants only inside its equivalences)."
 ))]
@@ -197,8 +197,8 @@ enum Error {
     GameInvariant(#[from] sspverif::game_invariant::error::Error),
 }
 
-fn proofsteps(p: &Proofsteps) -> Result<(), Error> {
-    let project_root = match &p.path {
+fn gamehops(p: &Gamehops) -> Result<(), Error> {
+    let project_root = match &p.project {
         Some(path) => path.clone(),
         None => project::directory::find_project_root()?,
     };
@@ -212,11 +212,11 @@ fn proofsteps(p: &Proofsteps) -> Result<(), Error> {
 /// The refusals of `domino prove` that clap does not give: each pair of flags that cannot be
 /// used together, with a help that says why.
 fn check_prove_args(p: &Prove) -> Result<(), Error> {
-    if p.game.is_some() && (p.proof.is_some() || p.proofstep.is_some()) {
+    if p.game.is_some() && (p.theorem.is_some() || p.gamehop.is_some()) {
         return Err(GameWithProof.into());
     }
 
-    if p.proofstep.is_some() && p.proof.is_none() {
+    if p.gamehop.is_some() && p.theorem.is_none() {
         return Err(IncompatibleArguments.into());
     }
 
@@ -224,14 +224,14 @@ fn check_prove_args(p: &Prove) -> Result<(), Error> {
         return Err(ReqOracleWithInvariantStart.into());
     }
 
-    if p.package.is_some() && (p.proof.is_some() || p.proofstep.is_some()) {
+    if p.package.is_some() && (p.theorem.is_some() || p.gamehop.is_some()) {
         return Err(PackageWithProof.into());
     }
     Ok(())
 }
 
 fn prove(p: &Prove) -> Result<(), Error> {
-    let project_root = match &p.path {
+    let project_root = match &p.project {
         Some(path) => path.clone(),
         None => project::directory::find_project_root()?,
     };
@@ -272,8 +272,8 @@ fn prove(p: &Prove) -> Result<(), Error> {
         &smtsolver,
         p.transcript,
         p.parallel,
-        &p.proof,
-        p.proofstep,
+        &p.theorem,
+        p.gamehop,
         &p.oracle,
         &p.claim,
         p.invariant_start,
@@ -341,13 +341,13 @@ fn stage_line(mode: ProgressMode, line: &str) {
 fn debug(d: &Debug) -> Result<(), Error> {
     use sspverif::debug::layout::DOMINO_DEBUG_DIR;
 
-    if d.proofstep.is_some() && d.proof.is_none() {
+    if d.gamehop.is_some() && d.theorem.is_none() {
         return Err(IncompatibleArguments.into());
     }
 
     // NB: `unwrap_or` would evaluate `find_project_root()?` eagerly even when
-    // `--path` is given (and propagate its error). Match instead.
-    let project_root = match &d.path {
+    // `--project` is given (and propagate its error). Match instead.
+    let project_root = match &d.project {
         Some(path) => path.clone(),
         None => project::directory::find_project_root()?,
     };
@@ -381,15 +381,15 @@ fn debug_proofsteps<P: project::Project>(
     // Every filter is optional: omitted means all, given means only that (as in `prove`).
     let plan = sweep::plan(
         project,
-        d.proof.as_deref(),
-        d.proofstep,
+        d.theorem.as_deref(),
+        d.gamehop,
         d.oracle.as_deref(),
     )?;
     for skipped in &plan.skipped {
         eprintln!("{}", skipped.note());
     }
     if plan.targets.is_empty() {
-        eprintln!("debug: the project has no equivalence proofstep to debug");
+        eprintln!("debug: the project has no equivalence game hop to debug");
         return Ok(());
     }
     // One oracle: today's concise report on stdout. Several: one line per oracle as it
@@ -577,11 +577,11 @@ fn write_proofstep_indexes(
     use sspverif::debug::index::{self, Level};
 
     let level = Level::of_filters(
-        d.proof.as_deref(),
-        d.proofstep
+        d.theorem.as_deref(),
+        d.gamehop
             .map(|_| (first.left.as_str(), first.right.as_str())),
     );
-    let written = if d.oracle.is_some() && d.proofstep.is_some() {
+    let written = if d.oracle.is_some() && d.gamehop.is_some() {
         index::update_indexes(root, &level)
     } else {
         index::refresh_indexes(root, &level)
@@ -766,8 +766,8 @@ fn debug(_d: &Debug) -> Result<(), Error> {
 
 fn inline(i: &Inline) -> Result<(), Error> {
     // NB: match rather than `unwrap_or` so `find_project_root()?` is not
-    // evaluated (and its error propagated) when `--path` is given.
-    let project_root = match &i.path {
+    // evaluated (and its error propagated) when `--project` is given.
+    let project_root = match &i.project {
         Some(path) => path.clone(),
         None => project::directory::find_project_root()?,
     };
@@ -775,8 +775,8 @@ fn inline(i: &Inline) -> Result<(), Error> {
     let project = project::DirectoryProject::load(project_root, &files)?;
 
     let theorem = project
-        .get_theorem(&i.proof)
-        .ok_or_else(|| TheoremNotFound(i.proof.clone()))?;
+        .get_theorem(&i.theorem)
+        .ok_or_else(|| TheoremNotFound(i.theorem.clone()))?;
 
     let render = if i.easycrypt {
         sspverif::debug::render::render_side_by_side_easycrypt
@@ -788,7 +788,7 @@ fn inline(i: &Inline) -> Result<(), Error> {
     } else {
         sspverif::debug::render::ListingView::Full
     };
-    let listing = render(theorem, i.proofstep, &i.oracle, !i.no_line_numbers, view)?;
+    let listing = render(theorem, i.gamehop, &i.oracle, !i.no_line_numbers, view)?;
     print!("{listing}");
     Ok(())
 }
@@ -1119,10 +1119,7 @@ fn easycrypt_prove<P: project::Project + Sync>(
     }
     #[cfg(feature = "cvc5-lib")]
     {
-        use sspverif::easycrypt::tactics::{
-            read_smt_hints, run_tactics_observed, EcTranscriptMode, ResumeMode, TacticsOptions,
-            WriteGranularity,
-        };
+        use sspverif::easycrypt::tactics::run_tactics_observed;
         use sspverif::writers::easycrypt::progress::LoggingExportObserver;
 
         let theorem_names = proof_job_theorem(project, &p.theorem)?;
@@ -1146,39 +1143,7 @@ fn easycrypt_prove<P: project::Project + Sync>(
         drop(observer);
 
         let backend = sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, None);
-        let options = TacticsOptions {
-            proofstep: p.proofstep,
-            oracle: p.oracle.clone(),
-            ec_timeout: std::time::Duration::from_secs(p.ec_timeout),
-            smt_hints: read_smt_hints(project_root)?,
-            lockstep_timeout_ms: None,
-            quick_close: !p.no_quick_close,
-            leaf_budget: p.leaf_budget.map(std::time::Duration::from_secs),
-            smt_retry_timeout: p.smt_retry_timeout,
-            ec_transcript: match p.ec_transcript {
-                EcTranscriptArg::Capped => EcTranscriptMode::Capped,
-                EcTranscriptArg::Full => EcTranscriptMode::Full,
-            },
-            write_granularity: match p.write_granularity {
-                WriteGranularityArg::Oracle => WriteGranularity::Oracle,
-                WriteGranularityArg::Node => WriteGranularity::Node,
-                WriteGranularityArg::Tactic => WriteGranularity::Tactic,
-            },
-            stop: Some(stop_on_ctrl_c(
-                "easycrypt: interrupt — stopping the current EasyCrypt sentence, then writing the \
-                 partial proof (Ctrl-C again to abort now)",
-            )),
-            force: p.force,
-            announce_stages: p.progress != ProgressMode::None,
-            jobs: p.jobs,
-            side_inv: p.side_inv.clone(),
-            pkg_inv: p.pkg_inv.clone(),
-            resume: match p.resume {
-                ResumeArg::Trust => ResumeMode::Trust,
-                ResumeArg::Replay => ResumeMode::Replay,
-                ResumeArg::Restart => ResumeMode::Restart,
-            },
-        };
+        let options = tactics_options(p, project_root)?;
         let board = progress_board(p.progress);
         let mut ended_early = false;
         for (name, exported) in &exports {
@@ -1223,6 +1188,50 @@ fn easycrypt_prove<P: project::Project + Sync>(
     }
 }
 
+/// The options of `domino easycrypt prove`, as the tactics run takes them.
+#[cfg(feature = "cvc5-lib")]
+fn tactics_options(
+    p: &EcProve,
+    project_root: &std::path::Path,
+) -> Result<sspverif::easycrypt::tactics::TacticsOptions, Error> {
+    use sspverif::easycrypt::tactics::{
+        read_smt_hints, EcTranscriptMode, ResumeMode, TacticsOptions, WriteGranularity,
+    };
+    Ok(TacticsOptions {
+        proofstep: p.gamehop,
+        oracle: p.oracle.clone(),
+        ec_timeout: std::time::Duration::from_secs(p.ec_timeout),
+        smt_hints: read_smt_hints(project_root)?,
+        lockstep_timeout_ms: None,
+        quick_close: !p.no_quick_close,
+        leaf_budget: p.leaf_budget.map(std::time::Duration::from_secs),
+        smt_retry_timeout: p.smt_retry_timeout,
+        ec_transcript: match p.ec_transcript {
+            EcTranscriptArg::Capped => EcTranscriptMode::Capped,
+            EcTranscriptArg::Full => EcTranscriptMode::Full,
+        },
+        write_granularity: match p.write_granularity {
+            WriteGranularityArg::Oracle => WriteGranularity::Oracle,
+            WriteGranularityArg::Node => WriteGranularity::Node,
+            WriteGranularityArg::Tactic => WriteGranularity::Tactic,
+        },
+        stop: Some(stop_on_ctrl_c(
+            "easycrypt: interrupt — stopping the current EasyCrypt sentence, then writing the \
+             partial proof (Ctrl-C again to abort now)",
+        )),
+        force: p.force,
+        announce_stages: p.progress != ProgressMode::None,
+        jobs: p.jobs,
+        side_inv: p.game.clone(),
+        pkg_inv: p.package.clone(),
+        resume: match p.resume {
+            ResumeArg::Trust => ResumeMode::Trust,
+            ResumeArg::Replay => ResumeMode::Replay,
+            ResumeArg::Restart => ResumeMode::Restart,
+        },
+    })
+}
+
 /// `1 oracle`, `7 oracles`.
 #[cfg(feature = "cvc5-lib")]
 fn count(n: usize, noun: &str) -> String {
@@ -1248,14 +1257,14 @@ fn easycrypt_debug<P: project::Project>(
 
         let theorem_names = proof_job_theorem(project, &d.theorem)?;
         use sspverif::debug::side_run::StateOwner;
-        let owner = match (&d.side_inv, &d.pkg_inv) {
+        let owner = match (&d.game, &d.package) {
             (Some(c), _) => Some(StateOwner::Composition(c.clone())),
             (None, Some(p)) => Some(StateOwner::Package(p.clone())),
             (None, None) => None,
         };
         if let Some(owner) = &owner {
             let backend =
-                sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.debug_timeout);
+                sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.timeout);
             let stop = stop_on_ctrl_c(
                 "easycrypt: interrupt — finishing the current solver query, then writing partial \
                  results (Ctrl-C again to abort now)",
@@ -1279,7 +1288,7 @@ fn easycrypt_debug<P: project::Project>(
                     d.oracle.as_deref(),
                     &theorem_out,
                     &backend,
-                    d.debug_timeout,
+                    d.timeout,
                     Some(&stop),
                     &mut || debug_observer(d.progress),
                     &mut |entry| println!("{}", entry.one_line()),
@@ -1307,11 +1316,11 @@ fn easycrypt_debug<P: project::Project>(
         drop(observer);
 
         let backend =
-            sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.debug_timeout);
+            sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.timeout);
         let options = EcDebugOptions {
-            proofstep: d.proofstep,
+            proofstep: d.gamehop,
             oracle: d.oracle.clone(),
-            timeout_ms: d.debug_timeout,
+            timeout_ms: d.timeout,
         };
         let stop = stop_on_ctrl_c(
             "easycrypt: interrupt — finishing the current solver query, then writing partial \
@@ -1377,7 +1386,7 @@ fn easycrypt_check_alignment<P: project::Project>(
         std::fs::create_dir_all(&theorem_out)?;
         sspverif::easycrypt::job::ensure_translation_files(exported, &theorem_out)?;
         let options = sspverif::easycrypt::check::CheckOptions {
-            proofstep: c.proofstep,
+            proofstep: c.gamehop,
             oracle: c.oracle.clone(),
         };
         let alignment =
@@ -1395,7 +1404,7 @@ fn easycrypt_check_alignment<P: project::Project>(
 }
 
 fn latex(l: &Latex) -> Result<(), Error> {
-    let project_root = match &l.path {
+    let project_root = match &l.project {
         Some(path) => path.clone(),
         None => project::directory::find_project_root()?,
     };
@@ -1420,14 +1429,14 @@ fn format(f: &Format) -> Result<(), Error> {
 }
 
 fn html(h: &Html) -> Result<(), Error> {
-    let project_root = match &h.path {
+    let project_root = match &h.project {
         Some(path) => path.clone(),
         None => project::directory::find_project_root()?,
     };
     let files = project::DirectoryFiles::load(&project_root)?;
     let project = project::DirectoryProject::load(project_root.clone(), &files)?;
 
-    let names: Vec<String> = match &h.proof {
+    let names: Vec<String> = match &h.theorem {
         Some(name) => {
             project
                 .get_theorem(name)
@@ -1470,7 +1479,7 @@ fn main() -> miette::Result<()> {
 
     let result = match &cli.command {
         Commands::Prove(p) => prove(p),
-        Commands::Proofsteps(p) => proofsteps(p),
+        Commands::Gamehops(p) => gamehops(p),
         Commands::Latex(l) => latex(l),
         Commands::Format(f) => format(f),
         Commands::Debug(d) => debug(d),

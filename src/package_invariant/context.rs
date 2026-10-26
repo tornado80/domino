@@ -366,7 +366,7 @@ impl PackageInvariantContext<'_> {
     /// walk, and then each named invariant on the old state.
     pub(crate) fn emit_tree_base_frame(&self, oracle_name: &str) -> Vec<SmtExpr> {
         let mut out = vec![SmtExpr::Comment(
-            " domino easycrypt debug --pkg-inv — base frame ".to_string(),
+            " domino easycrypt debug --package — base frame ".to_string(),
         )];
         out.extend(self.emit_base_declarations());
         out.extend(self.emit_call_records());

@@ -178,13 +178,13 @@ impl ResultRecord {
         }
     }
 
-    /// `T proofstep 3 (L == R) O [claim]`, `game C O [claim]` or `package P O [claim]`.
+    /// `T game hop 3 (L == R) O [claim]`, `game C O [claim]` or `package P O [claim]`.
     fn label(&self) -> String {
         if let Some((flag, name)) = self.free_level().as_ref().and_then(Level::free_owner) {
             return format!("{flag} {name} {} [{}]", self.oracle, self.claim);
         }
         format!(
-            "{} proofstep {} ({} == {}) {} [{}]",
+            "{} game hop {} ({} == {}) {} [{}]",
             self.theorem, self.proofstep, self.left, self.right, self.oracle, self.claim
         )
     }
@@ -528,7 +528,7 @@ fn header(level: &Level) -> &'static [&'static str] {
     match level {
         Level::Project => &["theorem", "runs", "runs not ok", "oldest run", ""],
         Level::Theorem { .. } => &[
-            "proofstep",
+            "game hop",
             "games",
             "runs",
             "runs not ok",
@@ -570,7 +570,7 @@ fn rows(level: &Level, dir: &Path, found: &[Found]) -> Vec<Row> {
                         let link = child_link(dir, &format!("{sub}/{name}"), hint);
                         return child_row(vec![format!("{flag}  {name}")], &runs, link);
                     }
-                    let hint = format!("no index; run `domino debug --proof {name}`");
+                    let hint = format!("no index; run `domino debug --theorem {name}`");
                     child_row(vec![name.clone()], &runs, child_link(dir, &name, hint))
                 })
                 .collect()
@@ -587,20 +587,20 @@ fn rows(level: &Level, dir: &Path, found: &[Found]) -> Vec<Row> {
                 .map(|((left, step, right), runs)| {
                     if step == PKG_INV_ROWS {
                         let hint = format!(
-                            "no index; run `domino easycrypt debug --theorem {theorem} --pkg-inv {left}`"
+                            "no index; run `domino easycrypt debug --theorem {theorem} --package {left}`"
                         );
                         let link = child_link(dir, &pkg_inv_rel(&left), hint);
                         return child_row(vec!["pkg-inv".to_string(), left], &runs, link);
                     }
                     if step == SIDE_INV_ROWS {
                         let hint = format!(
-                            "no index; run `domino easycrypt debug --theorem {theorem} --side-inv {left}`"
+                            "no index; run `domino easycrypt debug --theorem {theorem} --game {left}`"
                         );
                         let link = child_link(dir, &side_inv_rel(&left), hint);
                         return child_row(vec!["side-inv".to_string(), left], &runs, link);
                     }
                     let hint =
-                        format!("no index; run `domino debug --proof {theorem} --proofstep {step}`");
+                        format!("no index; run `domino debug --theorem {theorem} --gamehop {step}`");
                     let link = child_link(dir, &format!("{left}-{right}"), hint);
                     child_row(vec![step.to_string(), format!("{left} == {right}")], &runs, link)
                 })
@@ -1026,7 +1026,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("no index; run `domino debug --proof T --proofstep 1`"),
+            text.contains("no index; run `domino debug --theorem T --gamehop 1`"),
             "{text}"
         );
     }
@@ -1045,7 +1045,7 @@ mod tests {
         let text = read(root.path().join("T/summary.txt"));
         assert!(
             text.contains(
-                "T proofstep 0 (L0 == R0) O [!all-claims!] sequential: invariant: goal-fails \
+                "T game hop 0 (L0 == R0) O [!all-claims!] sequential: invariant: goal-fails \
                  → state-relation rel_ctr: goal-fails (#1.1)"
             ),
             "{text}"

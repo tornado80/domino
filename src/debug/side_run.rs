@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `domino easycrypt debug --side-inv <C>` (symbolic-execution story 25, ADR 0014): one-sided
+//! `domino easycrypt debug --game <C>` (symbolic-execution story 25, ADR 0014): one-sided
 //! execution of each oracle of a composition, on the EasyCrypt listing. [`execute_free`] is the
 //! engine that `domino debug --game` (story 32, [`crate::debug::game_run`]) also uses, on the
 //! Domino listing.

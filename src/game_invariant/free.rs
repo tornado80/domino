@@ -4,7 +4,7 @@
 //! constant, and the equivalence of the two that gives the SMT vocabulary.
 //!
 //! The claims ([`claims`]) and the base frame ([`base_frame`]) read only the left side (`C`).
-//! The side tree of `domino easycrypt debug --side-inv C` and `domino prove --game C` read this
+//! The side tree of `domino easycrypt debug --game C` and `domino prove --game C` read this
 //! one encoding.
 
 use crate::expressions::Expression;
@@ -195,7 +195,7 @@ pub(crate) fn claims(eqctx: &EquivalenceContext<'_>) -> Vec<ResolvedClaim> {
 /// of `oracle` has no constraint: one-sided execution walks its paths.
 pub(crate) fn base_frame(eqctx: &EquivalenceContext<'_>, oracle: &str) -> Vec<SmtExpr> {
     let mut base = vec![SmtExpr::Comment(
-        " domino easycrypt debug --side-inv — base frame ".to_string(),
+        " domino easycrypt debug --game — base frame ".to_string(),
     )];
     base.extend(frame(eqctx, oracle, Some(oracle)));
     base

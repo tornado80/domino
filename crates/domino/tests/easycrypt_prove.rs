@@ -88,7 +88,7 @@ fn a_proof_job_touches_only_its_own_files_skips_a_done_equivalence_and_recreates
     let theorem = dir.join("Proof");
     let out = domino("hello-world", &dir, &ec, &["export"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    let prove = ["prove", "--theorem", "Proof", "--proofstep", "0"];
+    let prove = ["prove", "--theorem", "Proof", "--gamehop", "0"];
 
     // proves without `--force`, and modifies only its own files
     let before = snapshot(&theorem);
@@ -198,7 +198,7 @@ fn a_proof_job_never_creates_another_equivalences_file() {
                 "prove",
                 "--theorem",
                 "KEM_Proof",
-                "--proofstep",
+                "--gamehop",
                 "0",
                 "--oracle",
                 oracle,
@@ -287,7 +287,7 @@ fn two_proof_jobs_on_different_equivalences_run_at_once() {
     let out = scratch("parallel");
     let translated = domino(project, &out, &easycrypt, &["export"]);
     assert!(translated.status.success(), "{}", stderr(&translated));
-    // proofsteps 0 and 2 are `Eq_CPA_PKE_H0` and `Eq_H1_H2` (1 is a reduction)
+    // game hops 0 and 2 are `Eq_CPA_PKE_H0` and `Eq_H1_H2` (1 is a reduction)
     let (a, b) = std::thread::scope(|s| {
         let prove = |step: &'static str| {
             let (out, easycrypt) = (&out, &easycrypt);
@@ -296,7 +296,7 @@ fn two_proof_jobs_on_different_equivalences_run_at_once() {
                     project,
                     out,
                     easycrypt,
-                    &["prove", "--theorem", theorem, "--proofstep", step],
+                    &["prove", "--theorem", theorem, "--gamehop", step],
                 )
             })
         };
@@ -360,7 +360,7 @@ fn a_proof_job_recreates_a_missing_invariants_file() {
             "prove",
             "--theorem",
             "Proof",
-            "--proofstep",
+            "--gamehop",
             "0",
             "--progress",
             "plain",

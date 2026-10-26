@@ -3,7 +3,7 @@
 //! `domino easycrypt debug` (story 19 §4.5): lockstep execution on the EasyCrypt listing,
 //! for every equivalence proofstep of an exported theorem and every exported oracle.
 //!
-//! Selection is exactly that of `check-alignment` and `prove`: `--proofstep` and
+//! Selection is exactly that of `check-alignment` and `prove`: `--gamehop` and
 //! `--oracle` narrow it. Each oracle is one call of
 //! [`run_lockstep_command`], the call `prove` makes, with the options `prove` uses
 //! ([`LockstepDebugOptions::easycrypt`]), so the two cannot drift. **Claims have no meaning
@@ -51,7 +51,7 @@ pub struct EcDebugOptions {
     pub timeout_ms: Option<u64>,
 }
 
-/// What a run of [`debug_theorem`] will visit after `--proofstep` and `--oracle`.
+/// What a run of [`debug_theorem`] will visit after `--gamehop` and `--oracle`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DebugPlan {
     /// Equivalences with at least one selected oracle.
@@ -183,7 +183,7 @@ where
     Ok(entries)
 }
 
-/// `domino easycrypt debug --side-inv <C>` (symbolic-execution story 25) and `--pkg-inv <P>`
+/// `domino easycrypt debug --game <C>` (symbolic-execution story 25) and `--package <P>`
 /// (story 29): one-sided execution of each oracle of `owner` (only `oracle`, if given), under
 /// `<theorem_out>/!debug!/SideInv_<C>/<O>/` or `PkgInv_<P>/<O>/`. Then the theorem's debug
 /// index (`<theorem_out>/index.html`) is rewritten to list the runs. A `Ctrl-C` (`stop`) ends

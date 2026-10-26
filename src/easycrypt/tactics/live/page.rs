@@ -207,7 +207,7 @@ impl Live {
         for (e, eq) in self.eqs.iter().enumerate() {
             let _ = writeln!(
                 out,
-                "<h2>{} <span class=\"note\">(proofstep {}: {} ~ {})</span></h2>",
+                "<h2>{} <span class=\"note\">(game hop {}: {} ~ {})</span></h2>",
                 esc(&eq.file),
                 eq.proofstep,
                 esc(&eq.left),

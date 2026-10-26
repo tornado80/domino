@@ -34,7 +34,7 @@ pub(crate) enum SmtOutArg {
 /// Which claims `domino debug` checks (story 23).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum ClaimSetArg {
-    /// Every claim of the proofstep, each under its declared dependencies, as `domino prove`
+    /// Every claim of the game hop, each under its declared dependencies, as `domino prove`
     /// does (the default).
     Obligations,
     /// Only `equal-aborts`, `same-output`, `invariant` and the package and game invariants,
@@ -94,12 +94,13 @@ pub(crate) enum Commands {
     /// Reformat file or directory
     Format(Format),
 
-    Proofsteps(Proofsteps),
+    /// List the game hops of each theorem, with the index that `--gamehop` takes.
+    Gamehops(Gamehops),
 
-    /// Symbolically execute both sides of an equivalence proofstep and debug one claim.
+    /// Symbolically execute both sides of an equivalence game hop and debug one claim.
     Debug(Debug),
 
-    /// Inline the code of an oracle for both sides of an equivalence proofstep, side by side.
+    /// Inline the code of an oracle for both sides of an equivalence game hop, side by side.
     Inline(Inline),
 
     /// Export one HTML page per theorem: every game instance's composition
@@ -172,27 +173,28 @@ pub(crate) struct EcProve {
     /// Name of the theorem to prove.
     #[clap(long)]
     pub(crate) theorem: String,
-    /// Only this proofstep (as printed by `domino proofsteps`). Without it the proofsteps run
+    /// Only this game hop (as printed by `domino gamehops`). Without it the game hops run
     /// one after another in this process; to run them at once start one process each. Its
     /// equivalence does not start when the side-invariant files `SideInv_<C>.ec` and
     /// `SideInv_<C>_<O>.ec` of one of its compositions are missing (a file with admits counts):
-    /// prove them first with `--side-inv <C>`. Without `--proofstep` and `--side-inv`, the
+    /// prove them first with `--game <C>`. Without `--gamehop` and `--game`, the
     /// side-invariant jobs of the compositions run in parallel with the equivalences (story 69).
-    #[clap(long, conflicts_with_all = ["side_inv", "pkg_inv"])]
-    pub(crate) proofstep: Option<usize>,
-    /// Only the side-invariant job of this composition (story 69): the `hoare` lemma
-    /// `SideInv_<C>_<O>.ec` of each of its oracles, proved along the side tree of one-sided
-    /// execution. Its records and pages are under `session/SideInv_<C>/` and
-    /// `progress/SideInv_<C>/`.
+    #[clap(long, conflicts_with_all = ["game", "package"])]
+    pub(crate) gamehop: Option<usize>,
+    /// Only the side-invariant job of this composition: the lemma `SideInv_<C>_<O>.ec` of each
+    /// of its oracles. Its game invariants are proved here, along the side tree of one-sided
+    /// execution; its package invariants come from the package-invariant and frame lemmas of
+    /// `--package`, which must exist first. Its records and pages are under
+    /// `session/SideInv_<C>/` and `progress/SideInv_<C>/`.
     #[clap(long)]
-    pub(crate) side_inv: Option<String>,
+    pub(crate) game: Option<String>,
     /// Only the package-invariant job of this package (story 76), for each variant of it that
     /// the theorem uses: the package-invariant lemma `PkgInv_<V>_<O>.ec` of each oracle, proved
     /// along the package tree with each import call an open call, then the frame lemmas
     /// `Frame_<V>_<O>.ec` and the start lemma `PkgInv_<V>_init.ec`. Its records and pages are
     /// under `session/PkgInv_<V>/` and `progress/PkgInv_<V>/`.
-    #[clap(long, conflicts_with = "side_inv")]
-    pub(crate) pkg_inv: Option<String>,
+    #[clap(long, conflicts_with = "game")]
+    pub(crate) package: Option<String>,
     /// Only this exported oracle; the rest keep what their session records hold, or
     /// `+ proc; inline. admit.`. Each oracle has its own lock, so jobs on different oracles of
     /// one equivalence can run at once.
@@ -254,9 +256,9 @@ pub(crate) struct EcCheckAlignment {
     /// Name of the theorem to check.
     #[clap(long)]
     pub(crate) theorem: String,
-    /// Only this proofstep (as printed by `domino proofsteps`).
+    /// Only this game hop (as printed by `domino gamehops`).
     #[clap(long)]
-    pub(crate) proofstep: Option<usize>,
+    pub(crate) gamehop: Option<usize>,
     /// Only this exported oracle.
     #[clap(long)]
     pub(crate) oracle: Option<String>,
@@ -274,26 +276,26 @@ pub(crate) struct EcDebug {
     /// Name of the theorem to debug.
     #[clap(long)]
     pub(crate) theorem: String,
-    /// Only this proofstep (as printed by `domino proofsteps`).
+    /// Only this game hop (as printed by `domino gamehops`).
     #[clap(long)]
-    pub(crate) proofstep: Option<usize>,
+    pub(crate) gamehop: Option<usize>,
     /// Only this exported oracle.
     #[clap(long)]
     pub(crate) oracle: Option<String>,
     /// One-sided execution of this composition instead of lockstep execution
     /// (symbolic-execution story 25): the side tree of each oracle (or of `--oracle`), with the
     /// composition's parameters free, written under `!debug!/SideInv_<C>/<oracle>/`.
-    #[clap(long, conflicts_with = "proofstep")]
-    pub(crate) side_inv: Option<String>,
+    #[clap(long, conflicts_with = "gamehop")]
+    pub(crate) game: Option<String>,
     /// One-sided execution of this package (symbolic-execution story 29): the package tree of
     /// each of its oracles (or of `--oracle`), with its parameters free and each import call an
     /// open call, written under `!debug!/PkgInv_<P>/<oracle>/`.
-    #[clap(long, conflicts_with_all = ["proofstep", "side_inv"])]
-    pub(crate) pkg_inv: Option<String>,
+    #[clap(long, conflicts_with_all = ["gamehop", "game"])]
+    pub(crate) package: Option<String>,
     /// Per-query solver timeout in milliseconds (cvc5 `tlimit-per`), as for
     /// `domino debug --timeout`. A timeout counts as `unknown`, never as verified.
     #[clap(long)]
-    pub(crate) debug_timeout: Option<u64>,
+    pub(crate) timeout: Option<u64>,
     /// How the run reports what it is doing, on stderr.
     #[clap(long, value_enum, default_value_t = ProgressMode::Auto)]
     pub(crate) progress: ProgressMode,
@@ -305,10 +307,10 @@ pub(crate) struct Html {
     /// Path to the Domino project. Defaults to searching the current
     /// directory and its ancestors for an `ssp.toml`.
     #[clap(long)]
-    pub(crate) path: Option<std::path::PathBuf>,
+    pub(crate) project: Option<std::path::PathBuf>,
     /// Only export this theorem (default: all theorems).
     #[clap(long)]
-    pub(crate) proof: Option<String>,
+    pub(crate) theorem: Option<String>,
     /// Solver for the composition-diagram layout (as `domino latex`). Without
     /// one, a simple solver-free layout is drawn.
     #[clap(short, long, default_value = "z3")]
@@ -331,15 +333,15 @@ pub(crate) struct Inline {
     /// Path to the Domino project. Defaults to searching the current
     /// directory and its ancestors for an `ssp.toml`.
     #[clap(long)]
-    pub(crate) path: Option<std::path::PathBuf>,
-    /// Name of the theorem the equivalence proofstep belongs to.
+    pub(crate) project: Option<std::path::PathBuf>,
+    /// Name of the theorem the equivalence game hop belongs to.
     #[clap(long)]
-    pub(crate) proof: String,
-    /// Index (starting at 0) of the equivalence proofstep within the theorem,
-    /// as printed by `domino proofsteps`.
+    pub(crate) theorem: String,
+    /// Index (starting at 0) of the equivalence game hop within the theorem,
+    /// as printed by `domino gamehops`.
     #[clap(long)]
-    pub(crate) proofstep: usize,
-    /// Name of the oracle to inline, as exported by the games in the proofstep.
+    pub(crate) gamehop: usize,
+    /// Name of the oracle to inline, as exported by the games in the game hop.
     #[clap(long)]
     pub(crate) oracle: String,
     /// Print without line numbers (useful for diffing two runs).
@@ -362,17 +364,17 @@ pub(crate) struct Debug {
     /// Path to the Domino project. Defaults to searching the current
     /// directory and its ancestors for an `ssp.toml`.
     #[clap(long)]
-    pub(crate) path: Option<std::path::PathBuf>,
+    pub(crate) project: Option<std::path::PathBuf>,
     /// Name of the theorem. Without it, every theorem is debugged.
     #[clap(long)]
-    pub(crate) proof: Option<String>,
+    pub(crate) theorem: Option<String>,
     /// One-sided execution of each oracle of this composition (as in `games/C.comp.ssp`; not a
     /// game instance) on the Domino listing, with its parameters free. Needs no theorem. Checks
     /// the game invariants; assumes the package invariants. The start check is
     /// `domino prove --game C --invariant-start`.
     #[clap(long, conflicts_with_all = [
-        "proof",
-        "proofstep",
+        "theorem",
+        "gamehop",
         "claim_set",
         "lockstep",
         "no_check_left",
@@ -385,8 +387,8 @@ pub(crate) struct Debug {
     /// `domino prove --package P --invariant-start`.
     #[clap(long, conflicts_with_all = [
         "game",
-        "proof",
-        "proofstep",
+        "theorem",
+        "gamehop",
         "claim_set",
         "lockstep",
         "no_check_left",
@@ -394,11 +396,11 @@ pub(crate) struct Debug {
         "first_failure_per_claim",
     ])]
     pub(crate) package: Option<String>,
-    /// Index (starting at 0) of the equivalence proofstep, as printed by `domino proofsteps`.
-    /// Without it, every equivalence proofstep is debugged; reductions and conjectures are
-    /// skipped with a note. Needs `--proof`.
+    /// Index (starting at 0) of the equivalence game hop, as printed by `domino gamehops`.
+    /// Without it, every equivalence game hop is debugged; reductions and conjectures are
+    /// skipped with a note. Needs `--theorem`.
     #[clap(long)]
-    pub(crate) proofstep: Option<usize>,
+    pub(crate) gamehop: Option<usize>,
     /// Exported oracle name. Without it, every exported oracle is debugged.
     #[clap(long)]
     pub(crate) oracle: Option<String>,
@@ -409,7 +411,7 @@ pub(crate) struct Debug {
     /// of `P`.
     #[clap(long)]
     pub(crate) claim: Option<String>,
-    /// Which claims to check. `obligations` (the default): every claim of the proofstep, each
+    /// Which claims to check. `obligations` (the default): every claim of the game hop, each
     /// under its declared dependencies, as `domino prove` does. `core`: only `equal-aborts`,
     /// `same-output`, `invariant` and the package and game invariants, each under its built-in
     /// dependencies only (`no-abort`, `equal-aborts`, …). Project lemmas are neither checked
@@ -485,7 +487,7 @@ pub(crate) struct Latex {
     /// Path to the Domino project. Defaults to searching the current
     /// directory and its ancestors for an `ssp.toml`.
     #[clap(long)]
-    pub(crate) path: Option<std::path::PathBuf>,
+    pub(crate) project: Option<std::path::PathBuf>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -494,7 +496,7 @@ pub(crate) struct Prove {
     /// Path to the Domino project. Defaults to searching the current
     /// directory and its ancestors for an `ssp.toml`.
     #[clap(long)]
-    pub(crate) path: Option<std::path::PathBuf>,
+    pub(crate) project: Option<std::path::PathBuf>,
     #[clap(short, long, default_value = "cvc5")]
     pub(crate) smtsolver: SolverVariant,
     #[clap(short, long)]
@@ -506,12 +508,14 @@ pub(crate) struct Prove {
     /// Also restricts package invariants to their induction start.
     #[clap(long)]
     pub(crate) invariant_start: bool,
+    /// Only this game hop (as printed by `domino gamehops`). Needs `--theorem`.
     #[clap(long)]
-    pub(crate) proofstep: Option<usize>,
+    pub(crate) gamehop: Option<usize>,
+    /// Only prove this theorem (default: all theorems).
     #[clap(long)]
-    pub(crate) proof: Option<String>,
+    pub(crate) theorem: Option<String>,
     /// Only prove the invariant of this package, and nothing else.
-    /// Cannot be combined with --proof or --proofstep.
+    /// Cannot be combined with --theorem or --gamehop.
     #[clap(long, conflicts_with = "injective_randmap")]
     pub(crate) package: Option<String>,
     /// Only prove the game invariants of this composition (as in `games/C.comp.ssp`; not a
@@ -534,16 +538,16 @@ pub(crate) struct Prove {
 
 #[derive(clap::Args, Debug)]
 #[clap(author, version, about, long_about = None)]
-pub(crate) struct Proofsteps {
+pub(crate) struct Gamehops {
     /// Path to the Domino project. Defaults to searching the current
     /// directory and its ancestors for an `ssp.toml`.
     #[clap(long)]
-    pub(crate) path: Option<std::path::PathBuf>,
+    pub(crate) project: Option<std::path::PathBuf>,
 }
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     use super::EcProve;
 
@@ -564,5 +568,116 @@ mod tests {
     fn no_quick_close_and_its_hidden_alias_no_rung0_both_skip_the_quick_close() {
         assert!(skips_quick_close("--no-quick-close"));
         assert!(skips_quick_close("--no-rung0"));
+    }
+
+    /// Parses `domino <args>` as the binary does.
+    fn parse(args: &[&str]) -> Result<crate::Cli, clap::Error> {
+        crate::Cli::try_parse_from(std::iter::once("domino").chain(args.iter().copied()))
+    }
+
+    fn words(line: &str) -> Vec<&str> {
+        line.split_whitespace().collect()
+    }
+
+    #[test]
+    fn every_command_takes_the_one_vocabulary() {
+        for line in [
+            "prove --project D --theorem T --gamehop 3",
+            "debug --project D --theorem T --gamehop 3 --oracle O",
+            "inline --project D --theorem T --gamehop 3 --oracle O",
+            "html --theorem T",
+            "latex --project D",
+            "gamehops --project D",
+            "easycrypt prove --theorem T --gamehop 3",
+            "easycrypt prove --theorem T --game C",
+            "easycrypt prove --theorem T --package P",
+            "easycrypt debug --theorem T --game C --timeout 500",
+            "easycrypt check-alignment --theorem T --gamehop 3",
+        ] {
+            if let Err(e) = parse(&words(line)) {
+                panic!("{line}: {e}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_old_names_are_refused() {
+        for line in [
+            "prove --path D",
+            "prove --proof T",
+            "prove --theorem T --proofstep 3",
+            "debug --path D",
+            "debug --proof T",
+            "inline --path D --theorem T --gamehop 0 --oracle O",
+            "inline --proof T --gamehop 0 --oracle O",
+            "inline --theorem T --proofstep 0 --oracle O",
+            "html --proof T",
+            "latex --path D",
+            "proofsteps",
+            "easycrypt prove --theorem T --proofstep 3",
+            "easycrypt prove --theorem T --side-inv C",
+            "easycrypt prove --theorem T --pkg-inv P",
+            "easycrypt debug --theorem T --side-inv C",
+            "easycrypt debug --theorem T --pkg-inv P",
+            "easycrypt debug --theorem T --game C --debug-timeout 500",
+            "easycrypt check-alignment --theorem T --proofstep 3",
+        ] {
+            assert!(parse(&words(line)).is_err(), "{line} parsed");
+        }
+    }
+
+    #[test]
+    fn the_easycrypt_targets_still_conflict() {
+        for line in [
+            "easycrypt prove --theorem T --gamehop 3 --game C",
+            "easycrypt prove --theorem T --gamehop 3 --package P",
+            "easycrypt prove --theorem T --game C --package P",
+            "easycrypt debug --theorem T --gamehop 3 --game C",
+            "easycrypt debug --theorem T --game C --package P",
+        ] {
+            let err = parse(&words(line)).expect_err(line);
+            assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict, "{line}");
+        }
+    }
+
+    /// Every `--help` page, of each command and subcommand.
+    fn help_pages() -> Vec<String> {
+        let mut pages = Vec::new();
+        let mut todo = vec![(vec!["domino".to_string()], crate::Cli::command())];
+        while let Some((path, mut cmd)) = todo.pop() {
+            for sub in cmd.get_subcommands() {
+                let mut sub_path = path.clone();
+                sub_path.push(sub.get_name().to_string());
+                todo.push((sub_path, sub.clone()));
+            }
+            pages.push(format!("{}\n{}", path.join(" "), cmd.render_long_help()));
+        }
+        pages
+    }
+
+    /// The first old name in `text`: an old flag (a whole word) or the word "proofstep".
+    fn old_name(text: &str) -> Option<&'static str> {
+        let lower = text.to_lowercase();
+        for word in ["proofstep", "proof step"] {
+            if lower.contains(word) {
+                return Some(word);
+            }
+        }
+        let flags = ["--proof", "--path", "--side-inv", "--pkg-inv", "--debug-timeout"];
+        flags.into_iter().find(|flag| {
+            text.match_indices(flag).any(|(at, _)| {
+                let next = text[at + flag.len()..].chars().next();
+                !next.is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '_')
+            })
+        })
+    }
+
+    #[test]
+    fn no_help_page_names_an_old_flag() {
+        let pages = help_pages();
+        assert!(pages.len() > 10, "{} pages", pages.len());
+        for page in pages {
+            assert_eq!(old_name(&page), None, "{page}");
+        }
     }
 }

@@ -326,7 +326,7 @@ impl SmtWriter {
     fn file_header(&self) -> String {
         let m = &self.meta;
         format!(
-            "; domino debug ({}) — theorem {}, proofstep {}, {} == {}\n; oracle {}, claim {}\n",
+            "; domino debug ({}) — theorem {}, game hop {}, {} == {}\n; oracle {}, claim {}\n",
             m.strategy, m.theorem, m.proofstep, m.left_game, m.right_game, m.oracle, m.claim
         )
     }

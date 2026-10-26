@@ -115,7 +115,7 @@ fn files_under(dir: &Path) -> BTreeSet<PathBuf> {
 #[test]
 fn debug_announces_translation_in_memory_and_its_lockstep_runs() {
     let dir = scratch("debug");
-    let debug = ["debug", "--theorem", "Proof", "--proofstep", "0"];
+    let debug = ["debug", "--theorem", "Proof", "--gamehop", "0"];
     let mut results = Vec::new();
     for mode in ["auto", "plain", "bar", "none"] {
         let out = dir.join(mode);

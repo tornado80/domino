@@ -1,4 +1,4 @@
-theorem Proof, proofstep 0 (medium_composition == small_composition), oracle UsefulOracle
+theorem Proof, game hop 0 (medium_composition == small_composition), oracle UsefulOracle
 (left and right line numbers are independent — they index different columns)
 
    1 | // game instance: medium_composition   (package instance: fwd, package: Fwd)  |     1 | // game instance: small_composition   (package instance: rand, package: Rand)

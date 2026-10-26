@@ -41,7 +41,7 @@ use super::EcExportError;
 /// One equivalence hop's rendered proof skeleton, ready for
 /// `Eq_<Left>_<Right>.ec`.
 pub struct EquivalenceProofFile {
-    /// Index of the hop in `theorem.game_hops` (`domino proofsteps`' numbering).
+    /// Index of the hop in `theorem.game_hops` (`domino gamehops`' numbering).
     pub proofstep: usize,
     pub file_name: String,
     pub file: EcFile,

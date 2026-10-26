@@ -11,7 +11,7 @@ fn deps_project() -> PathBuf {
 
 fn debug(extra: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_domino"))
-        .args(["debug", "--progress", "none", "--path"])
+        .args(["debug", "--progress", "none", "--project"])
         .arg(deps_project())
         .args(extra)
         .output()
@@ -27,7 +27,7 @@ fn easycrypt_flag_is_gone_from_debug() {
 
 #[test]
 fn proofstep_without_proof_is_rejected() {
-    let out = debug(&["--proofstep", "0"]);
+    let out = debug(&["--gamehop", "0"]);
     assert!(!out.status.success());
 }
 
@@ -84,7 +84,7 @@ fn out_is_the_root_of_a_run_of_one_oracle() {
     let root = tempfile::tempdir().unwrap();
     let stdout = debug_into(
         root.path(),
-        &["--proof", "T", "--proofstep", "0", "--oracle", "Branch"],
+        &["--theorem", "T", "--gamehop", "0", "--oracle", "Branch"],
     );
     let run = root.path().join("T/gl-gr/Branch/!all-claims!");
     assert!(run.join("sequential_viewer.html").exists(), "{stdout}");
@@ -97,7 +97,7 @@ fn out_is_the_root_of_a_run_of_one_oracle() {
 #[test]
 fn a_theorem_run_with_out_writes_its_index_and_one_for_each_proofstep() {
     let root = tempfile::tempdir().unwrap();
-    let stdout = debug_into(root.path(), &["--proof", "T"]);
+    let stdout = debug_into(root.path(), &["--theorem", "T"]);
     assert!(root.path().join("T/index.html").exists(), "{stdout}");
     assert!(root.path().join("T/gl-gr/index.html").exists(), "{stdout}");
     assert!(!root.path().join("index.html").exists(), "{stdout}");
@@ -108,16 +108,16 @@ fn a_theorem_run_with_out_writes_its_index_and_one_for_each_proofstep() {
 #[test]
 fn a_proofstep_run_writes_no_project_index_and_updates_the_theorem_index() {
     let root = tempfile::tempdir().unwrap();
-    let stdout = debug_into(root.path(), &["--proof", "T", "--proofstep", "0"]);
+    let stdout = debug_into(root.path(), &["--theorem", "T", "--gamehop", "0"]);
     assert!(root.path().join("T/gl-gr/index.html").exists(), "{stdout}");
     assert!(!root.path().join("T/index.html").exists(), "{stdout}");
     assert!(!root.path().join("index.html").exists(), "{stdout}");
 
-    debug_into(root.path(), &["--proof", "T"]);
+    debug_into(root.path(), &["--theorem", "T"]);
     let before = std::fs::read_to_string(root.path().join("T/summary.txt")).unwrap();
     let stdout = debug_into(
         root.path(),
-        &["--proof", "T", "--proofstep", "0", "--lockstep"],
+        &["--theorem", "T", "--gamehop", "0", "--lockstep"],
     );
     assert!(stdout.contains("T/index.html      (updated)"), "{stdout}");
     let after = std::fs::read_to_string(root.path().join("T/summary.txt")).unwrap();
@@ -134,11 +134,11 @@ fn a_single_claim_run_and_an_all_claim_run_of_one_oracle_both_show() {
     let root = tempfile::tempdir().unwrap();
     debug_into(
         root.path(),
-        &["--proof", "T", "--proofstep", "0", "--oracle", "Branch"],
+        &["--theorem", "T", "--gamehop", "0", "--oracle", "Branch"],
     );
     debug_into(
         root.path(),
-        &["--proof", "T", "--proofstep", "0", "--claim", "invariant"],
+        &["--theorem", "T", "--gamehop", "0", "--claim", "invariant"],
     );
     let step = std::fs::read_to_string(root.path().join("T/gl-gr/summary.txt")).unwrap();
     assert!(step.contains("Branch  !all-claims!  sequential"), "{step}");

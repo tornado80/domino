@@ -17,8 +17,8 @@ We decided:
    invariant, as the package declares a package invariant. The check is for every value of C's
    parameters, the same claim that `SideInv_C_<O>` makes.
 2. **No theorem.** `domino prove --game C` and `domino debug --game C` build the free composition
-   from C alone, as `--package P` builds its one-game theorem. They refuse `--proof` and
-   `--proofstep`. The theorem's constants only give names to free parameters and its assumptions are
+   from C alone, as `--package P` builds its one-game theorem. They refuse `--theorem` and
+   `--gamehop`. The theorem's constants only give names to free parameters and its assumptions are
    not SMT facts, so a theorem would change nothing in the check.
 3. **`--game C` checks only C's game invariants.** It assumes the package invariants of C's
    instances, as the side tree does since story 77 of the EasyCrypt epic (ADR 0016). The package
@@ -33,7 +33,7 @@ We decided:
 - **The game instance name.** It gives a second, weaker meaning to the same claim, and it needs the
   theorem, because instance names are unique only in one theorem. ADR 0014 rejected the game
   instance as the owner.
-- **`--proof T` required, as `domino easycrypt … --side-inv C` needs `--theorem`.** The same shape
+- **`--theorem T` required, as `domino easycrypt … --game C` needs `--theorem`.** The same shape
   on both sides, but the theorem changes nothing in the SMT check. The EasyCrypt commands need the
   theorem only for their export tree.
 - **`--game C` also proves the package invariants of C's packages.** One command answers "is C safe
@@ -49,9 +49,10 @@ We decided:
 
 - `domino prove --game C` can say "verified" while a package invariant of C is false. The report says
   which package invariants it assumes.
-- Plain `prove` and `easycrypt prove --side-inv C` can still disagree: an equivalence can verify for
+- Plain `prove` and `easycrypt prove --game C` can still disagree: an equivalence can verify for
   its constants while `SideInv_C` gets admits. `domino prove --game C` is the way to see this before
   EasyCrypt runs.
-- The EasyCrypt commands keep `--pkg-inv P`, `--side-inv C` and `--theorem`. Their flags name lemma
-  kinds and files; `--side-inv C` proves more than `prove --game C` (the package invariants too,
-  through lemmas), so one name for both would have two meanings.
+- The EasyCrypt commands kept their own names for these two flags. **Amended by story
+  EC 95:** all commands now use `--package P`, `--game C` and `--theorem`. `easycrypt prove --game C`
+  proves the game invariants of C and takes its package invariants from the lemmas of
+  `--package`, as `prove --game C` assumes them.

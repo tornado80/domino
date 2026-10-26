@@ -14,7 +14,7 @@
 //! The package invariants are assumed. `domino prove --package P` proves them (ADR 0016).
 //!
 //! [`free`] owns the free composition (`C` and its copy `C$side`). The side tree of
-//! `domino easycrypt debug --side-inv C` reads the same claims and base frame.
+//! `domino easycrypt debug --game C` reads the same claims and base frame.
 
 pub mod error;
 

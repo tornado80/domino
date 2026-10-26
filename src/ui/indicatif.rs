@@ -120,7 +120,7 @@ impl TheoremUI for IndicatifTheoremUI {
         }
 
         log::info!(
-            "Successfully finished proofstep {}; Times: {}",
+            "Successfully finished game hop {}; Times: {}",
             proofstep_name,
             self.seq_oracle_progress
                 .iter()

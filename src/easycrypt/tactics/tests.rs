@@ -4856,7 +4856,7 @@ fn seven_key_pairs_give_no_split() {
     assert_eq!(run.admits.len(), 1);
 }
 
-/// Story 69: the side-invariant jobs, and what `--proofstep`, `--side-inv` and a whole-theorem
+/// Story 69: the side-invariant jobs, and what `--gamehop`, `--game` and a whole-theorem
 /// run start.
 pub(super) mod side_invariant_jobs {
     use std::path::PathBuf;
@@ -4898,7 +4898,7 @@ pub(super) mod side_invariant_jobs {
         assert_eq!(plan.unproved, ["Game"]);
         assert_eq!(
             unproved_side_invariants_line("Game"),
-            "warning: side invariants of Game are not proved: run prove --side-inv Game first"
+            "warning: side invariants of Game are not proved: run prove --game Game first"
         );
         // one file missing is enough
         write_files(out.path(), &exported.files).unwrap();
@@ -4936,7 +4936,7 @@ pub(super) mod side_invariant_jobs {
         assert_eq!(result.unproved_side_invariants, ["Game"]);
         assert!(
             result.render().contains(
-                "side invariants of Game are not proved: run prove --side-inv Game first"
+                "side invariants of Game are not proved: run prove --game Game first"
             ),
             "{}",
             result.render()
@@ -5121,7 +5121,7 @@ pub(super) mod side_invariant_jobs {
         compiles(out.path(), "SideInv_S_O.ec").unwrap();
     }
 
-    /// `prove --side-inv Game`: one-sided execution of `Inc`, then its `hoare` lemma proved
+    /// `prove --game Game`: one-sided execution of `Inc`, then its `hoare` lemma proved
     /// along the side tree, with no admit; then the equivalence, and the glue joins them.
     #[test]
     fn side_inv_proves_the_hoare_lemma_along_the_side_tree_and_the_glue_compiles() {
@@ -5349,7 +5349,7 @@ mod package_invariant_jobs {
         }
     }
 
-    /// `prove --pkg-inv Ctr`: each oracle's lemma along its package tree, each import call an
+    /// `prove --package Ctr`: each oracle's lemma along its package tree, each import call an
     /// open call, then the frame lemmas and the start lemma; no admit, and the join compiles.
     #[test]
     fn pkg_inv_proves_the_package_lemmas_and_the_join_compiles() {
@@ -5569,7 +5569,7 @@ mod side_invariants_from_package_lemmas {
                 ChainStep::Side(1),
             ]
         );
-        // `--side-inv` runs no package job
+        // `--game` runs no package job
         let only = TacticsOptions {
             side_inv: Some("H".into()),
             ..TacticsOptions::default()
@@ -5595,7 +5595,7 @@ mod side_invariants_from_package_lemmas {
         assert_eq!(result.unproved_package_invariants, ["Cnt"]);
         assert!(
             result.render().contains(
-                "warning: package invariants of Cnt are not proved: run prove --pkg-inv Cnt first"
+                "warning: package invariants of Cnt are not proved: run prove --package Cnt first"
             ),
             "{}",
             result.render()

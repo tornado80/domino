@@ -6,7 +6,7 @@
 //! The free composition comes from `C` alone ([`crate::game_invariant`]), as for
 //! `domino prove --game C`. Its parameters are free, so no branch on a parameter folds. The
 //! claims, the base frame and the fingerprint are those of the side tree of
-//! `domino easycrypt debug --side-inv C` ([`execute_free`]); only the listing is different.
+//! `domino easycrypt debug --game C` ([`execute_free`]); only the listing is different.
 //! The run checks the game invariants of `C` and assumes the package invariants of its
 //! instances.
 //!

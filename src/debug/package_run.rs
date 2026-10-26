@@ -11,7 +11,7 @@
 //! so an abort is not a path.
 //!
 //! The claims, the base frame and the fingerprint are those of the package tree of
-//! `domino easycrypt debug --pkg-inv P` ([`execute_pkg`]); only the listing is different.
+//! `domino easycrypt debug --package P` ([`execute_pkg`]); only the listing is different.
 //!
 //! A run writes into [`package_run_dir`] the artifacts of a one-sided run and the result record
 //! `one-sided_result.json`, whose owner is the package.

@@ -140,10 +140,10 @@ pub enum DebugError {
     #[error("no theorem named `{name}` in this project")]
     TheoremNotFound { name: String },
 
-    #[error("proofstep {index} is out of range (the theorem has {len} proofsteps: 0..{len})")]
+    #[error("game hop {index} is out of range (the theorem has {len} game hops: 0..{len})")]
     ProofstepOutOfRange { index: usize, len: usize },
 
-    #[error("proofstep {index} is a {kind}; `domino debug` only supports equivalence proofsteps")]
+    #[error("game hop {index} is a {kind}; `domino debug` only supports equivalence game hops")]
     ProofstepNotEquivalence { index: usize, kind: &'static str },
 
     #[error("oracle `{oracle}` is not exported by game instance `{game_inst}`")]
@@ -2042,7 +2042,7 @@ pub fn render_tree(run: &DebugRun) -> String {
 
     let _ = writeln!(
         out,
-        "theorem {}, proofstep {} ({} == {})",
+        "theorem {}, game hop {} ({} == {})",
         run.theorem, run.proofstep, run.left_game, run.right_game
     );
     let _ = writeln!(out, "oracle {}, claim {}", run.oracle, run.claim);
@@ -3620,7 +3620,7 @@ mod story19_tests {
         fn finish_claim(&mut self, _: &str, _: &str, _: &str, _: &str) {}
     }
 
-    /// What `domino prove --proof T --proofstep N --oracle O --claim C` concludes.
+    /// What `domino prove --theorem T --gamehop N --oracle O --claim C` concludes.
     fn prove_says_ok(
         proj: &DirectoryProject,
         theorem: &str,

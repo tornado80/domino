@@ -45,7 +45,7 @@ fn debug_theorem(dir: &str, name: &str) -> Theorem<'static> {
         .0
 }
 
-/// `(project, theorem, game instance, oracle)` for both sides of proofstep 0
+/// `(project, theorem, game instance, oracle)` for both sides of game hop 0
 /// of the two story-08 projects.
 const CASES: &[(&str, &str, &str, &str)] = &[
     (HELLO, "Proof", "medium_composition", "UsefulOracle"),
@@ -105,7 +105,7 @@ fn label_of(stmt: &InlStmt) -> Label {
 // --- golden files ------------------------------------------------------------
 
 fn assert_golden(dir: &str, theorem: &str, oracle: &str, golden: &str) {
-    // Regenerate with `domino inline --easycrypt --proof <T> --proofstep 0
+    // Regenerate with `domino inline --easycrypt --theorem <T> --gamehop 0
     // --oracle <O> > testdata/easycrypt/story08/<golden>` (run in the
     // project directory): the command prints exactly this string.
     let out = render_side_by_side_easycrypt(

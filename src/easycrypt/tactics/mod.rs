@@ -48,10 +48,10 @@
 //! one-sided execution (symbolic-execution story 25) and in a `hoare` judgement ([`JobKind`]).
 //! Their records, saved trees and locks are `session/SideInv_<C>/<O>.record.json`,
 //! `<O>.tree.json` and `progress/SideInv_<C>/<O>.lock`. A proof job never proves side invariants:
-//! `--proofstep` stops when the side-invariant files of its compositions are missing, and a
+//! `--gamehop` stops when the side-invariant files of its compositions are missing, and a
 //! whole-theorem run proves the compositions in parallel with the equivalences.
 //!
-//! **Package-invariant jobs** (story 76, ADR 0016): `prove --pkg-inv P` proves the package
+//! **Package-invariant jobs** (story 76, ADR 0016): `prove --package P` proves the package
 //! lemmas of each variant `<V>` of package `P`. The package-invariant lemma of each oracle,
 //! `PkgInv_<V>_<O>.ec`, is walked as a side-invariant lemma is, along the package tree
 //! (symbolic-execution story 29), with no router and each import call an open call
@@ -136,10 +136,10 @@ pub enum TacticsError {
     Io(#[from] std::io::Error),
     #[error("invalid `ssp.toml`: {0}")]
     Config(String),
-    /// `prove --pkg-inv P` for a package without package invariants, or none of the theorem.
+    /// `prove --package P` for a package without package invariants, or none of the theorem.
     #[error("package `{package}` has no package lemmas in this theorem: the theorem does not use it, or it has no package invariant")]
     NoPackageInvariants { package: String },
-    /// `prove --side-inv C` for a composition without side invariants, or none of the theorem.
+    /// `prove --game C` for a composition without side invariants, or none of the theorem.
     /// `--ec-timeout` leaves the retry no margin (story 90 §3.3).
     #[error("--ec-timeout {ec_timeout} must be at least --smt-retry-timeout {retry} + 10 seconds")]
     RetryTimeout { ec_timeout: u64, retry: u32 },
@@ -185,10 +185,10 @@ pub struct TacticsOptions {
     /// `prove --jobs N` (story 68): how many oracles of an equivalence are proved at once, each
     /// in an EasyCrypt process of its own. 0 counts as 1.
     pub jobs: usize,
-    /// `prove --side-inv C` (story 69): only the side-invariant job of composition `C` (its
+    /// `prove --game C` (story 69): only the side-invariant job of composition `C` (its
     /// Domino name), and no equivalence.
     pub side_inv: Option<String>,
-    /// `prove --pkg-inv P` (story 76): only the package-invariant job of package `P` (its Domino
+    /// `prove --package P` (story 76): only the package-invariant job of package `P` (its Domino
     /// name), for each of its variants, and nothing else.
     pub pkg_inv: Option<String>,
 }
@@ -758,7 +758,7 @@ pub struct TheoremTactics {
     pub side_invariants: Vec<EquivalenceTactics>,
     /// The package-invariant jobs (story 76), one for each variant, in the order of the export.
     pub package_invariants: Vec<EquivalenceTactics>,
-    /// The compositions whose side-invariant files a `--proofstep` job did not find on disk;
+    /// The compositions whose side-invariant files a `--gamehop` job did not find on disk;
     /// their equivalences were not started (story 69 §3.3).
     pub unproved_side_invariants: Vec<String>,
     /// The packages whose package lemma files a side-invariant job did not find on disk; the
@@ -1017,7 +1017,7 @@ fn chain_steps<'a>(plan: &'a RunPlan, needs: impl Fn(&str) -> Vec<&'a str>) -> V
 /// find its package lemma files on disk (story 77).
 pub fn unproved_package_invariants_line(package: &str) -> String {
     format!(
-        "warning: package invariants of {package} are not proved: run prove --pkg-inv {package} \
+        "warning: package invariants of {package} are not proved: run prove --package {package} \
          first"
     )
 }
@@ -1044,17 +1044,17 @@ struct RunPlan {
     /// The side-invariant jobs that run: the job's report (its files are the side-invariant
     /// files of the composition, [`side_job_report`]) and the composition's Domino name.
     side: Vec<(EquivalenceReport, String)>,
-    /// The compositions whose side-invariant files a `--proofstep` run did not find.
+    /// The compositions whose side-invariant files a `--gamehop` run did not find.
     unproved: Vec<String>,
-    /// The package-invariant jobs that run (`--pkg-inv`, or a whole-theorem run): the job's
+    /// The package-invariant jobs that run (`--package`, or a whole-theorem run): the job's
     /// report ([`pkg_job_report`]) and the package's Domino name.
     packages: Vec<(EquivalenceReport, String)>,
 }
 
-/// - `--pkg-inv P`: the package-invariant job of each variant of `P` only.
-/// - `--side-inv C`: the side-invariant job of `C` only, if the package lemma files of its
+/// - `--package P`: the package-invariant job of each variant of `P` only.
+/// - `--game C`: the side-invariant job of `C` only, if the package lemma files of its
 ///   packages are on disk (story 77, checked when it starts).
-/// - `--proofstep P`: the proof job of `P`, if the side-invariant files of its compositions are
+/// - `--gamehop P`: the proof job of `P`, if the side-invariant files of its compositions are
 ///   on disk (a file with admits counts); else a warning, and nothing runs.
 /// - neither: every equivalence, every package-invariant job and the side-invariant job of
 ///   every composition with side invariants (each job skips what its records say is proved),
@@ -1140,11 +1140,11 @@ fn plan_run(
     Ok(plan)
 }
 
-/// The warning of a `--proofstep` run whose equivalence needs the side invariants of
+/// The warning of a `--gamehop` run whose equivalence needs the side invariants of
 /// `composition`, and does not find them on disk (story 69 §3.3).
 pub fn unproved_side_invariants_line(composition: &str) -> String {
     format!(
-        "warning: side invariants of {composition} are not proved: run prove --side-inv \
+        "warning: side invariants of {composition} are not proved: run prove --game \
          {composition} first"
     )
 }
@@ -2180,7 +2180,7 @@ impl EquivalenceTactics {
             (None, None) => {
                 let _ = writeln!(
                     out,
-                    "tactics for {} (proofstep {}: {} ~ {})",
+                    "tactics for {} (game hop {}: {} ~ {})",
                     self.proof_file, self.proofstep, self.left, self.right
                 );
             }

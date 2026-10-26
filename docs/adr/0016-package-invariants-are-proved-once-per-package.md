@@ -36,7 +36,7 @@ We decided:
    composition, `hoare[Game_<C>.init : true ==> GameInv_…]`. `inv` has no start lemma: the goal that
    `call (: inv /\ side_inv_L /\ side_inv_R); last first.` brings to the front in the main lemma
    already proves the start of `inv` and of both side invariants.
-5. **A package-invariant job proves one package**: `domino easycrypt prove --pkg-inv <P>` proves the
+5. **A package-invariant job proves one package**: `domino easycrypt prove --package <P>` proves the
    package-invariant, frame and start lemmas of every variant of `P`. A side-invariant job proves
    the game-invariant start lemma of its composition, never a package lemma, and does not start a
    composition whose package lemma files are missing. In a whole-theorem run the package jobs start

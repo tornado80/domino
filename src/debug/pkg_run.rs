@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `domino easycrypt debug --pkg-inv <P>` (symbolic-execution story 29, ADR 0016, ADR 0017):
+//! `domino easycrypt debug --package <P>` (symbolic-execution story 29, ADR 0016, ADR 0017):
 //! the **package tree**, one-sided execution of one oracle of a package on the EasyCrypt listing.
 //!
 //! # The package alone, with open calls

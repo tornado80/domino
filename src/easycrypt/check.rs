@@ -533,7 +533,7 @@ impl TheoremAlignment {
         for eq in &self.equivalences {
             let _ = writeln!(
                 out,
-                "  proofstep {}: {} ~ {} ({})",
+                "  game hop {}: {} ~ {} ({})",
                 eq.proofstep, eq.left, eq.right, eq.proof_file
             );
             for o in &eq.oracles {

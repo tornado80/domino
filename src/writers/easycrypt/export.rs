@@ -52,7 +52,7 @@ use super::EcExportError;
 /// rendered text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EquivalenceReport {
-    /// Index of the hop in `theorem.game_hops` (`domino proofsteps`' numbering).
+    /// Index of the hop in `theorem.game_hops` (`domino gamehops`' numbering).
     pub proofstep: usize,
     pub left_name: String,
     pub right_name: String,

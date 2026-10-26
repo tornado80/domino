@@ -14,7 +14,7 @@ fn se29() -> PathBuf {
 fn domino_in(project: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_domino"))
         .args(args)
-        .arg("--path")
+        .arg("--project")
         .arg(project)
         .output()
         .unwrap()
@@ -38,8 +38,8 @@ fn text(out: &Output) -> String {
 fn clap_refuses_package_with_game_and_each_two_sided_flag() {
     for extra in [
         &["--game", "G"][..],
-        &["--proof", "T"],
-        &["--proofstep", "0"],
+        &["--theorem", "T"],
+        &["--gamehop", "0"],
         &["--claim-set", "core"],
         &["--lockstep"],
         &["--no-check-left"],

@@ -128,28 +128,28 @@ before this story, in its own repo.
 
 ## 6. Tests first
 
-- [ ] For each command, clap parses the new names (`try_parse_from`, as the test in `cli.rs` does):
+- [x] For each command, clap parses the new names (`try_parse_from`, as the test in `cli.rs` does):
       `prove --project D --theorem T --gamehop 3`, `debug --project D --theorem T --gamehop 3
       --oracle O`, `inline …`, `html --theorem T`, `latex --project D`, `gamehops --project D`,
       `easycrypt prove --theorem T --gamehop 3`, `easycrypt prove --theorem T --game C`,
       `easycrypt prove --theorem T --package P`, `easycrypt debug --theorem T --game C --timeout 500`,
       `easycrypt check-alignment --theorem T --gamehop 3`.
-- [ ] For each old name, clap gives an error: `--path`, `--proof`, `--proofstep`, `--side-inv`,
+- [x] For each old name, clap gives an error: `--path`, `--proof`, `--proofstep`, `--side-inv`,
       `--pkg-inv`, `--debug-timeout`, and the subcommand `proofsteps`.
-- [ ] The conflicts still hold: `easycrypt prove --gamehop 3 --game C` and
+- [x] The conflicts still hold: `easycrypt prove --gamehop 3 --game C` and
       `easycrypt prove --game C --package P` give errors; `prove --game C --theorem T` gives the
       error of `main.rs`, now with the new names.
-- [ ] `domino gamehops` prints the same table as `domino proofsteps` did.
-- [ ] No `--help` text and no printed message has an old name: a test that runs `--help` for each
+- [x] `domino gamehops` prints the same table as `domino proofsteps` did.
+- [x] No `--help` text and no printed message has an old name: a test that runs `--help` for each
       command and subcommand and searches for the old names.
 
 ## 7. Acceptance criteria
 
-- [ ] All tests of §6 green, the whole test suite green, `cargo clippy` clean.
+- [x] All tests of §6 green, the whole test suite green, `cargo clippy` clean.
 - [ ] `scripts/test-known-examples.sh` passes.
-- [ ] `grep -rnE -e '--(proof|path|proofstep|side-inv|pkg-inv|debug-timeout)\b|proofsteps' src
+- [x] `grep -rnE -e '--(proof|path|proofstep|side-inv|pkg-inv|debug-timeout)\b|proofsteps' src
       crates scripts Readme.md docs --exclude-dir=stories` finds nothing, except the JSON field
       `proofstep` and the Rust names that §3 keeps.
 - [ ] The owner's check: a lockstep page title, a stdout report and an error message say "game hop".
-- [ ] Complexity: no function in `main.rs` above budget after the renames (`crap_scope` on
+- [x] Complexity: no function in `main.rs` above budget after the renames (`crap_scope` on
       `crates/domino/src/main.rs`).

@@ -1,4 +1,4 @@
-tactics for Eq_Game_MON_CCA_PKE_Game_MOD_CCA_PKE_Real_KEM.ec (proofstep 0: Game_MON_CCA_PKE ~ Game_MOD_CCA_PKE_Real_KEM)
+tactics for Eq_Game_MON_CCA_PKE_Game_MOD_CCA_PKE_Real_KEM.ec (game hop 0: Game_MON_CCA_PKE ~ Game_MOD_CCA_PKE_Real_KEM)
   PKGEN: lockstep 2 joint paths, 9 nodes, 0 stuck points (1.4s)
     goals closed: 5, no admit, fallbacks: 0, EasyCrypt time 3.1s (2 attempts undone)
   PKENC: lockstep 4 joint paths, 43 nodes, 0 stuck points (3.8s)

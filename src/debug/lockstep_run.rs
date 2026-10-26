@@ -927,7 +927,7 @@ where
     };
 
     let smt_header = format!(
-        "; {} — theorem {}, proofstep {}, {} == {}\n; oracle {}\n",
+        "; {} — theorem {}, game hop {}, {} == {}\n; oracle {}\n",
         match listing {
             ListingKind::EasyCrypt => "domino easycrypt debug",
             ListingKind::Domino => "domino debug --lockstep",

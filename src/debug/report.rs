@@ -172,7 +172,7 @@ pub fn render_summary(run: &DebugRun) -> String {
     let _ = writeln!(s, "{:<14}{}", "strategy", run.strategy);
     let _ = writeln!(
         s,
-        "{:<14}{}, proofstep {}",
+        "{:<14}{}, game hop {}",
         "theorem", run.theorem, run.proofstep
     );
     let _ = writeln!(
@@ -558,7 +558,7 @@ const prunedRow = (pb, parentId) => ({
 
 // ---- header ---------------------------------------------------------------
 document.getElementById("h-title").textContent =
-  `${T.theorem} · proofstep ${T.proofstep} · ${T.left_game} == ${T.right_game}`;
+  `${T.theorem} · game hop ${T.proofstep} · ${T.left_game} == ${T.right_game}`;
 document.getElementById("h-sub").textContent =
   `oracle ${T.oracle} · claim ${T.claim}` + (T.admitted ? " · ADMITTED (nothing checked)" : "");
 

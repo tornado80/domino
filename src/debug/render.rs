@@ -126,8 +126,8 @@ impl ListingView {
 #[derive(Debug, thiserror::Error, miette::Diagnostic)]
 pub enum RenderError {
     #[error(
-        "theorem `{theorem}` has no proofstep {index} \
-         (it has {len} proofstep(s), numbered starting at 0)"
+        "theorem `{theorem}` has no game hop {index} \
+         (it has {len} game hop(s), numbered starting at 0)"
     )]
     #[diagnostic(code(inline::proofstep_out_of_range))]
     ProofstepOutOfRange {
@@ -137,8 +137,8 @@ pub enum RenderError {
     },
 
     #[error(
-        "proofstep {index} of theorem `{theorem}` is a {kind}; \
-         `domino inline` only supports equivalence proofsteps"
+        "game hop {index} of theorem `{theorem}` is a {kind}; \
+         `domino inline` only supports equivalence game hops"
     )]
     #[diagnostic(code(inline::not_an_equivalence))]
     ProofstepNotEquivalence {
@@ -294,7 +294,7 @@ fn render_listings(
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "theorem {}, proofstep {proofstep} ({} == {}), oracle {oracle_name}{oracle_suffix}",
+        "theorem {}, game hop {proofstep} ({} == {}), oracle {oracle_name}{oracle_suffix}",
         theorem.name,
         eq.left_name(),
         eq.right_name(),
@@ -366,7 +366,7 @@ mod tests {
                 render_side_by_side(theorem, 0, "UsefulOracle", true, ListingView::Full).unwrap();
 
             assert!(out.lines().next().unwrap().starts_with(
-                "theorem Proof, proofstep 0 \
+                "theorem Proof, game hop 0 \
                  (medium_composition == small_composition), oracle UsefulOracle"
             ));
 
@@ -448,7 +448,7 @@ mod tests {
     #[test]
     fn snapshot_hello_world_useful_oracle() {
         // Fixture regenerated with:
-        //   domino inline --proof Proof --proofstep 0 --oracle UsefulOracle \
+        //   domino inline --theorem Proof --gamehop 0 --oracle UsefulOracle \
         //     > testdata/story03/inline-hello-world.txt
         // (run in example-projects/hello-world). Pins the full output, column
         // padding and trailing whitespace included.

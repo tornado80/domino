@@ -14,7 +14,7 @@ fn fixture(dir: &str) -> PathBuf {
 
 fn prove(dir: &str, extra: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_domino"))
-        .args(["prove", "--path"])
+        .args(["prove", "--project"])
         .arg(fixture(dir))
         .args(extra)
         .output()
@@ -106,8 +106,8 @@ fn an_unknown_oracle_lists_the_exports() {
 #[test]
 fn clap_refuses_game_with_the_other_targets() {
     for extra in [
-        &["--proof", "T"][..],
-        &["--proofstep", "0"],
+        &["--theorem", "T"][..],
+        &["--gamehop", "0"],
         &["--package", "P"],
         &["--injective-randmap"],
     ] {
@@ -117,8 +117,12 @@ fn clap_refuses_game_with_the_other_targets() {
         let text = text(&out);
         assert!(!out.status.success(), "{extra:?}: {text}");
         assert!(text.contains("cannot be used with"), "{extra:?}: {text}");
-        if extra[0].starts_with("--proof") {
+        if extra[0].starts_with("--theorem") {
             assert!(text.contains("ADR"), "{extra:?}: {text}");
+            assert!(
+                text.contains("--game cannot be used with --theorem or --gamehop"),
+                "{extra:?}: {text}"
+            );
         }
     }
 }
@@ -134,4 +138,17 @@ fn package_and_game_select_by_kind_when_the_names_are_the_same() {
     assert!(text(&pkg).contains("package X"), "{}", text(&pkg));
     let game = prove(SAME_NAME, &["--game", "X", "--oracle", "Nope"]);
     assert!(text(&game).contains("composition X"), "{}", text(&game));
+}
+
+/// Story EC 95: `domino gamehops` prints each theorem's game hops with their index.
+#[test]
+fn gamehops_lists_the_game_hops_of_each_theorem() {
+    let out = Command::new(env!("CARGO_BIN_EXE_domino"))
+        .args(["gamehops", "--project"])
+        .arg(fixture(SE25))
+        .output()
+        .unwrap();
+    let text = text(&out);
+    assert!(out.status.success(), "{text}");
+    assert!(text.starts_with("T:\n0: Equivalence "), "{text}");
 }

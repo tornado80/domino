@@ -236,7 +236,7 @@ const reasonText = (v, pair) => {
 // ---- header ---------------------------------------------------------------
 document.getElementById("h-title").textContent =
   T.one_sided ? `${T.theorem} · ${T.subject}`
-  : `${T.theorem} · proofstep ${T.proofstep} · ${T.left_game} == ${T.right_game}`;
+  : `${T.theorem} · game hop ${T.proofstep} · ${T.left_game} == ${T.right_game}`;
 const checked = T.claims.filter(c => !c.admitted);
 // The checked claims by status, in the order the header and the stdout `claims` line give them.
 const STATUSES = [["verified", "verified"], ["inconclusive", "inconclusive"], ["goal-fails", "GOAL FAILS"], ["none-yet", "pending"]];

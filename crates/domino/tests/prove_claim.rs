@@ -15,7 +15,7 @@ fn fixture(dir: &str) -> PathBuf {
 
 fn command(dir: &str, extra: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_domino"));
-    cmd.args(["prove", "--path"]).arg(fixture(dir)).args(extra);
+    cmd.args(["prove", "--project"]).arg(fixture(dir)).args(extra);
     cmd
 }
 
@@ -126,7 +126,7 @@ fn clap_refuses_package_with_injective_randmap() {
 fn proof_claim_still_matches_the_equivalence_claims() {
     // no equivalence claim matches, as before that is no error; the package section of the
     // theorem is not filtered and its invariant fails
-    let out = prove(SE25, &["--proof", "T", "--claim", "nope*"]);
+    let out = prove(SE25, &["--theorem", "T", "--claim", "nope*"]);
     let text = text(&out);
     assert!(!text.contains("no invariant of"), "{text}");
     assert!(text.contains("package-invariant!main!P!"), "{text}");

@@ -93,7 +93,7 @@ pub fn render_tree(
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "theorem {}, proofstep {} ({} == {})",
+        "theorem {}, game hop {} ({} == {})",
         meta.theorem, meta.proofstep, meta.left_game, meta.right_game
     );
     let _ = writeln!(
@@ -420,7 +420,7 @@ pub fn render_summary(run: &LockstepRun) -> String {
     let _ = writeln!(s, "{:<14}{}", "listing", listing_name(meta));
     let _ = writeln!(
         s,
-        "{:<14}{}, proofstep {}",
+        "{:<14}{}, game hop {}",
         "theorem", meta.theorem, meta.proofstep
     );
     let _ = writeln!(

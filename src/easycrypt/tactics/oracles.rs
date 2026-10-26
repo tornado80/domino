@@ -684,7 +684,7 @@ impl Board {
         }
         let _ = writeln!(
             out,
-            "<title>{stem}</title>\n<style>body{{font-family:sans-serif}}td,th{{padding:2px 12px;text-align:left}}</style>\n</head><body>\n<h1>{stem}</h1>\n<p>proofstep {}: {} ~ {}</p>\n<table>\n<tr><th>oracle</th><th>state</th></tr>",
+            "<title>{stem}</title>\n<style>body{{font-family:sans-serif}}td,th{{padding:2px 12px;text-align:left}}</style>\n</head><body>\n<h1>{stem}</h1>\n<p>game hop {}: {} ~ {}</p>\n<table>\n<tr><th>oracle</th><th>state</th></tr>",
             eq.proofstep,
             esc(&eq.left_name),
             esc(&eq.right_name),
