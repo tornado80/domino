@@ -80,9 +80,14 @@ New test helpers in `cli.rs`: `old_name` 5, `help_pages` 3.
 `scripts/test-known-examples.sh` fails on `test-projects/test-oracle-rename`: `domino prove`
 gives `sat` for the claims `invariant` and `same-output` of the oracle `ChangeNameUsefulOracle`.
 The binary of commit a3dbb3c1 (before this story) gives the same failure, so this story did not
-cause it. It is not fixed here. All other projects of the script pass.
+cause it. All other projects of the script pass.
+
+Fixed in the next commit. The theorem of the project was false: story EC 14 changed `Fwd` to call
+two imports, so `rand.ctr` increments by 2 on the left and by 1 on the right. The merge of story
+EC 71 put that version at the path where upstream expects a proof. Upstream's version is back at
+`test-projects/test-oracle-rename`. The two-import version, which the EasyCrypt tests use, is now
+`test-projects/err-oracle-rename-two-imports`. The script expects it to fail.
 
 ## Not done
 
 - The owner's check: a lockstep page title, a stdout report and an error message.
-- `scripts/test-known-examples.sh` does not pass (see above).

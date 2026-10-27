@@ -990,7 +990,7 @@ mod tests {
         // pass is impossible even though both imports come from the same
         // instance (`rand`) — an adapter is required, and its procs forward
         // to `Pkg_Inst_Rand.d_UsefulOracle`.
-        let files = load("test-projects/test-oracle-rename", "Proof");
+        let files = load("test-projects/err-oracle-rename-two-imports", "Proof");
         let f = files
             .iter()
             .find(|f| f.name == "MediumComposition")

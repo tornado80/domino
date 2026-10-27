@@ -617,7 +617,7 @@ fn no_path_reads_an_unbound_local_and_the_domino_game_instance_pairs_with_it() {
 
 // --- line roles and frames (story 49) ---------------------------------------------
 
-const RENAME: &str = "test-projects/test-oracle-rename";
+const RENAME: &str = "test-projects/err-oracle-rename-two-imports";
 
 fn roles(inl: &InlinedOracle) -> Vec<(Label, LineRole, Option<Label>, Option<Label>)> {
     let mut out: Vec<_> = inl

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// Two oracles, so "per oracle" is more than one line.
-const PROJECT: &str = "test-projects/test-oracle-rename";
+const PROJECT: &str = "test-projects/err-oracle-rename-two-imports";
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")

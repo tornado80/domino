@@ -26,12 +26,10 @@ composition BigComposition {
             AnotherUsefulOracle: UsefulOracle of fwd,
         },
         fwd: {
-            ChangeNameUsefulOracle: UsefulOracle of rand,
-            AnotherUsefulOracle:    UsefulOracle of rand,
+            O: UsefulOracle of rand,
         },
         fwd2: {
-            ChangeNameUsefulOracle: UsefulOracle of fwd,
-            AnotherUsefulOracle:    UsefulOracle of fwd,
+            O: UsefulOracle of fwd,
         },
     }
 }

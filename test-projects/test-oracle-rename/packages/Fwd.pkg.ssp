@@ -8,14 +8,12 @@ package Fwd {
     }
 
     import oracles {
-        ChangeNameUsefulOracle(dummy: Integer) -> (Integer,Bits(n)),
-        AnotherUsefulOracle(dummy: Integer) -> (Integer,Bits(n)),
+        O(dummy: Integer) -> (Integer,Bits(n)),
     }
 
     oracle UsefulOracle(dummy: Integer) -> (Integer,Bits(n))  {
-        y <- invoke ChangeNameUsefulOracle(dummy);
-        z <- invoke AnotherUsefulOracle(dummy);
-        return z;
+        y  <- invoke O(dummy);
+        return y;
     }
 
     oracle UselessOracle(x: Integer) -> Integer  {

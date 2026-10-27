@@ -68,7 +68,7 @@ fn tactics(project: &str, out: &Path, easycrypt: &Path, extra: &[&str]) -> Child
         .unwrap()
 }
 
-/// The lemma file of the first oracle of `test-oracle-rename` (story 68: one file per oracle).
+/// The lemma file of the first oracle of `err-oracle-rename-two-imports` (story 68: one file per oracle).
 const FIRST_ORACLE_FILE: &str = "Eq_medium_composition_small_composition_ChangeNameUsefulOracle.ec";
 
 #[test]
@@ -128,7 +128,7 @@ fn a_run_killed_mid_oracle_leaves_its_last_write_intact() {
     let report = theorem
         .join("progress/Eq_medium_composition_small_composition/ChangeNameUsefulOracle/report.txt");
     let mut child = tactics(
-        "../test-projects/test-oracle-rename",
+        "../test-projects/err-oracle-rename-two-imports",
         &dir.join("out"),
         &easycrypt,
         &["--write-granularity", "node", "--no-quick-close"],
@@ -190,7 +190,7 @@ fn a_run_killed_at_the_default_granularity_leaves_a_compiling_file_and_a_record_
     let theorem = out.join("Proof");
     let file = theorem.join(FIRST_ORACLE_FILE);
     let mut child = tactics(
-        "../test-projects/test-oracle-rename",
+        "../test-projects/err-oracle-rename-two-imports",
         &out,
         &easycrypt,
         &["--no-quick-close"],
@@ -241,7 +241,7 @@ fn a_run_killed_at_the_default_granularity_leaves_a_compiling_file_and_a_record_
             "none",
             "--project",
         ])
-        .arg(workspace().join("test-projects/test-oracle-rename"))
+        .arg(workspace().join("test-projects/err-oracle-rename-two-imports"))
         .arg("--out")
         .arg(&out)
         .arg("--no-quick-close")

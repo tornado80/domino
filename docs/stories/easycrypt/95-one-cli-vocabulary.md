@@ -146,7 +146,7 @@ before this story, in its own repo.
 ## 7. Acceptance criteria
 
 - [x] All tests of §6 green, the whole test suite green, `cargo clippy` clean.
-- [ ] `scripts/test-known-examples.sh` passes.
+- [x] `scripts/test-known-examples.sh` passes.
 - [x] `grep -rnE -e '--(proof|path|proofstep|side-inv|pkg-inv|debug-timeout)\b|proofsteps' src
       crates scripts Readme.md docs --exclude-dir=stories` finds nothing, except the JSON field
       `proofstep` and the Rust names that §3 keeps.

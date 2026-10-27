@@ -1582,7 +1582,7 @@ mod live {
     // ------------------------------------------------------------------
 
     /// Two oracles, one with a `domino-fails` admit; a few seconds.
-    const TWO_ORACLES: &str = "test-projects/test-oracle-rename";
+    const TWO_ORACLES: &str = "test-projects/err-oracle-rename-two-imports";
 
     fn walk(write_granularity: WriteGranularity) -> TacticsOptions {
         TacticsOptions {
