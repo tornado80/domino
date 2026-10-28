@@ -32,7 +32,26 @@ from datetime import datetime, timezone
 
 ROLES = ["quick close", "structure", "exit path", "reduce", "split", "part fallback",
          "side-goal fallback", "admit"]
-GOAL_TYPES = ["equal-output", "invariant conjunct", "branch-condition", "side-goal", "other"]
+GOAL_TYPES = ["equal-output", "invariant conjunct", "branch-condition", "side-goal", "unreachable",
+              "pruned-combination", "other"]
+GLOSSARY = """\
+## What the admit types mean
+
+The prover walks the joint tree of the oracle (both sides executed in lockstep) and sends EasyCrypt one
+sentence per step. A goal EasyCrypt does not close is admitted alone, labelled with the kind of goal it
+was. The reason `domino-verified-ec-failed` says Domino's solver verified that goal and EasyCrypt did
+not close it within the timeout (`smt: timeout` in the `.ec` comment when the last `smt()` timed out).
+
+| Type | Where it comes from | What EasyCrypt failed to show |
+|---|---|---|
+| `branch-condition` | both sides reach an `if` together; `if.` makes the condition a goal of its own | the two sides' conditions are equal, so both take the same branch |
+| `side-goal` | one side reaches an `if` that lockstep found decided (one branch is unreachable); `rcondt{s}` / `rcondf{s}` makes the decision a goal of its own | the condition is true (`rcondt`) or false (`rcondf`) at that point |
+| `unreachable` | a joint-tree node whose path condition Domino's solver found `unsat` | the goal holds vacuously: its hypotheses are contradictory (`exfalso; smt().`) |
+| `pruned-combination` | a split where both sides branch; Domino pruned this (left branch, right branch) combination as `unsat` and never explored it | the combination cannot happen (`exfalso; smt().`, `auto => /#.`) |
+| `equal-output` | a leaf: both sides have returned. Its postcondition, outputs equal ∧ `inv` on the new states, is split with `do split` into conjuncts closed one by one | the first conjunct: the two return values are equal (e.g. `Some msg_{1} = Some msg_{2}`). Only this conjunct is admitted, not the leaf |
+| invariant conjunct | another conjunct of a leaf's postcondition: the state relation (a hop) or game invariant (a side invariant) unfolded and split | that conjunct on the new states. Named `invariant/<predicate>` after the predicate it came from; `(case …)` marks one case of a key case split |
+| `stuck/<reason>`, `not-explored` (in other) | lockstep could not continue below a node, or did not explore a child | — : Domino itself has no verdict there |
+"""
 # `[->|?]` before story 90, `[->>|?]` on a binder, `[hc|hc]` on a term index
 CASE_SENTENCE = re.compile(r"^(\s*)(\+ )?case \(.*\) => \[(?:->>?\|\?|(\w+)\|\3)\]\.\s*$")
 
@@ -164,9 +183,17 @@ def goal_type(claim):
         return "invariant conjunct"
     if claim.startswith("equal-output"):
         return "equal-output"
-    if claim in ("branch-condition", "side-goal"):
+    if claim in ("branch-condition", "side-goal", "unreachable", "pruned-combination"):
         return claim
     return "other"
+
+
+def admit_kind(claim):
+    """The column of an admit in the per-oracle tables: its goal type, an invariant conjunct by predicate."""
+    t = goal_type(claim)
+    if t == "invariant conjunct":
+        return "inv: " + re.sub(r"^StateRelation_(relation_)?", "", predicate(claim))
+    return claim if t == "other" and claim else t
 
 
 def predicate(claim):
@@ -331,11 +358,11 @@ def section(jobs, before, side):
         rows.append([j["title"], *cells, f"**{sum(c.values())}**" + (f" ({len(admits_of(b))})" if b else "")])
     rows.append(["**Total**", *[f"**{tot[t]}**" for t in GOAL_TYPES], f"**{sum(tot.values())}**"])
     # Story 90: retries with the longer smt timeout, and parts a named split closed
-    rows = [[j["title"], num(total(j, "retried")), num(total(j, "retried_closed")), num(total(j, "named"))]
-            for j in sel if total(j, "retried") or total(j, "named")]
-    if rows:
+    retries = [[j["title"], num(total(j, "retried")), num(total(j, "retried_closed")), num(total(j, "named"))]
+               for j in sel if total(j, "retried") or total(j, "named")]
+    if retries:
         out += ["### Retries and named splits", "",
-                table([label, "Parts retried", "Retries closed", "Closed by a named split"], rows), ""]
+                table([label, "Parts retried", "Retries closed", "Closed by a named split"], retries), ""]
 
     out += ["### Admits by goal type", "",
             "`equal-output` is the record claim `equal-output+invariant`; an invariant conjunct is a claim "
@@ -343,6 +370,32 @@ def section(jobs, before, side):
             table([label, *GOAL_TYPES, "Total" + (" (before)" if before else "")], rows), ""]
     reasons = Counter(a["reason"] for j in sel for a in admits_of(j))
     out += ["Admit reasons: " + (", ".join(f"`{k}` {v}" for k, v in reasons.most_common()) or "none") + ".", ""]
+
+    # Admits by type per oracle: one row per (job, oracle) with an admit, a total row per job
+    per = {j["name"]: {o: Counter(admit_kind(a.get("claim")) for a in j["admits"].get(o, []))
+                       for o in j["oracles"]} for j in sel}
+    kinds = Counter()
+    for by_oracle in per.values():
+        for c in by_oracle.values():
+            kinds.update(c)
+    if kinds:
+        cols = [t for t in GOAL_TYPES if t in kinds]
+        cols += sorted((k for k in kinds if k.startswith("inv: ")), key=lambda k: -kinds[k])
+        cols += sorted(k for k in kinds if k not in cols)
+        rows = []
+        for j in sel:
+            hits = [(o, c) for o, c in per[j["name"]].items() if c]
+            if not hits:
+                continue
+            for i, (o, c) in enumerate(hits):
+                rows.append([j["title"] if i == 0 else "", o, *(blank0(c[k]) for k in cols), sum(c.values())])
+            jt = sum((c for _, c in hits), Counter())
+            rows.append(["", f"**Σ {j['title']}**", *(f"**{jt[k]}**" if jt[k] else "" for k in cols),
+                         f"**{sum(jt.values())}**"])
+        out += ["### Admits by type per oracle", "",
+                f"One row per {label.lower()} and oracle with an admit. `inv: <predicate>` is an invariant "
+                "conjunct, by the predicate it came from; the types are explained at the top.", "",
+                table([label, "Oracle", *cols, "Total"], rows), ""]
 
     # Admits per oracle
     names = []
@@ -360,6 +413,7 @@ def section(jobs, before, side):
             rows.append([j["title"], *cells])
     out += ["### Admits per oracle" + (", now (before)" if before else ""), "",
             "Only rows with an admit.", "", table([label, *names], rows) if rows else "No admit.", ""]
+
 
     # Invariant conjuncts by predicate
     rows = []
@@ -437,7 +491,8 @@ def report(directory, before_ref):
            f"`progress/*/report.txt` and the `.ec` files of `{directory}`. The latest session record is "
            f"of {updated}." + (f" \"Before\" is commit `{before_ref}`." if before_ref else ""), "",
            "Updated (session record) per job: " +
-           ", ".join(f"{j['title']} {(j['updated'] or '—')[:10]}" for j in jobs.values()) + ".", ""]
+           ", ".join(f"{j['title']} {(j['updated'] or '—')[:10]}" for j in jobs.values()) + ".", "",
+           GLOSSARY]
     hops, sides = section(jobs, before, False), section(jobs, before, True)
     if hops:
         out += ["## Hops", ""] + hops
