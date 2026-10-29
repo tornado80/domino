@@ -109,7 +109,7 @@ EC = re.compile(r"EasyCrypt: tactic ([^(]+)\(smt ([^:]+): translate ([^,]+), pre
                 r"prover ([^;]+);\s+(\d+) calls: (\d+) valid, (\d+) timeout, (\d+) unknown\), "
                 r"serialize ([^,]+), Domino parse (\S+)")
 TOTAL = re.compile(r"^(\d+) oracles, (\d+) goals closed, (?:no admit|(\d+) admits), ([\d.]+)s", re.M)
-HEADER = re.compile(r"^tactics for (\S+)\.ec \((?:proofstep (\d+): (.*)|side invariants of (\w+))\)", re.M)
+HEADER = re.compile(r"^tactics for (\S+)\.ec \((?:(?:proofstep|game hop) (\d+): (.*)|side invariants of (\w+))\)", re.M)
 
 
 def parse_report(text):
@@ -251,6 +251,9 @@ def work(job):
 
 
 def slowest(job):
+    # A job that stopped before its first oracle (an EasyCrypt `require` error) has none.
+    if not job["oracles"]:
+        return "—"
     name, o = max(job["oracles"].items(), key=lambda kv: kv[1]["lockstep"] + kv[1]["ec"])
     return f"{name} {dur(o['lockstep'] + o['ec'], short=True)}"
 
@@ -317,7 +320,7 @@ def section(jobs, before, side):
     out = []
 
     # Summary
-    head = [label] + (["Game invariants"] if side else ["Proofstep"]) + ["Goals closed", "Admits"]
+    head = [label] + (["Game invariants"] if side else ["Game hop"]) + ["Goals closed", "Admits"]
     if before:
         head += ["Admits before", "Change"]
     head += ["Wall", "Work (Σ oracles)", "Slowest oracle"]
@@ -326,7 +329,8 @@ def section(jobs, before, side):
     rows, tot = [], Counter()
     for j in sel:
         n, b = len(admits_of(j)), old(j)
-        r = [j["title"], j.get("game_invariants") if side else j["proofstep"], num(total(j, "goals")), f"**{n}**"]
+        r = [j["title"], j.get("game_invariants") if side else j["proofstep"], num(total(j, "goals")),
+             f"**{n}**" if j["oracles"] else "**not proved**"]
         if before:
             r += [len(admits_of(b)) if b else "—", change(n, len(admits_of(b))) if b else "—"]
         r += [dur(j["wall"]), dur(work(j)), slowest(j)]
