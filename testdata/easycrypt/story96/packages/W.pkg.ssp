@@ -1,0 +1,25 @@
+package W {
+    params {
+        n: Integer,
+    }
+
+    state {
+        Keys: Table(Integer, Bits(n)),
+    }
+
+    /*
+     * Story 96: the body writes to its arguments `key` and `h`.
+     * The writes are a sample (the shape of `MAC.Init` in Full4WHS),
+     * an assignment, and a tuple pattern with the new local `extra`.
+     */
+    oracle Init(h: Integer, key: Bits(n), hon: Bool, pair: (Integer, Integer)) -> Bits(n) {
+        if hon {
+            key <-$ Bits(n);
+        }
+        h <- (h + 1);
+        Keys[h] <- Some(key);
+        (h, extra) <- parse pair;
+        Keys[(h + extra)] <- Some(key);
+        return key;
+    }
+}

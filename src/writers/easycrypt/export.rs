@@ -1202,6 +1202,14 @@ mod tests {
         assert_tree_compiles(&exported, "story58");
     }
 
+    // Story 96: an oracle that writes its own argument. Before the fix,
+    // EasyCrypt rejected `Pkg_W.ec` with `duplicated local/parameters name`.
+    #[test]
+    fn story96_full_tree_compiles_in_dependency_order() {
+        let exported = export("testdata/easycrypt/story96", "Story96").unwrap();
+        assert_tree_compiles(&exported, "story96");
+    }
+
     #[test]
     fn kem_dem_cca_ssp_full_tree_compiles_in_dependency_order() {
         let exported = export(

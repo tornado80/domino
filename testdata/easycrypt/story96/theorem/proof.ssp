@@ -1,0 +1,30 @@
+theorem Story96 {
+    const n: Integer;
+
+    instance L = G {
+        params {
+            n: n,
+        }
+    }
+
+    instance R = G {
+        params {
+            n: n,
+        }
+    }
+
+    gamehops {
+        equivalence L R {
+            invariant: [ ./theorem/invariant.smt2 ]
+            Init: {
+                randomness: simple
+
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+        }
+    }
+}

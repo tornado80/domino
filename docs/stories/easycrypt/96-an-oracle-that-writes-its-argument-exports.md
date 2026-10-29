@@ -107,12 +107,12 @@ that use the same package are sufficient). The package has one oracle that:
 - assigns its argument (`x <- …`),
 - assigns a tuple pattern that contains its argument and a new local.
 
-- [ ] Unit test in `package.rs`: the rendered proc of that oracle has no `var` line for an
+- [x] Unit test in `package.rs`: the rendered proc of that oracle has no `var` line for an
       argument, and has exactly one `var` line for the new local of the tuple.
-- [ ] Unit test: the body still writes to the argument (`x <$`, `x <-`, `(x, y) <-`).
-- [ ] Compile test in `export.rs`: `story96_full_tree_compiles_in_dependency_order`, with
+- [x] Unit test: the body still writes to the argument (`x <$`, `x <-`, `(x, y) <-`).
+- [x] Compile test in `export.rs`: `story96_full_tree_compiles_in_dependency_order`, with
       `assert_tree_compiles` (it skips without `easycrypt`).
-- [ ] The existing full-tree compile tests stay green: an oracle that does not write its argument
+- [x] The existing full-tree compile tests stay green: an oracle that does not write its argument
       gives the same text as before.
 
 ## 5. Rejected alternatives
@@ -136,7 +136,7 @@ that use the same package are sufficient). The package has one oracle that:
 
 ## 6. Acceptance criteria
 
-- [ ] All tests of §4 green, the whole test suite green, `cargo clippy` clean.
+- [x] All tests of §4 green, the whole test suite green, `cargo clippy` clean.
 - [ ] Complexity: `collect_locals`, `record_local` and `build_proc` stay within budget
       (`crap_scope` on `src/writers/easycrypt/package.rs`).
 - [ ] The owner's check, by hand (about 1 hour of machine time, not in CI):

@@ -726,6 +726,9 @@ pub(super) fn var_spelling(
     Ok(names.mangle(NameKind::Var, raw)?)
 }
 
+/// Declares the local `id` in `out`, once. `seen` holds the EasyCrypt names
+/// that have a declaration already: the proc parameters and the locals
+/// recorded before. A state field gets no declaration.
 fn record_local(
     id: &Identifier,
     scope: &mut PackageScope,
@@ -764,8 +767,12 @@ fn build_proc(scope: &mut PackageScope, oracle: &OracleDef) -> Result<EcProc, Ec
         args.push((mangled, translate_type(ty, span)?));
     }
 
+    // An oracle argument is a proc parameter already. A body that writes to
+    // it writes to that parameter (EasyCrypt passes arguments by value, as
+    // Domino does), so no `var` is declared for it: EasyCrypt rejects a `var`
+    // with the name of a parameter (story 96).
     let mut locals = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen: HashSet<String> = args.iter().map(|(name, _)| name.clone()).collect();
     collect_locals(&oracle.code, scope, &mut locals, &mut seen)?;
 
     let Some((Statement::Return(Some(ret_value), ret_span), body_stmts)) =
@@ -1834,5 +1841,64 @@ mod tests {
         };
         let keys = compute_all_keys(&comp);
         assert_eq!(keys[0], keys[1]);
+    }
+
+    // --- story 96: an oracle that writes its own argument -----------------
+
+    /// The `d_Init` proc of the story 96 fixture, from its header to its
+    /// `return` line. `Init` samples into its argument `key`, assigns its
+    /// argument `h`, and assigns the tuple pattern `(h, extra)`.
+    fn story96_init_proc() -> String {
+        let variants = load_variants("testdata/easycrypt/story96", "Story96");
+        let rendered = render_file(&variants[0].file);
+        let start = rendered
+            .find("proc d_Init(")
+            .unwrap_or_else(|| panic!("no `proc d_Init(` in:\n{rendered}"));
+        let rest = &rendered[start..];
+        let end = rest
+            .find("return ")
+            .unwrap_or_else(|| panic!("no `return` in:\n{rest}"));
+        rest[..end].to_string()
+    }
+
+    /// The `var` lines of `proc`, trimmed.
+    fn var_lines(proc: &str) -> Vec<&str> {
+        proc.lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("var "))
+            .collect()
+    }
+
+    #[test]
+    fn an_argument_that_the_body_writes_is_not_declared_again() {
+        let proc = story96_init_proc();
+        assert!(
+            proc.starts_with(
+                "proc d_Init(h : int, key : bits_n, hon : bool, pair : (int * int)) : bits_n option"
+            ),
+            "got:\n{proc}"
+        );
+        let vars = var_lines(&proc);
+        for arg in ["h", "key", "hon", "pair"] {
+            assert!(
+                !vars
+                    .iter()
+                    .any(|line| line.starts_with(&format!("var {arg} :"))),
+                "argument `{arg}` has a `var` line, got:\n{proc}"
+            );
+        }
+        let extra: Vec<_> = vars
+            .iter()
+            .filter(|line| line.starts_with("var extra :"))
+            .collect();
+        assert_eq!(extra, vec![&"var extra : int;"], "got:\n{proc}");
+    }
+
+    #[test]
+    fn the_body_still_writes_to_the_argument() {
+        let proc = story96_init_proc();
+        for write in ["key <$ ", "h <- h + 1;", "(h, extra) <- "] {
+            assert!(proc.contains(write), "no `{write}` in:\n{proc}");
+        }
     }
 }
