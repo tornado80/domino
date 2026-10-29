@@ -217,6 +217,7 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 85 | A game instance can have the name of its composition (side-invariant jobs) | `85-a-game-instance-can-have-the-name-of-its-composition.md` | 69, 77, symbolic-execution 25 |
 | 94 | The joint-tree viewer header counts claims; the details are in the Run summary | `94-the-viewer-header-counts-claims.md` | 24, symbolic-execution 25 |
 | 95 | One CLI vocabulary: `--project`, `--theorem`, `--gamehop`, `--game`, `--package`, `--timeout` | `95-one-cli-vocabulary.md` | 94 |
+| 96 | An oracle that writes its argument exports to EasyCrypt (no second `var`) | `96-an-oracle-that-writes-its-argument-exports.md` | — |
 
 Stories 71–77 and symbolic-execution 26–29 come from the grilling of 2026-10-12/20. The merges land
 in the order 71 → symbolic-execution 26 → 74. Not merged: the rest of Christoph Egger's stack (not

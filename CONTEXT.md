@@ -35,6 +35,9 @@ from there into package instances. Boolean, integer or function.
 **Oracle** — a procedure a package defines. An **exported oracle** is one the composition offers
 to the adversary.
 
+**Oracle argument** — a value that the caller gives to one call of an oracle. The oracle body can
+write to it. The write changes only the value of that call; the caller does not see it.
+
 **Continuation** — the statements that follow a given statement in the same block, together with
 everything that follows the blocks enclosing it. What a mid-body abort or return skips.
 
