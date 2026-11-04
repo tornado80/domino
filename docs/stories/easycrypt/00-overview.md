@@ -218,6 +218,10 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 94 | The joint-tree viewer header counts claims; the details are in the Run summary | `94-the-viewer-header-counts-claims.md` | 24, symbolic-execution 25 |
 | 95 | One CLI vocabulary: `--project`, `--theorem`, `--gamehop`, `--game`, `--package`, `--timeout` | `95-one-cli-vocabulary.md` | 94 |
 | 96 | An oracle that writes its argument exports to EasyCrypt (no second `var`) | `96-an-oracle-that-writes-its-argument-exports.md` | — |
+| 97 | A hand-written reduction proof fixes the script (prototype: hello-world, kem-dem reduction 1) | `97-a-hand-written-reduction-proof-fixes-the-script.md` | — |
+| 98 | A reduction exports its router, adversary and experiment (`Red_<L>_<R>.ec`, modules) | `98-a-reduction-exports-its-router-adversary-and-experiment.md` | 97 |
+| 99 | A reduction exports its equivalences and its bound lemma, with the whole proof | `99-a-reduction-exports-its-equivalences-and-bound-lemma.md` | 97, 98 |
+| 100 | A proposition exports its lemma (`Prop_<Name>.ec`) | `100-a-proposition-exports-its-lemma.md` | 99 |
 
 Stories 71–77 and symbolic-execution 26–29 come from the grilling of 2026-10-12/20. The merges land
 in the order 71 → symbolic-execution 26 → 74. Not merged: the rest of Christoph Egger's stack (not

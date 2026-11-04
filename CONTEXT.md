@@ -60,12 +60,57 @@ _Avoid_: path (as the name of the project option).
 **Theorem** — a named sequence of game hops between game instances, in `theorem/*.ssp`.
 _Avoid_: proof (as the name of a theorem).
 
+**Proposition** — a named claim of a theorem that two of its game instances are indistinguishable.
+Proof assembly finds the path of game hops, in either direction and with constants specialized,
+that proves it.
+
 **Game hop** — one step of a theorem from one game instance to the next: an equivalence, a
 reduction or a conjecture. Game hops are numbered from 0 in the order the theorem lists them.
 _Avoid_: proofstep, proof step.
 
 **Equivalence** — a game hop claiming two game instances are perfectly indistinguishable. Its
 obligations are discharged per exported oracle.
+
+**Assumption** — a named pair of game instances, the **assumption games**, that the theorem takes
+as indistinguishable without proof.
+
+**Reduction** — a game hop that moves the distance between its two game instances onto an
+assumption. Each side of the hop is paired with one assumption game by a **map**: a pairing of the
+assumption game's package instances with package instances of the hop's game instance.
+
+**Mapped package** — a package instance of a reduction's game instance that a map pairs with a
+package instance of the assumption game.
+
+**Reduction package** — a package instance of a reduction's game instance that no map names. The
+reduction packages are the same on both sides of the hop; together they are the part of the game
+that the reduction keeps and puts in front of the assumption game.
+_Avoid_: reduction (for the packages; a reduction is the game hop).
+
+**Reduction router** — the EasyCrypt module that gives the hop's game interface to the adversary
+from the reduction packages, and forwards every call that reaches a mapped package to the
+assumption game's interface. It has its own abort flag, because a reduction package can abort
+while the assumption game does not.
+
+**Reduction adversary** — the EasyCrypt adversary against the assumption game that starts the
+reduction router and runs the original adversary against it. Its advantage against the assumption
+is the reduction's bound. _Avoid_: B, reduction (for the adversary).
+
+**Reduction experiment** — the EasyCrypt experiment that takes the theorem constants a reduction
+needs as arguments, gives them to the reduction adversary, and then runs the assumption game's own
+experiment against it, unchanged. It is how a reduction's lemmas quantify over theorem constants
+without a hypothesis on the start memory. Every reduction has one; a reduction whose two assumption
+games are different compositions has one for each side.
+_Avoid_: wrapper, Init module.
+
+**Bound lemma** — the EasyCrypt lemma of one reduction that says the original adversary's advantage
+between the hop's two game instances *equals* the reduction adversary's advantage between the two
+assumption games. Equal, not at most: a perfect reduction loses nothing.
+
+**Proposition lemma** — the EasyCrypt lemma of one proposition: the original adversary's advantage
+between its two game instances is at most the sum of the right sides of the bound lemmas, one term
+for each reduction step on the path, in path order. Equivalences give no term. An **open hop** — a
+hop on the path that translation does not prove, such as a conjecture — gives the original
+adversary's own advantage between its two game instances as its term.
 
 **Claim** — one obligation of an equivalence for one oracle: `invariant`, `same-output` or
 `equal-aborts`, each with its dependencies.
