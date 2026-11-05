@@ -771,6 +771,8 @@ fn prec(e: &EcExpr) -> i8 {
         | EcExpr::Pr { .. }
         | EcExpr::GlobEq(_)
         | EcExpr::Glob(_)
+        | EcExpr::GlobAt { .. }
+        | EcExpr::Abs(_)
         | EcExpr::OracleEquiv { .. }
         | EcExpr::OracleHoare { .. } => ATOM_PREC,
         EcExpr::App { args, .. } if args.is_empty() => ATOM_PREC,
@@ -970,6 +972,8 @@ fn render_expr_inner(e: &EcExpr) -> String {
         }
         EcExpr::GlobEq(module) => format!("={{glob {module}}}"),
         EcExpr::Glob(module) => format!("(glob {module})"),
+        EcExpr::GlobAt { module, mem } => format!("(glob {module}){{{mem}}}"),
+        EcExpr::Abs(e) => format!("`|{}|", render_expr_inner(e)),
         EcExpr::OracleEquiv {
             left,
             right,

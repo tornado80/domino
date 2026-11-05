@@ -3,7 +3,8 @@
 //! Building `Red_<L>_<R>.ec` for each reduction hop (story 98, ADR 0022 decisions 1–3 and 8):
 //! the **reduction router** `Red_<hop>(O)`, the **reduction adversary** `B_<hop>(A)(O)` and
 //! the **reduction experiment(s)** `RedExp_<hop>(A)` (or `RedExp_<hop>_L`/`_R` when the two
-//! assumption games are different compositions). Story 99 adds the lemmas to the same file.
+//! assumption games are different compositions). Story 99 adds the lemmas to the same file
+//! (`reduction_lemmas`).
 //!
 //! The router is built from the **left** game instance's reduction packages, with their
 //! instance names (story 97). A call that reaches a mapped package goes to `O`, under the name
@@ -32,6 +33,7 @@ use super::game::{
 use super::interfaces::{composition_span, InterfacesOutput};
 use super::names::{NameKind, Names};
 use super::package::{param_needs_var, pkg_needs_init};
+use super::reduction_lemmas::{reduction_lemmas, LemmaInput, ReductionLemmas};
 use super::proof::{literal_text_to_expr, side_run_args, RunArgValue};
 use super::types::{translate_expr, translate_type};
 use super::EcExportError;
@@ -49,6 +51,8 @@ pub struct ReductionFile {
     pub package_pairs: Vec<(String, String)>,
     /// The hop's left side, then its right side.
     pub sides: [ReductionSide; 2],
+    /// The names of the two reduction equivalences and the bound lemma (story 99).
+    pub lemmas: ReductionLemmas,
 }
 
 /// What the lemmas of one side of a reduction hop need (story 99).
@@ -319,9 +323,17 @@ fn router_module(
     })
 }
 
-/// The constants `B_<hop>` stores: `(var name, setup argument, type)`, one for each theorem
-/// constant that a router `init` argument reads, first-use order.
-type StoredConst = (String, String, EcType);
+/// A constant `B_<hop>` stores, one for each theorem constant that a router `init` argument
+/// reads, first-use order.
+pub(super) struct StoredConst {
+    /// The variable of `B_<hop>`, also the name of `RedExp`'s `run` argument.
+    pub var: String,
+    /// The argument of `setup`.
+    pub arg: String,
+    pub ty: EcType,
+    /// The theorem constant.
+    pub theorem_const: String,
+}
 
 /// The adversary's stored constants and the arguments of its router `init` call.
 fn adversary_init(
@@ -344,14 +356,19 @@ fn adversary_init(
             Some(RunArgValue::Literal(text)) => args.push(literal_text_to_expr(&text)),
             Some(RunArgValue::TheoremConst(t)) => {
                 let var = names.mangle(NameKind::Var, &t)?;
-                if !stored.iter().any(|(v, _, _)| v == &var) {
+                if !stored.iter().any(|s| s.var == var) {
                     let ty = theorem
                         .consts
                         .iter()
                         .find(|(n, _)| n == &t)
                         .map(|(_, ty)| ty)
                         .expect("the parser resolved every theorem constant");
-                    stored.push((var.clone(), format!("{var}0"), translate_type(ty, span)?));
+                    stored.push(StoredConst {
+                        var: var.clone(),
+                        arg: format!("{var}0"),
+                        ty: translate_type(ty, span)?,
+                        theorem_const: t.clone(),
+                    });
                 }
                 args.push(EcExpr::Var(var));
             }
@@ -375,16 +392,16 @@ fn b_module(
         name: "setup".to_string(),
         args: stored
             .iter()
-            .map(|(_, a, ty)| (a.clone(), ty.clone()))
+            .map(|s| (s.arg.clone(), s.ty.clone()))
             .collect(),
         ret: EcType::Unit,
         locals: vec![],
         body: EcBlock(
             stored
                 .iter()
-                .map(|(v, a, _)| EcStmt::Assign {
-                    lhs: EcLvalue::Var(v.clone()),
-                    rhs: EcExpr::Var(a.clone()),
+                .map(|s| EcStmt::Assign {
+                    lhs: EcLvalue::Var(s.var.clone()),
+                    rhs: EcExpr::Var(s.arg.clone()),
                 })
                 .collect(),
         ),
@@ -420,7 +437,7 @@ fn b_module(
         implements: None,
         vars: stored
             .iter()
-            .map(|(v, _, ty)| (v.clone(), ty.clone()))
+            .map(|s| (s.var.clone(), s.ty.clone()))
             .collect(),
         procs: vec![setup, run],
     }
@@ -439,7 +456,7 @@ fn red_exp_module(
 ) -> Result<EcModule, EcExportError> {
     let mut args: Vec<(String, EcType)> = stored
         .iter()
-        .map(|(v, _, ty)| (v.clone(), ty.clone()))
+        .map(|s| (s.var.clone(), s.ty.clone()))
         .collect();
     let mut exp_args = Vec::new();
     for (c, ty) in &assm.consts {
@@ -466,7 +483,7 @@ fn red_exp_module(
                 proc: "setup".to_string(),
                 args: stored
                     .iter()
-                    .map(|(v, _, _)| EcExpr::Var(v.clone()))
+                    .map(|s| EcExpr::Var(s.var.clone()))
                     .collect(),
             },
             EcStmt::Call {
@@ -572,6 +589,25 @@ fn build_reduction_file(
             .collect(),
     });
 
+    let reduction_order = ctx.reduction_order();
+    let lemmas = reduction_lemmas(
+        theorem,
+        interfaces,
+        red,
+        &LemmaInput {
+            stem: &stem,
+            router: &router_name,
+            b: &b_name,
+            adv,
+            router_comp: ctx.comp,
+            router_wiring: &ctx.wiring,
+            reduction_order: &reduction_order,
+            stored: &stored,
+            experiments: [&sides[0].experiment, &sides[1].experiment],
+        },
+        &mut items,
+    )?;
+
     let mut plain = vec!["Interfaces".to_string()];
     for idx in ctx.reduction_order() {
         push_unique(&mut plain, format!("Pkg_{}", ctx.wiring[idx].variant));
@@ -642,6 +678,7 @@ fn build_reduction_file(
         },
         package_pairs: red.package_pairs().to_vec(),
         sides,
+        lemmas,
     })
 }
 
@@ -817,5 +854,141 @@ mod tests {
             proc(router, "init").args,
             vec![("flip".to_string(), EcType::Bool)]
         );
+    }
+
+    /// The text of lemma `name` from `lemma` to its `proof.`, with whitespace normalized.
+    fn statement(text: &str, name: &str) -> String {
+        let start = text
+            .find(&format!("lemma {name} "))
+            .unwrap_or_else(|| panic!("no lemma {name} in {text}"));
+        let end = start + text[start..].find("\nproof.").unwrap();
+        text[start..end].split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn lemma_names(f: &ReductionFile) -> Vec<String> {
+        f.file
+            .items
+            .iter()
+            .find_map(|i| match i {
+                EcItem::Section(s) => Some(s.lemmas.iter().map(|l| l.name.clone()).collect()),
+                _ => None,
+            })
+            .expect("a reduction file has a section")
+    }
+
+    fn op_names(f: &ReductionFile) -> Vec<String> {
+        f.file
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                EcItem::OpDef { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn hello_world_lemma_statements_are_the_prototypes() {
+        let files = load("example-projects/hello-world", "Proof");
+        let f = &files[0];
+        let text = render_file(&f.file);
+        assert!(!text.contains("admit"), "{text}");
+        let stem = "big_composition_medium_composition_more_oracles";
+        let proto = std::fs::read_to_string(format!(
+            "testdata/easycrypt/reduction-prototype/hello-world/Red_{stem}.ec"
+        ))
+        .unwrap();
+        let names = [
+            format!("{stem}_equiv_L"),
+            format!("{stem}_equiv_R"),
+            format!("{stem}_bound"),
+        ];
+        for name in &names {
+            assert_eq!(statement(&text, name), statement(&proto, name));
+        }
+        assert_eq!(f.lemmas.equivs, [names[0].clone(), names[1].clone()]);
+        assert_eq!(f.lemmas.bound, names[2]);
+        assert!(f.lemmas.consts.is_empty());
+    }
+
+    #[test]
+    fn hello_world_has_an_invariant_for_each_side() {
+        let files = load("example-projects/hello-world", "Proof");
+        let stem = "big_composition_medium_composition_more_oracles";
+        assert_eq!(
+            op_names(&files[0]),
+            vec![format!("inv_{stem}_L"), format!("inv_{stem}_R")]
+        );
+    }
+
+    #[test]
+    fn the_first_kem_dem_reduction_shares_its_oracle_lemmas() {
+        let files = load(
+            "example-projects/kem-dem/kem-dem-cca-ssp",
+            "kem_dem_cca_ssp",
+        );
+        let first = &files[0];
+        let stem = "Game_MOD_CCA_PKE_Real_KEM_Real_DEM_Game_MOD_CCA_PKE_Ideal_KEM_Real_DEM";
+        assert_eq!(op_names(first), vec![format!("inv_{stem}")]);
+        assert_eq!(
+            lemma_names(first),
+            vec![
+                format!("{stem}_d_PKGEN"),
+                format!("{stem}_d_PKENC"),
+                format!("{stem}_d_PKDEC"),
+                format!("{stem}_equiv_L"),
+                format!("{stem}_equiv_R"),
+                format!("{stem}_bound"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reduction_consts_quantifies_the_constant_and_relates_the_stored_copy() {
+        let files = load("testdata/easycrypt/reduction-consts", "RedConsts");
+        let f = &files[0];
+        let text = render_file(&f.file);
+        let stem = "mod_real_mod_ideal";
+        for name in [
+            format!("{stem}_equiv_L"),
+            format!("{stem}_equiv_R"),
+            format!("{stem}_bound"),
+        ] {
+            assert!(
+                statement(&text, &name).starts_with(&format!("lemma {name} &m (b : bool) :")),
+                "{text}"
+            );
+        }
+        assert!(
+            text.contains(&format!(
+                "Comp_ModGame.Cloned_Pkg_Mod.Mod.flip{{1}} B_{stem}.b{{2}}"
+            )),
+            "{text}"
+        );
+        assert_eq!(f.lemmas.consts, vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn the_third_kem_dem_bound_lemma_follows_the_hop_direction() {
+        let files = load(
+            "example-projects/kem-dem/kem-dem-cca-ssp",
+            "kem_dem_cca_ssp",
+        );
+        let third = &files[2];
+        let text = render_file(&third.file);
+        let stmt = statement(&text, &third.lemmas.bound);
+        let rhs = stmt.split(" = ").nth(1).unwrap();
+        let exp = &third.sides[0].experiment;
+        assert!(
+            rhs.starts_with(&format!("`|Pr[{exp}(A).run(true) @ &m : res] - Pr[{exp}(A).run(false)")),
+            "{stmt}"
+        );
+    }
+
+    /// Story 98's open review note: a reduction inside a hybrid hop gets no `Red_*.ec`
+    /// (ADR 0022, decision 7).
+    #[test]
+    fn a_reduction_inside_a_hybrid_hop_is_not_translated() {
+        assert!(load("example-projects/hello-world-hybrid", "Hybrid").is_empty());
     }
 }

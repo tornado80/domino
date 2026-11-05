@@ -270,6 +270,10 @@ pub enum EcExpr {
     },
     /// `glob M`: the state of module `M`, as an argument of an operator (story 76).
     Glob(String),
+    /// `(glob M){i}`: the state of module `M` in memory `i` of a relational formula (story 99).
+    GlobAt { module: String, mem: u8 },
+    /// `` `|e| ``: the absolute value of a real (story 99's bound lemma).
+    Abs(Box<EcExpr>),
     /// `={glob M}` — the two runs' own copies of `M`'s glob state are equal.
     /// Only produced inside this epic's own `byequiv` induction-start
     /// precondition (story 13, [`ProofLine::ByequivPrecondition`]); a
@@ -337,7 +341,9 @@ impl EcExpr {
             | EcExpr::None_(_)
             | EcExpr::MapEmpty
             | EcExpr::Glob(_)
+            | EcExpr::GlobAt { .. }
             | EcExpr::GlobEq(_) => Vec::new(),
+            EcExpr::Abs(e) => vec![e],
             EcExpr::Tuple(items) | EcExpr::App { args: items, .. } => items.iter().collect(),
             EcExpr::Proj { expr, .. }
             | EcExpr::Field { expr, .. }

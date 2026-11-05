@@ -125,6 +125,14 @@ pub struct ReductionReport {
     pub right_name: String,
     pub assumption_name: String,
     pub file: String,
+    /// The two reduction equivalences, `<hop>_equiv_L` and `<hop>_equiv_R` (story 99).
+    pub equiv_lemmas: [String; 2],
+    /// The bound lemma `<hop>_bound` (story 99): `` `|Pr[Exp_<GL>(A).run(..)] -
+    /// Pr[Exp_<GR>(A).run(..)]| = `|Pr[RedExp_L(A).run(..)] - Pr[RedExp_R(A).run(..)]| ``.
+    pub bound_lemma: String,
+    /// The theorem constants that the three lemmas take after `&m`, in theorem order (their
+    /// binders are the constants' mangled names).
+    pub lemma_consts: Vec<String>,
 }
 
 /// A game hop this exporter does not translate, named with its kind and the
@@ -360,6 +368,9 @@ pub fn export_theorem_observed(
             right_name: rf.right_name.clone(),
             assumption_name: rf.assumption_name.clone(),
             file: rf.file_name.clone(),
+            equiv_lemmas: rf.lemmas.equivs.clone(),
+            bound_lemma: rf.lemmas.bound.clone(),
+            lemma_consts: rf.lemmas.consts.clone(),
         });
     }
 
@@ -719,6 +730,8 @@ mod tests {
             compile(&base, &format!("{base}/{}", eq.proof_file));
         }
         for red in &exported.reductions {
+            let text = &exported.files[Path::new(&red.file)];
+            assert!(!text.contains("admit"), "{}: {text}", red.file);
             compile(&base, &format!("{base}/{}", red.file));
         }
         std::fs::remove_dir_all(&tmp).unwrap();
@@ -820,6 +833,13 @@ mod tests {
         // story 98: the reduction adversary stores the theorem constant `b`
         let red = &exported.files[Path::new("Red_Hybrid2_Hybrid3.ec")];
         assert!(red.contains("proc setup(b0 : bool)"), "{red}");
+        // story 99: the lemmas, with no `admit` (translation only; not compiled here)
+        assert!(red.contains("lemma Hybrid2_Hybrid3_bound &m"), "{red}");
+        assert!(!red.contains("admit"), "{red}");
+        assert_eq!(
+            exported.reductions[0].bound_lemma,
+            "Hybrid2_Hybrid3_bound".to_string()
+        );
 
         assert_eq!(
             exported.game_names,

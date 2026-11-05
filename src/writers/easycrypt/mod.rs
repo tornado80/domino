@@ -20,6 +20,7 @@ pub mod pkginv;
 pub mod progress;
 pub mod proof;
 pub mod reduction;
+pub mod reduction_lemmas;
 pub mod render;
 pub mod sideinv;
 pub mod types;

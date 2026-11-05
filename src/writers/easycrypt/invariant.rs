@@ -1024,7 +1024,8 @@ fn expr_references_var(e: &EcExpr, name: &str) -> bool {
         }
         // `={glob M}` names a module, never one of this translator's own
         // local variables.
-        EcExpr::GlobEq(_) | EcExpr::Glob(_) => false,
+        EcExpr::GlobEq(_) | EcExpr::Glob(_) | EcExpr::GlobAt { .. } => false,
+        EcExpr::Abs(e) => expr_references_var(e, name),
         EcExpr::OracleEquiv { inv, assumed, .. } => {
             expr_references_var(inv, name) || assumed.iter().any(|a| expr_references_var(a, name))
         }

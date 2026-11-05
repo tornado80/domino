@@ -241,6 +241,27 @@ Each reduction hop `reduction L R` gets one file, `Red_<L>_<R>.ec`, with three k
   because EasyCrypt needs every functor argument to call a procedure. When the two assumption games are different
   compositions, there are two: `RedExp_<L>_<R>_L` and `RedExp_<L>_<R>_R`.
 
+The same file proves, with no `admit` (story 99, ADR 0022 decisions 4–6):
+
+- the **invariant** `inv_<L>_<R>` (or `_L`/`_R`, one for each side when the two sides differ): the
+  two abort flags agree, the assumption game's abort flag implies the router's, each constant that
+  `B` stores equals the package parameter that stores it, and each package state equals its
+  partner's (reduction packages with their router clones, mapped packages with the assumption
+  game's);
+- one **oracle lemma** for each exported oracle, `Game_<G>.<o> ~ Red_<L>_<R>(Game_<Assm>).<o>`.
+  The two sides share these lemmas when everything they name is the same. The proof inlines
+  everything except the mapped packages and walks both programs forward in lockstep
+  (`docs/research/reduction-proof-script.md`); a mapped call is closed by `sim`, or by walking its
+  body when `sim` fails;
+- the two **reduction equivalences** `<L>_<R>_equiv_L` and `_equiv_R`,
+  `Pr[Exp_<G>(A).run(..)] = Pr[RedExp(A).run(..)]`, by `byequiv` and `call` of the invariant;
+- the **bound lemma** `<L>_<R>_bound`, an equality of absolute differences:
+  `` `|Pr[Exp_<GL>(A)] - Pr[Exp_<GR>(A)]| = `|Pr[RedExp_L(A)] - Pr[RedExp_R(A)]| ``, the right
+  side in the hop's direction. The three lemmas take `&m` and the theorem constants that a `run`
+  reads, in theorem order. The `domino easycrypt export` report names the bound lemma.
+
+Translation runs no EasyCrypt; a proof EasyCrypt does not accept is a translation bug.
+
 A reduction inside a hybrid hop is not translated.
 
 The file structure of the generated EasyCrypt project could look like a Domino project.

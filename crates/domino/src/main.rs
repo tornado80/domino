@@ -911,8 +911,8 @@ fn print_easycrypt_report(theorem_name: &str, exported: &ExportedTheorem, wrote_
     }
     for red in &exported.reductions {
         println!(
-            "  {:<12}{} (assumption {})",
-            "reduction", red.file, red.assumption_name
+            "  {:<12}{} (assumption {}, bound lemma {})",
+            "reduction", red.file, red.assumption_name, red.bound_lemma
         );
     }
     for eq in &exported.equivalences {
