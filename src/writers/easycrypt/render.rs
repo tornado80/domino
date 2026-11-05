@@ -99,16 +99,18 @@ fn render_item(item: &EcItem) -> String {
         EcItem::CloneInclude { base } => format!("clone include {base}."),
         EcItem::ModuleAlias {
             name,
+            params,
             functor,
             args,
         } => {
+            let params = render_params(params);
             if args.is_empty() {
                 // A non-functor alias (story 14 §3.4: every instance gets a
                 // `Pkg_Inst_<inst>` name, even one with no imports) — no
                 // parens, matching `module M = F.`, not `module M = F().`.
-                format!("module {name} = {functor}.")
+                format!("module {name}{params} = {functor}.")
             } else {
-                format!("module {name} = {functor}({}).", args.join(", "))
+                format!("module {name}{params} = {functor}({}).", args.join(", "))
             }
         }
         EcItem::Module(m) => render_module(m),

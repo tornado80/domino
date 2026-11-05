@@ -79,9 +79,10 @@ pub enum EcItem {
     CloneInclude {
         base: String,
     },
-    /// `module M = F(A, B).`
+    /// `module M = F(A, B).`, or `module M (O : I) = F(A(O)).` with `params`.
     ModuleAlias {
         name: String,
+        params: Vec<(String, String)>,
         functor: String,
         args: Vec<String>,
     },

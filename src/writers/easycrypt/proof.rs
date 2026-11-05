@@ -383,7 +383,7 @@ pub(super) fn side_inv_app(
 /// up — a *composition's* own const binding rather than a *package
 /// instance's* param binding — so it is re-derived rather than shared (same
 /// rationale as [`build_side_record_lit`]).
-enum RunArgValue {
+pub(super) enum RunArgValue {
     Literal(String),
     TheoremConst(String),
 }
@@ -394,7 +394,7 @@ enum RunArgValue {
 /// / `params { b: false, ... }`) — never a compound expression, the same
 /// invariant `game.rs::references_game_const` relies on one level down.
 /// Mirrors `invariant.rs::resolve_expr_value`'s chase.
-fn resolve_run_arg(expr: &Expression) -> Option<RunArgValue> {
+pub(super) fn resolve_run_arg(expr: &Expression) -> Option<RunArgValue> {
     match expr.kind() {
         ExpressionKind::BooleanLiteral(s) => Some(RunArgValue::Literal(s.clone())),
         ExpressionKind::IntegerLiteral(i) => Some(RunArgValue::Literal(i.to_string())),
@@ -408,7 +408,7 @@ fn resolve_run_arg(expr: &Expression) -> Option<RunArgValue> {
     }
 }
 
-fn literal_text_to_expr(text: &str) -> EcExpr {
+pub(super) fn literal_text_to_expr(text: &str) -> EcExpr {
     match text {
         "true" => EcExpr::Bool(true),
         "false" => EcExpr::Bool(false),
@@ -421,7 +421,7 @@ fn literal_text_to_expr(text: &str) -> EcExpr {
 /// ([`composition_const_needs_arg`]), in `comp.consts` declaration order —
 /// so this always matches that composition's `Exp_<mangled>.run`'s real
 /// argument list.
-fn side_run_args(comp: &Composition, game_inst: &GameInstance) -> Vec<RunArgValue> {
+pub(super) fn side_run_args(comp: &Composition, game_inst: &GameInstance) -> Vec<RunArgValue> {
     let mut out = Vec::new();
     for (name, ty) in &comp.consts {
         if !composition_const_needs_arg(comp, name, ty) {

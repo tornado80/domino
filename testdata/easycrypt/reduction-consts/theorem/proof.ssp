@@ -1,0 +1,47 @@
+theorem RedConsts {
+    const b: Bool;
+
+    instance key_real = KeyGame {
+        params {
+            ideal: false,
+        }
+    }
+
+    instance key_ideal = KeyGame {
+        params {
+            ideal: true,
+        }
+    }
+
+    instance mod_real = ModGame {
+        params {
+            ideal: false,
+            flip: b,
+        }
+    }
+
+    instance mod_ideal = ModGame {
+        params {
+            ideal: true,
+            flip: b,
+        }
+    }
+
+    assumptions {
+        KeyAssumption: key_real ~ key_ideal
+    }
+
+    gamehops {
+        reduction mod_real mod_ideal {
+            assumption KeyAssumption
+
+            map key_real mod_real {
+                key: key
+            }
+
+            map key_ideal mod_ideal {
+                key: key
+            }
+        }
+    }
+}

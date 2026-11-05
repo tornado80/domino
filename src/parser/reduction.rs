@@ -73,6 +73,7 @@ fn compare_reduction(
     right_game_inst: &GameInstance,
     mapping_left: &ReductionMapping,
     mapping_right: &ReductionMapping,
+    pairs: &mut Vec<(String, String)>,
 ) -> Result<(), ParseTheoremError> {
     let game_left = left_game_inst.game();
     let game_right = right_game_inst.game();
@@ -175,6 +176,15 @@ fn compare_reduction(
         PackageInstanceDiff::Same => {}
     }
 
+    // a pair of reduction packages: the router of the EasyCrypt export needs it (story 98)
+    let pair = (
+        left_pkg_inst.name().to_string(),
+        right_pkg_inst.name().to_string(),
+    );
+    if !pairs.contains(&pair) {
+        pairs.push(pair);
+    }
+
     // Compare that the _outgoing_ edges of the two package instances match.
     // These are the same in both games, because the package name is the same
     for (sig, _) in &left_pkg_inst.pkg.imports {
@@ -199,6 +209,7 @@ fn compare_reduction(
             right_game_inst,
             mapping_left,
             mapping_right,
+            pairs,
         )?
     }
 
@@ -332,6 +343,7 @@ pub(super) fn handle_reduction_body<'a>(
         .all_unique());
 
     let left_exports = &left_game_inst.game().exports;
+    let mut package_pairs = Vec::new();
 
     for left_export in left_exports {
         let right_export = right_game_inst
@@ -350,6 +362,7 @@ pub(super) fn handle_reduction_body<'a>(
             right_game_inst,
             &mapping_left,
             &mapping_right,
+            &mut package_pairs,
         )?;
     }
     // TODO: implement reduction mapspec and do third check in there
@@ -437,7 +450,12 @@ pub(super) fn handle_reduction_body<'a>(
         }
     }
 
-    let reduction = Reduction::new(mapping_left, mapping_right, assumption_name.to_string());
+    let reduction = Reduction::new(
+        mapping_left,
+        mapping_right,
+        assumption_name.to_string(),
+        package_pairs,
+    );
 
     Ok(reduction)
 }

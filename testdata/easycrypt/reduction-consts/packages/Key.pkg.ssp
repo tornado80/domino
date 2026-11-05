@@ -1,0 +1,14 @@
+package Key {
+    params {
+        ideal: Bool,
+    }
+
+    state {
+        calls: Integer,
+    }
+
+    oracle Get() -> Bool {
+        calls <- (calls + 1);
+        return ideal;
+    }
+}

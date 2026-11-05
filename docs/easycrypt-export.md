@@ -228,7 +228,20 @@ datastrucutres and display the user the verified and pruned paths as we do now b
 We do not translate randomness mappings at the moment.
 
 ## Translating reductions
-Let's skip translating reductions for now!
+Each reduction hop `reduction L R` gets one file, `Red_<L>_<R>.ec`, with three kinds of module
+(ADR 0022, `docs/adr/0022-a-reduction-is-a-router-an-adversary-and-an-experiment.md`):
+
+- the **reduction router** `Red_<L>_<R> (O : Iface_<Assm>)`: clones of the reduction packages of
+  the left game, with their instance names, and its own abort flag. A call that reaches a mapped
+  package goes to `O`, the assumption game;
+- the **reduction adversary** `B_<L>_<R> (A) (O)`: `setup` stores the theorem constants that a
+  reduction package reads, and `run` initializes the router and runs `A` against it;
+- the **reduction experiment** `RedExp_<L>_<R> (A)`: its `run` calls `B.setup` and then runs the
+  assumption game's own experiment against `B`. It calls `B_<L>_<R>(A, Game_<Assm>).setup(..)`,
+  because EasyCrypt needs every functor argument to call a procedure. When the two assumption games are different
+  compositions, there are two: `RedExp_<L>_<R>_L` and `RedExp_<L>_<R>_R`.
+
+A reduction inside a hybrid hop is not translated.
 
 The file structure of the generated EasyCrypt project could look like a Domino project.
 A directory for all packages. A directory for all the games and a directory for all theorems. 

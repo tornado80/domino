@@ -909,6 +909,12 @@ fn print_easycrypt_report(theorem_name: &str, exported: &ExportedTheorem, wrote_
     for line in equivalence_lines(exported) {
         println!("  {:<12}{}", "equivalence", line);
     }
+    for red in &exported.reductions {
+        println!(
+            "  {:<12}{} (assumption {})",
+            "reduction", red.file, red.assumption_name
+        );
+    }
     for eq in &exported.equivalences {
         if let Some(warning) = &eq.oracle_set_mismatch {
             println!("  {:<12}{}", "warning", warning);

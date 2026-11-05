@@ -900,6 +900,7 @@ fn kitchen_sink() -> EcFile {
             }),
             EcItem::ModuleAlias {
                 name: "Inst".to_string(),
+                params: vec![],
                 functor: "Fctr".to_string(),
                 args: vec!["Impl".to_string()],
             },

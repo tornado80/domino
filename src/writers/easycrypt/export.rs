@@ -40,6 +40,7 @@ use super::package::compute_package_variants_observed;
 use super::pkginv::{build_pkg_inv_files, PkgInvFiles};
 use super::progress::{ExportEvent, ExportObserver, ExportPhase, NopExportObserver, PhaseScope};
 use super::proof::{compute_equivalence_files_observed, state_files, EquivalenceFiles};
+use super::reduction::compute_reduction_files;
 use super::render::render_file;
 use super::sideinv::{build_side_inv_files, SideInvFiles};
 use super::types::func_op_name;
@@ -115,6 +116,17 @@ pub struct PkgInvReport {
     pub start_file: Option<String>,
 }
 
+/// One translated reduction hop (story 98): `Red_<L>_<R>.ec`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReductionReport {
+    /// Index of the hop in `theorem.game_hops`.
+    pub proofstep: usize,
+    pub left_name: String,
+    pub right_name: String,
+    pub assumption_name: String,
+    pub file: String,
+}
+
 /// A game hop this exporter does not translate, named with its kind and the
 /// pair of game instances it connects (`GameHop::{left,right}_game_instance_name`)
 /// — `domino easycrypt`'s report lists these so a missing `Eq_*.ec` (stories
@@ -158,6 +170,8 @@ pub struct ExportedTheorem {
     /// One entry per translated `GameHop::Equivalence`, `theorem.game_hops`
     /// order (story 07).
     pub equivalences: Vec<EquivalenceReport>,
+    /// One entry per translated `GameHop::Reduction`, `theorem.game_hops` order (story 98).
+    pub reductions: Vec<ReductionReport>,
     /// One entry per composition with side invariants, first-discovery order (story 69).
     pub side_invariants: Vec<SideInvReport>,
     /// One entry per package variant whose package has package invariants, discovery order
@@ -171,7 +185,7 @@ pub struct ExportedTheorem {
 fn skip_kind_and_reason(hop: &GameHop<'_>) -> Option<(&'static str, &'static str)> {
     match hop {
         GameHop::Equivalence(_) => None,
-        GameHop::Reduction(_) => Some(("reduction", "reductions are not translated")),
+        GameHop::Reduction(_) => None,
         GameHop::Hybrid(_) => Some(("hybrid", "hybrid game hops are not translated")),
         GameHop::Conjecture(_) => Some(("conjecture", "conjectures are not translated")),
     }
@@ -336,6 +350,19 @@ pub fn export_theorem_observed(
         });
     }
 
+    let reduction_files = compute_reduction_files(&theorem, &interfaces_output)?;
+    let mut reductions = Vec::with_capacity(reduction_files.len());
+    for rf in &reduction_files {
+        files.insert(PathBuf::from(rf.file_name.clone()), render_file(&rf.file));
+        reductions.push(ReductionReport {
+            proofstep: rf.proofstep,
+            left_name: rf.left_name.clone(),
+            right_name: rf.right_name.clone(),
+            assumption_name: rf.assumption_name.clone(),
+            file: rf.file_name.clone(),
+        });
+    }
+
     let side_files = build_side_inv_files(&theorem, project, &interfaces_output, &owners)?;
     let side_invariants = side_files
         .iter()
@@ -397,6 +424,7 @@ pub fn export_theorem_observed(
         game_names,
         randomness_mapping_oracles,
         equivalences,
+        reductions,
         side_invariants,
         package_invariants,
     })
@@ -690,6 +718,9 @@ mod tests {
             }
             compile(&base, &format!("{base}/{}", eq.proof_file));
         }
+        for red in &exported.reductions {
+            compile(&base, &format!("{base}/{}", red.file));
+        }
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
@@ -715,6 +746,58 @@ mod tests {
         );
     }
 
+    /// Story 98: a reduction is exported, not skipped, and the report lists the reductions in
+    /// hop order.
+    #[test]
+    fn reductions_are_reported_in_hop_order_and_not_skipped() {
+        let cases: [(&str, &str, &[&str]); 3] = [
+            (
+                "example-projects/hello-world",
+                "Proof",
+                &["Red_big_composition_medium_composition_more_oracles.ec"],
+            ),
+            (
+                "example-projects/kem-dem/kem-dem-cca-ssp",
+                "kem_dem_cca_ssp",
+                &[
+                    "Red_Game_MOD_CCA_PKE_Real_KEM_Real_DEM_Game_MOD_CCA_PKE_Ideal_KEM_Real_DEM.ec",
+                    "Red_Game_MOD_CCA_PKE_Ideal_KEM_Real_DEM_Game_MOD_CCA_PKE_Ideal_KEM_Ideal_DEM.ec",
+                    "Red_Game_MOD_CCA_PKE_Ideal_KEM_Ideal_DEM_Game_MOD_CCA_PKE_Real_KEM_Ideal_DEM.ec",
+                ],
+            ),
+            (
+                "testdata/easycrypt/reduction-consts",
+                "RedConsts",
+                &["Red_mod_real_mod_ideal.ec"],
+            ),
+        ];
+        for (dir, theorem, expected) in cases {
+            let exported = export(dir, theorem).unwrap();
+            assert!(
+                exported.skipped.iter().all(|s| s.kind != "reduction"),
+                "{dir}: {:?}",
+                exported.skipped
+            );
+            let files: Vec<&str> = exported
+                .reductions
+                .iter()
+                .map(|r| r.file.as_str())
+                .collect();
+            assert_eq!(files, expected, "{dir}");
+            let steps: Vec<usize> = exported.reductions.iter().map(|r| r.proofstep).collect();
+            assert!(steps.windows(2).all(|w| w[0] < w[1]), "{dir}: {steps:?}");
+            for r in &exported.reductions {
+                assert!(exported.files.contains_key(Path::new(&r.file)));
+            }
+        }
+    }
+
+    #[test]
+    fn reduction_consts_full_tree_compiles() {
+        let exported = export("testdata/easycrypt/reduction-consts", "RedConsts").unwrap();
+        assert_tree_compiles(&exported, "reduction-consts");
+    }
+
     #[test]
     fn hello_world_full_tree_compiles() {
         let exported = export("example-projects/hello-world", "Proof").unwrap();
@@ -725,15 +808,18 @@ mod tests {
     fn simple_4whs_reports_the_reduction_hop_and_the_composition_names() {
         let exported = export("example-projects/4WHS", "Simple4WHS").unwrap();
 
+        assert_eq!(exported.skipped, vec![]);
         assert_eq!(
-            exported.skipped,
-            vec![SkipNote {
-                kind: "reduction",
-                left: "Hybrid2".to_string(),
-                right: "Hybrid3".to_string(),
-                reason: "reductions are not translated",
-            }]
+            exported
+                .reductions
+                .iter()
+                .map(|r| r.file.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Red_Hybrid2_Hybrid3.ec"]
         );
+        // story 98: the reduction adversary stores the theorem constant `b`
+        let red = &exported.files[Path::new("Red_Hybrid2_Hybrid3.ec")];
+        assert!(red.contains("proc setup(b0 : bool)"), "{red}");
 
         assert_eq!(
             exported.game_names,

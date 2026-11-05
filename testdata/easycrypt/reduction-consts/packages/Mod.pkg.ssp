@@ -1,0 +1,14 @@
+package Mod {
+    params {
+        flip: Bool,
+    }
+
+    import oracles {
+        Get() -> Bool,
+    }
+
+    oracle Query() -> Bool {
+        x <- invoke Get();
+        return (x == flip);
+    }
+}

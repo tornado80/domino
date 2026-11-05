@@ -1,0 +1,15 @@
+composition KeyGame {
+    const ideal: Bool;
+
+    instance key = Key {
+        params {
+            ideal: ideal,
+        }
+    }
+
+    compose {
+        adversary: {
+            Get: key,
+        },
+    }
+}

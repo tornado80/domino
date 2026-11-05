@@ -1,0 +1,25 @@
+composition ModGame {
+    const ideal: Bool;
+    const flip: Bool;
+
+    instance key = Key {
+        params {
+            ideal: ideal,
+        }
+    }
+
+    instance mod = Mod {
+        params {
+            flip: flip,
+        }
+    }
+
+    compose {
+        adversary: {
+            Query: mod,
+        },
+        mod: {
+            Get: key,
+        },
+    }
+}

@@ -30,7 +30,7 @@ use miette::SourceSpan;
 
 use crate::expressions::{Expression, ExpressionKind};
 use crate::identifier::{game_ident::GameIdentifier, Identifier};
-use crate::package::{Composition, PackageInstance};
+use crate::package::{Composition, Edge, Export, PackageInstance};
 use crate::theorem::Theorem;
 use crate::types::{Type, TypeKind};
 
@@ -217,7 +217,7 @@ pub(crate) fn instance_wirings(
         .collect())
 }
 
-fn param_assignment<'a>(inst: &'a PackageInstance, name: &str) -> &'a Expression {
+pub(super) fn param_assignment<'a>(inst: &'a PackageInstance, name: &str) -> &'a Expression {
     inst.params
         .iter()
         .find(|(id, _)| id.name == name)
@@ -232,7 +232,7 @@ fn param_assignment<'a>(inst: &'a PackageInstance, name: &str) -> &'a Expression
 /// arbitrary expression, since `type_extract` must already be able to
 /// resolve a `Bits` width through this exact link before export runs. A
 /// recursive expression walk is therefore unnecessary here.
-fn references_game_const(expr: &Expression, name: &str) -> bool {
+pub(super) fn references_game_const(expr: &Expression, name: &str) -> bool {
     matches!(
         expr.kind(),
         ExpressionKind::Identifier(Identifier::GameIdentifier(GameIdentifier::Const(c)))
@@ -287,7 +287,7 @@ pub(super) fn composition_const_needs_arg(comp: &Composition, name: &str, ty: &T
 /// instantiation's param-binding expression to the router's own `init`
 /// argument for it — the only identifier kind that can occur there (see
 /// [`references_game_const`]'s doc comment).
-fn resolve_composition_const(
+pub(super) fn resolve_composition_const(
     id: &Identifier,
     _span: SourceSpan,
     names: &mut Names,
@@ -340,6 +340,38 @@ fn build_import_adapter(
     variant_name: &str,
     inst_module_name: &[String],
 ) -> Result<EcItem, EcExportError> {
+    let target = |edge: &Edge| -> Result<(String, String), EcExportError> {
+        // A fresh registry is correct here (not a collision-detection gap):
+        // it reproduces the callee's own already-validated `Proc`-namespace
+        // mangling of one name, mirroring `package.rs`'s `translate_invoke`
+        // and this file's own export-proc call site.
+        let callee_proc = Names::new().mangle(NameKind::Proc, &edge.sig().name)?;
+        Ok((inst_module_name[edge.to()].clone(), callee_proc))
+    };
+    Ok(EcItem::Module(import_adapter(
+        comp,
+        idx,
+        adapter_name,
+        vec![],
+        variant_name,
+        &target,
+    )?))
+}
+
+/// The call target of one import edge of an import adapter: `(module, proc)`.
+pub(super) type EdgeTarget<'t> = dyn Fn(&Edge) -> Result<(String, String), EcExportError> + 't;
+
+/// The import adapter of instance `idx` of `comp`, with functor parameters `params`: one proc
+/// for each import, which calls the module and proc that `target` gives for its edge. The
+/// game file (`build_import_adapter`) and the reduction router (story 98) share it.
+pub(super) fn import_adapter(
+    comp: &Composition,
+    idx: usize,
+    adapter_name: &str,
+    params: Vec<(String, String)>,
+    variant_name: &str,
+    target: &EdgeTarget<'_>,
+) -> Result<EcModule, EcExportError> {
     let pkg = &comp.pkgs[idx].pkg;
 
     let mut names = Names::new();
@@ -364,12 +396,7 @@ fn build_import_adapter(
         }
         // Already `Maybe(T)` (`T option`) after `easycryptify` (story 16 §3.5).
         let ret_option_ty = translate_type(&sig.ty, *ispan)?;
-
-        // A fresh registry is correct here (not a collision-detection gap):
-        // it reproduces the callee's own already-validated `Proc`-namespace
-        // mangling of one name, mirroring `package.rs`'s `translate_invoke`
-        // and this file's own export-proc call site.
-        let callee_proc = Names::new().mangle(NameKind::Proc, &edge.sig().name)?;
+        let (module, callee_proc) = target(edge)?;
 
         // the result's local: `r`, or `r<k>` when an argument is named `r` (yao's `EVAL`)
         let result = std::iter::once("r".to_string())
@@ -383,7 +410,7 @@ fn build_import_adapter(
             locals: vec![(result.clone(), ret_option_ty, None)],
             body: EcBlock(vec![EcStmt::Call {
                 lhs: Some(EcLvalue::Var(result.clone())),
-                module: inst_module_name[edge.to()].clone(),
+                module,
                 proc: callee_proc,
                 args: arg_exprs,
             }]),
@@ -391,13 +418,13 @@ fn build_import_adapter(
         });
     }
 
-    Ok(EcItem::Module(EcModule {
+    Ok(EcModule {
         name: adapter_name.to_string(),
-        params: vec![],
+        params,
         implements: Some(format!("Pkg_{variant_name}.{variant_name}_Imports")),
         vars: vec![],
         procs,
-    }))
+    })
 }
 
 /// Every package instance's mangled name, by index into `comp.pkgs`. One
@@ -445,6 +472,73 @@ pub(crate) fn router_module_and_flag(
 /// The router's own abort flag — the one piece of state with no Domino
 /// counterpart (overview §3, "Abort").
 const ABORT_FLAG: &str = "abort_flag";
+
+/// The router proc of `export`: it calls `module.callee_proc` with its arguments when
+/// `abort_flag` is not set, and sets `abort_flag` when the call returns `None`. The
+/// router and the reduction router (story 98) share it.
+pub(super) fn guarded_export_proc(
+    router_names: &mut Names,
+    export: &Export,
+    span: SourceSpan,
+    abort_flag: &str,
+    module: &str,
+    callee_proc: String,
+) -> Result<EcProc, EcExportError> {
+    let proc_name = router_names.mangle(NameKind::Proc, export.name())?;
+    let mut args = Vec::new();
+    for (name, ty) in &export.sig().args {
+        let mangled_name = router_names.mangle(NameKind::Var, name)?;
+        args.push((mangled_name, translate_type(ty, span)?));
+    }
+    // Already `Maybe(T)` (`T option`) after `easycryptify` (story 16 §3.5).
+    let ret_option_ty = translate_type(&export.sig().ty, span)?;
+    let EcType::Option(ret_ec_ty) = &ret_option_ty else {
+        unreachable!("easycryptify makes every exported signature Maybe-typed")
+    };
+    let ret_ec_ty = (**ret_ec_ty).clone();
+    let call_args: Vec<EcExpr> = args.iter().map(|(n, _)| EcExpr::Var(n.clone())).collect();
+
+    let body = EcBlock(vec![EcStmt::If {
+        cond: EcExpr::Unop {
+            op: EcUnop::Not,
+            arg: Box::new(EcExpr::Var(abort_flag.to_string())),
+        },
+        then_block: EcBlock(vec![
+            EcStmt::Call {
+                lhs: Some(EcLvalue::Var("ec_result".to_string())),
+                module: module.to_string(),
+                proc: callee_proc,
+                args: call_args,
+            },
+            EcStmt::If {
+                cond: EcExpr::Binop {
+                    op: EcBinop::Eq,
+                    lhs: Box::new(EcExpr::Var("ec_result".to_string())),
+                    rhs: Box::new(EcExpr::None_(ret_ec_ty.clone())),
+                },
+                then_block: EcBlock(vec![EcStmt::Assign {
+                    lhs: EcLvalue::Var(abort_flag.to_string()),
+                    rhs: EcExpr::Bool(true),
+                }]),
+                else_block: None,
+            },
+        ]),
+        else_block: None,
+    }]);
+
+    Ok(EcProc {
+        name: proc_name,
+        args,
+        ret: ret_option_ty.clone(),
+        locals: vec![(
+            "ec_result".to_string(),
+            ret_option_ty,
+            Some(EcExpr::None_(ret_ec_ty)),
+        )],
+        body,
+        ret_expr: Some(EcExpr::Var("ec_result".to_string())),
+    })
+}
 
 fn render_game_file(
     theorem_name: &str,
@@ -535,6 +629,7 @@ fn render_game_file(
 
         if pkg.imports.is_empty() {
             alias_items.push(EcItem::ModuleAlias {
+                params: vec![],
                 name: inst_module_name[idx].clone(),
                 functor: clone_module,
                 args: vec![],
@@ -563,6 +658,7 @@ fn render_game_file(
             }
         };
         alias_items.push(EcItem::ModuleAlias {
+            params: vec![],
             name: inst_module_name[idx].clone(),
             functor: clone_module,
             args: vec![arg],
@@ -620,65 +716,18 @@ fn render_game_file(
 
     let mut export_procs = Vec::new();
     for export in &comp.exports {
-        let proc_name = router_names.mangle(NameKind::Proc, export.name())?;
-        let mut args = Vec::new();
-        for (name, ty) in &export.sig().args {
-            let mangled_name = router_names.mangle(NameKind::Var, name)?;
-            args.push((mangled_name, translate_type(ty, span)?));
-        }
-        // Already `Maybe(T)` (`T option`) after `easycryptify` (story 16 §3.5).
-        let ret_option_ty = translate_type(&export.sig().ty, span)?;
-        let EcType::Option(ret_ec_ty) = &ret_option_ty else {
-            unreachable!("easycryptify makes every exported signature Maybe-typed")
-        };
-        let ret_ec_ty = (**ret_ec_ty).clone();
-
         // A fresh registry is correct here (not a collision-detection gap):
         // it reproduces the callee's own already-validated `Proc`-namespace
         // mangling of one name, mirroring `package.rs`'s `translate_invoke`.
         let callee_proc = Names::new().mangle(NameKind::Proc, &export.sig().name)?;
-        let call_args: Vec<EcExpr> = args.iter().map(|(n, _)| EcExpr::Var(n.clone())).collect();
-
-        let body = EcBlock(vec![EcStmt::If {
-            cond: EcExpr::Unop {
-                op: EcUnop::Not,
-                arg: Box::new(EcExpr::Var(abort_flag.clone())),
-            },
-            then_block: EcBlock(vec![
-                EcStmt::Call {
-                    lhs: Some(EcLvalue::Var("ec_result".to_string())),
-                    module: inst_module_name[export.to()].clone(),
-                    proc: callee_proc,
-                    args: call_args,
-                },
-                EcStmt::If {
-                    cond: EcExpr::Binop {
-                        op: EcBinop::Eq,
-                        lhs: Box::new(EcExpr::Var("ec_result".to_string())),
-                        rhs: Box::new(EcExpr::None_(ret_ec_ty.clone())),
-                    },
-                    then_block: EcBlock(vec![EcStmt::Assign {
-                        lhs: EcLvalue::Var(abort_flag.clone()),
-                        rhs: EcExpr::Bool(true),
-                    }]),
-                    else_block: None,
-                },
-            ]),
-            else_block: None,
-        }]);
-
-        export_procs.push(EcProc {
-            name: proc_name,
-            args,
-            ret: ret_option_ty.clone(),
-            locals: vec![(
-                "ec_result".to_string(),
-                ret_option_ty,
-                Some(EcExpr::None_(ret_ec_ty)),
-            )],
-            body,
-            ret_expr: Some(EcExpr::Var("ec_result".to_string())),
-        });
+        export_procs.push(guarded_export_proc(
+            &mut router_names,
+            export,
+            span,
+            &abort_flag,
+            &inst_module_name[export.to()],
+            callee_proc,
+        )?);
     }
 
     let mut procs = vec![init_proc];

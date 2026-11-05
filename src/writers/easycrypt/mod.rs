@@ -19,6 +19,7 @@ pub mod package;
 pub mod pkginv;
 pub mod progress;
 pub mod proof;
+pub mod reduction;
 pub mod render;
 pub mod sideinv;
 pub mod types;

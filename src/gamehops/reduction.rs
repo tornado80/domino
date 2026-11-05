@@ -45,6 +45,10 @@ pub struct Reduction<'a> {
     right: ReductionMapping<'a>,
 
     assumption_name: String,
+
+    /// The reduction packages of the two sides, paired as the parser's check walks them from
+    /// the exports: `(left instance, right instance)`, first-visit order, each pair once.
+    package_pairs: Vec<(String, String)>,
 }
 
 impl<'a> Reduction<'a> {
@@ -52,11 +56,13 @@ impl<'a> Reduction<'a> {
         left: ReductionMapping<'a>,
         right: ReductionMapping<'a>,
         assumption_name: String,
+        package_pairs: Vec<(String, String)>,
     ) -> Self {
         Self {
             left,
             right,
             assumption_name,
+            package_pairs,
         }
     }
 
@@ -70,6 +76,11 @@ impl<'a> Reduction<'a> {
 
     pub(crate) fn assumption_name(&self) -> &str {
         &self.assumption_name
+    }
+
+    /// The pairs of reduction packages, `(left instance, right instance)` (story 98).
+    pub(crate) fn package_pairs(&self) -> &[(String, String)] {
+        &self.package_pairs
     }
 }
 
