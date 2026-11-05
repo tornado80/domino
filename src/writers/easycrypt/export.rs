@@ -1220,6 +1220,53 @@ mod tests {
         assert_tree_compiles(&exported, "kemdem");
     }
 
+    /// Story 97: the hand-written reduction prototypes compile against freshly
+    /// exported trees, with no `admit`. Only the files a reduction file requires
+    /// are compiled first (`Types`, `Interfaces`, `Pkg_*`, `Comp_*`); the
+    /// equivalence files may keep their admits. Skips without `easycrypt`.
+    #[test]
+    fn reduction_prototypes_compile() {
+        let prototypes = [
+            (
+                "example-projects/hello-world",
+                "Proof",
+                "testdata/easycrypt/reduction-prototype/hello-world/\
+                 Red_big_composition_medium_composition_more_oracles.ec",
+            ),
+            (
+                "example-projects/kem-dem/kem-dem-cca-ssp",
+                "kem_dem_cca_ssp",
+                "testdata/easycrypt/reduction-prototype/kem-dem/\
+                 Red_Game_MOD_CCA_PKE_Real_KEM_Real_DEM_Game_MOD_CCA_PKE_Ideal_KEM_Real_DEM.ec",
+            ),
+        ];
+        for (project, theorem, prototype) in prototypes {
+            let source = std::fs::read_to_string(prototype).unwrap();
+            assert!(!source.contains("admit"), "{prototype} must not admit");
+            let exported = export(project, theorem).unwrap();
+            let tmp = std::env::temp_dir().join(format!(
+                "domino-easycrypt-reduction-prototype-{theorem}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&tmp);
+            write_files(&tmp, &exported.files).unwrap();
+            let file_name = Path::new(prototype).file_name().unwrap();
+            std::fs::write(tmp.join(file_name), &source).unwrap();
+            let base = tmp.to_str().unwrap().to_string();
+            let compile = super::super::test_support::assert_compiles;
+            compile(&base, &format!("{base}/Types.ec"));
+            compile(&base, &format!("{base}/Interfaces.ec"));
+            for name in &exported.package_variant_names {
+                compile(&base, &format!("{base}/Pkg_{name}.ec"));
+            }
+            for name in &exported.game_names {
+                compile(&base, &format!("{base}/Comp_{name}.ec"));
+            }
+            compile(&base, &format!("{base}/{}", file_name.to_str().unwrap()));
+            std::fs::remove_dir_all(&tmp).unwrap();
+        }
+    }
+
     // `Full4WHS` is a much larger project than `Simple4WHS`/`kem-dem-cca-ssp`
     // (18 package variants, 12 games, 9 equivalence hops) — exercising it
     // here, on top of the smaller acceptance targets above, is what actually
