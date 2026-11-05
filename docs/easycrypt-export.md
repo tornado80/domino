@@ -264,6 +264,31 @@ Translation runs no EasyCrypt; a proof EasyCrypt does not accept is a translatio
 
 A reduction inside a hybrid hop is not translated.
 
+## Translating propositions
+Each proposition `Name: G0 ~ Gn` gets one file, `Prop_<Name>.ec` (story 100, ADR 0022 decisions
+6–8). It requires the `Eq_*.ec` and `Red_*.ec` files of its path, declares the adversary with the
+union of their restrictions, and proves one lemma, the **proposition lemma**:
+
+```
+lemma <Name> &m (<theorem constants that the path does not fix>) :
+  `|Pr[Exp_<G0>(A).run(..) @ &m : res] - Pr[Exp_<Gn>(A).run(..) @ &m : res]|
+  <= <term 1> + <term 2> + ...   (or 0%r with no term)
+```
+
+- A **reduction** step gives the right side of its bound lemma at the step's arguments, in the
+  hop's direction, also when the path uses the hop in reverse.
+- An **equivalence** step gives no term. Its lemma is used at the step's arguments (one hop can be
+  used more than once, with different constants: kem-dem-cca-ssp uses its equivalence with
+  `b = false` and `b = true`).
+- An **open hop**, a conjecture or an equivalence without a translated file, gives its own term:
+  the adversary's advantage between the two neighbouring game instances of the path.
+- A proposition whose path has a **hybrid hop** gets no file. The report lists it as skipped.
+
+The proof is one `have` for each equivalence and bound lemma, then `smt()`; no `admit`. The
+proposition is only as strong as its parts: the oracle files of an equivalence can still have
+admits. The `domino easycrypt export` report prints one `proposition` line for each proposition,
+with its number of reduction terms and its open hops.
+
 The file structure of the generated EasyCrypt project could look like a Domino project.
 A directory for all packages. A directory for all the games and a directory for all theorems. 
 

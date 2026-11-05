@@ -896,6 +896,31 @@ fn print_easycrypt_report(theorem_name: &str, exported: &ExportedTheorem, wrote_
             .collect()
     }
 
+    // One line per proposition (story 100): its file, the number of reduction terms and the
+    // open hops that give their own terms, or why it has no file.
+    fn proposition_lines(exported: &ExportedTheorem) -> Vec<String> {
+        let files = exported.propositions.iter().map(|p| {
+            let mut line = format!(
+                "{} ({}, {} reduction terms",
+                p.file, p.name, p.reduction_terms
+            );
+            for hop in &p.open_hops {
+                line.push_str(&format!(
+                    ", open {} hop {} ~ {}",
+                    hop.kind, hop.left, hop.right
+                ));
+            }
+            line + ")"
+        });
+        let skipped = exported.skipped_propositions.iter().map(|s| {
+            format!(
+                "{} skipped (hybrid hop {} ~ {}): {}",
+                s.name, s.left, s.right, s.reason
+            )
+        });
+        files.chain(skipped).collect()
+    }
+
     println!("theorem {theorem_name}");
     println!("  {:<12}{}", "types", types_line(exported));
     println!("  {:<12}{}", "packages", packages_line(exported));
@@ -914,6 +939,9 @@ fn print_easycrypt_report(theorem_name: &str, exported: &ExportedTheorem, wrote_
             "  {:<12}{} (assumption {}, bound lemma {})",
             "reduction", red.file, red.assumption_name, red.bound_lemma
         );
+    }
+    for line in proposition_lines(exported) {
+        println!("  {:<12}{}", "proposition", line);
     }
     for eq in &exported.equivalences {
         if let Some(warning) = &eq.oracle_set_mismatch {
@@ -1269,8 +1297,7 @@ fn easycrypt_debug<P: project::Project>(
             (None, None) => None,
         };
         if let Some(owner) = &owner {
-            let backend =
-                sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.timeout);
+            let backend = sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.timeout);
             let stop = stop_on_ctrl_c(
                 "easycrypt: interrupt — finishing the current solver query, then writing partial \
                  results (Ctrl-C again to abort now)",
@@ -1321,8 +1348,7 @@ fn easycrypt_debug<P: project::Project>(
         drop(logging);
         drop(observer);
 
-        let backend =
-            sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.timeout);
+        let backend = sspverif::util::smtsolver::cvc5lib::Cvc5LibBackend::new(true, d.timeout);
         let options = EcDebugOptions {
             proofstep: d.gamehop,
             oracle: d.oracle.clone(),

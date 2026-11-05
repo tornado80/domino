@@ -1,0 +1,43 @@
+theorem Proof {
+    const n: Integer;
+    const m: Integer;
+
+    instance small_composition = SmallComposition {
+        params {
+            n: n,
+        }
+    }
+
+    instance medium_composition = MediumComposition {
+        params {
+            n: n,
+        }
+    }
+
+    instance other_small_composition = SmallComposition {
+        params {
+            n: m,
+        }
+    }
+
+    gamehops {
+        equivalence medium_composition small_composition {
+            invariant: [ ./theorem/invariant.smt2]
+            UsefulOracle: {
+                randomness: simple
+
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+        }
+        conjecture small_composition other_small_composition
+    }
+
+    propositions {
+        Main: medium_composition ~ other_small_composition
+        EqOnly: small_composition ~ medium_composition
+    }
+}

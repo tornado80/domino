@@ -40,6 +40,8 @@ use super::package::compute_package_variants_observed;
 use super::pkginv::{build_pkg_inv_files, PkgInvFiles};
 use super::progress::{ExportEvent, ExportObserver, ExportPhase, NopExportObserver, PhaseScope};
 use super::proof::{compute_equivalence_files_observed, state_files, EquivalenceFiles};
+use super::proposition::{compute_proposition_files, PropositionOutcome};
+pub use super::proposition::{OpenHop, SkippedProposition};
 use super::reduction::compute_reduction_files;
 use super::render::render_file;
 use super::sideinv::{build_side_inv_files, SideInvFiles};
@@ -135,6 +137,18 @@ pub struct ReductionReport {
     pub lemma_consts: Vec<String>,
 }
 
+/// One proposition's lemma file (story 100): `Prop_<Name>.ec`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropositionReport {
+    pub name: String,
+    pub file: String,
+    /// The number of reduction terms on the right side of the proposition lemma.
+    pub reduction_terms: usize,
+    /// The open hops (conjectures, equivalences without a file), each with its own term, in
+    /// path order.
+    pub open_hops: Vec<OpenHop>,
+}
+
 /// A game hop this exporter does not translate, named with its kind and the
 /// pair of game instances it connects (`GameHop::{left,right}_game_instance_name`)
 /// — `domino easycrypt`'s report lists these so a missing `Eq_*.ec` (stories
@@ -180,6 +194,10 @@ pub struct ExportedTheorem {
     pub equivalences: Vec<EquivalenceReport>,
     /// One entry per translated `GameHop::Reduction`, `theorem.game_hops` order (story 98).
     pub reductions: Vec<ReductionReport>,
+    /// One entry per proposition with a `Prop_<Name>.ec`, `theorem.proofs` order (story 100).
+    pub propositions: Vec<PropositionReport>,
+    /// The propositions whose path has a hybrid hop: they get no file (story 100).
+    pub skipped_propositions: Vec<SkippedProposition>,
     /// One entry per composition with side invariants, first-discovery order (story 69).
     pub side_invariants: Vec<SideInvReport>,
     /// One entry per package variant whose package has package invariants, discovery order
@@ -374,6 +392,28 @@ pub fn export_theorem_observed(
         });
     }
 
+    let mut propositions = Vec::new();
+    let mut skipped_propositions = Vec::new();
+    for outcome in compute_proposition_files(
+        &theorem,
+        &interfaces_output,
+        &equivalence_files,
+        &reduction_files,
+    )? {
+        match outcome {
+            PropositionOutcome::File(pf) => {
+                files.insert(PathBuf::from(pf.file_name.clone()), render_file(&pf.file));
+                propositions.push(PropositionReport {
+                    name: pf.name,
+                    file: pf.file_name,
+                    reduction_terms: pf.reduction_terms,
+                    open_hops: pf.open_hops,
+                });
+            }
+            PropositionOutcome::Skipped(skip) => skipped_propositions.push(skip),
+        }
+    }
+
     let side_files = build_side_inv_files(&theorem, project, &interfaces_output, &owners)?;
     let side_invariants = side_files
         .iter()
@@ -436,6 +476,8 @@ pub fn export_theorem_observed(
         randomness_mapping_oracles,
         equivalences,
         reductions,
+        propositions,
+        skipped_propositions,
         side_invariants,
         package_invariants,
     })
@@ -734,6 +776,11 @@ mod tests {
             assert!(!text.contains("admit"), "{}: {text}", red.file);
             compile(&base, &format!("{base}/{}", red.file));
         }
+        for prop in &exported.propositions {
+            let text = &exported.files[Path::new(&prop.file)];
+            assert!(!text.contains("admit"), "{}: {text}", prop.file);
+            compile(&base, &format!("{base}/{}", prop.file));
+        }
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
@@ -840,6 +887,10 @@ mod tests {
             exported.reductions[0].bound_lemma,
             "Hybrid2_Hybrid3_bound".to_string()
         );
+        // story 100: the proposition lemma (translation only)
+        let prop = &exported.files[Path::new("Prop_KXSecurity.ec")];
+        assert!(prop.contains("lemma KXSecurity &m"), "{prop}");
+        assert!(!prop.contains("admit"), "{prop}");
 
         assert_eq!(
             exported.game_names,
@@ -1295,6 +1346,14 @@ mod tests {
 
     // --- full-tree compile, dependency order (skips without `easycrypt`) ---
 
+    /// Story 100: a proposition with an open hop and one with equivalences only.
+    #[test]
+    fn proposition_open_hop_full_tree_compiles() {
+        let exported = export("testdata/easycrypt/proposition-open-hop", "Proof").unwrap();
+        assert_eq!(exported.propositions.len(), 2);
+        assert_tree_compiles(&exported, "proposition-open-hop");
+    }
+
     #[test]
     fn simple_4whs_full_tree_compiles_in_dependency_order() {
         let exported = export("example-projects/4WHS", "Simple4WHS").unwrap();
@@ -1323,6 +1382,8 @@ mod tests {
             "kem_dem_cca_ssp",
         )
         .unwrap();
+        // story 100: the proposition lemma, compiled after the three reductions
+        assert_eq!(exported.propositions[0].file, "Prop_Main.ec");
         assert_tree_compiles(&exported, "kemdem");
     }
 
