@@ -1,6 +1,6 @@
 # Story 100 — A proposition exports its lemma
 
-**Epic:** EasyCrypt Export — read `docs/stories/easycrypt/00-overview.md` first.
+**Epic:** EasyCrypt export: reductions and propositions — `docs/stories/easycrypt/epic-reductions-and-propositions.md` (part of the EasyCrypt Export epic, `00-overview.md`).
 **Branch:** `amir/easycrypt-export`
 **Depends on:** 99 (the bound lemmas).
 **Blocks:** nothing.
@@ -60,7 +60,10 @@ lemma <Name> &m (<theorem constants that the path does not specialize>) :
 - **An open hop gives its own term** (ADR 0022, decision 7): the original adversary's advantage
   between the path's two neighbouring game instances,
   `` `|Pr[Exp_<a>(A).run(..) @ &m : res] - Pr[Exp_<b>(A).run(..) @ &m : res]| ``. An open hop is a
-  conjecture, a hybrid, or an equivalence that has no `EquivalenceReport`.
+  conjecture or an equivalence that has no `EquivalenceReport`.
+- **Hybrid hops are out of scope.** A proposition whose path has a hybrid hop gets no
+  `Prop_<Name>.ec`. The report lists it as skipped, with the reason
+  `hybrid game hops are not translated` and the hop's game instance names.
 - **No reduction step and no open hop**: the right side is `0%r`.
 - **The proof**: the rewrites with the equivalence lemmas, one `have` for each bound lemma, then
   `smt()`. No `admit` in `Prop_*.ec`. The proposition is only as strong as its parts: the
@@ -72,11 +75,8 @@ The export report:
   terms, and the open hops by kind and game instance names).
 - `domino easycrypt export` prints one `proposition` line for each, and names its open hops.
 
-**Hybrid hops.** `hello-world-hybrid` (theorem `Hybrid`, proposition `main`) has a hybrid hop between
-`h$false$` and `h$true$`. If the path's neighbouring game instances of that hop cannot be stated as
-`Exp_<C>(A).run(..)` with theorem constants only (for example because the hybrid index is still
-free), stop and ask the owner before choosing a behaviour. ADR 0022 rejected "no proposition lemma"
-for open hops that can be stated.
+**Out of scope:** hybrid hops (owner's decision of 2026-11-05, ADR 0022 decision 7). The
+translation of a hybrid, and of a proposition that goes through one, needs its own design.
 
 ## 4. Tests first
 
@@ -89,7 +89,9 @@ for open hops that can be stated.
 - [ ] Unit test: a proposition whose path has only equivalences has `0%r` as its right side.
 - [ ] Unit test: the lemma takes exactly the theorem constants that the path does not specialize
       (kem-dem `Main`: none of `b`).
-- [ ] Unit test: `hello-world-hybrid` behaves as the owner decided (§3).
+- [ ] Unit test: `hello-world-hybrid` (theorem `Hybrid`, proposition `main`) writes no
+      `Prop_main.ec`, and the report lists `main` as skipped because of the hybrid hop
+      `h$false$ ~ h$true$`.
 - [ ] Compile tests: kem-dem-cca-ssp and proposition-open-hop compile, including `Prop_*.ec`, with no
       `admit` in `Prop_*.ec` (skips without `easycrypt`). Compile only; no `domino prove`.
 
@@ -101,8 +103,11 @@ All from ADR 0022:
 - **Assumptions as axioms with an epsilon.** An axiom over every adversary with no resource bound is
   false in EasyCrypt.
 - **An axiom for each conjecture.** Not sound if the conjecture is false.
-- **No proposition lemma when the path has an open hop.** Nothing for theorems with hybrids, and a
-  status that the user must read and act on.
+- **No proposition lemma when the path has an open hop.** Nothing for a theorem with one conjecture,
+  and a status that the user must read and act on. (Hybrid hops get exactly this behaviour, but
+  only because they are out of scope.)
+- **A hybrid hop as an open hop with its own term.** Its game instances can keep the hybrid index
+  free, so the term is not always an experiment with theorem constants only.
 - **Terms in path direction.** The reader could not match a term with its bound lemma.
 
 ## 6. Acceptance criteria

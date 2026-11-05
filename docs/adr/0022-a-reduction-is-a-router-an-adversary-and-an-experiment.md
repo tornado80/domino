@@ -42,10 +42,13 @@ We decided:
    sides, one term for each reduction step in path order, each term in its hop's own direction so it
    is literally that bound lemma's right side.
 
-7. **A hop that translation does not prove** (a conjecture, or a hybrid, which this work does not
-   translate) gives its own term to the proposition lemma: the original adversary's advantage
+7. **A hop that translation does not prove** (a conjecture, or an equivalence that translation does
+   not write) gives its own term to the proposition lemma: the original adversary's advantage
    between the hop's two game instances. No axiom; the bound stays true and shows the open hop. The
-   export report lists these hops.
+   export report lists these hops. **Hybrid hops are out of scope** (owner's decision of
+   2026-11-05): a proposition whose path has a hybrid hop gets no proposition lemma, and the report
+   says so. A hybrid's game instances can keep the hybrid index free, so the term is not always an
+   experiment with theorem constants only; a later design decides how hybrids translate.
 
 8. **File names have no theorem prefix.** Each theorem already has its own directory. A reduction
    is one file, `Red_<L>_<R>.ec`, with all its modules and lemmas: no proof job owns a part of it,
@@ -79,8 +82,9 @@ We decided:
 - **Assumptions as axioms with an epsilon.** An axiom over every adversary with no resource bound is
   false in EasyCrypt.
 - **An axiom for each conjecture** (equal probabilities). Not sound if the conjecture is false.
-- **No proposition lemma when the path has an open hop.** Safe, but nothing for theorems with
-  hybrids, and a status that the user must read and act on.
+- **No proposition lemma when the path has an open hop.** Safe, but nothing for a theorem with one
+  conjecture, and a status that the user must read and act on. Hybrid hops get this behaviour only
+  because they are out of scope.
 - **The theorem name as a prefix of the hop files.** It renames the equivalence files, which session
   records, saved trees, progress keys and tests use, and it does not stop `Types.ec` or `Comp_*.ec`
   from clashing between theorems.

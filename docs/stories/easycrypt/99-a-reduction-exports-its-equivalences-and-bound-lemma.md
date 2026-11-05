@@ -1,6 +1,6 @@
 # Story 99 — A reduction exports its equivalences and its bound lemma, with the whole proof
 
-**Epic:** EasyCrypt Export — read `docs/stories/easycrypt/00-overview.md` first.
+**Epic:** EasyCrypt export: reductions and propositions — `docs/stories/easycrypt/epic-reductions-and-propositions.md` (part of the EasyCrypt Export epic, `00-overview.md`).
 **Branch:** `amir/easycrypt-export`
 **Depends on:** 97 (the proof script), 98 (the modules).
 **Blocks:** 100.

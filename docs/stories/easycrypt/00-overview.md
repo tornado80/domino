@@ -223,6 +223,10 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 99 | A reduction exports its equivalences and its bound lemma, with the whole proof | `99-a-reduction-exports-its-equivalences-and-bound-lemma.md` | 97, 98 |
 | 100 | A proposition exports its lemma (`Prop_<Name>.ec`) | `100-a-proposition-exports-its-lemma.md` | 99 |
 
+Stories 97–100 are the epic **EasyCrypt export: reductions and propositions**
+(`epic-reductions-and-propositions.md`, ADR 0022), from the grilling of 2026-11-04/05. Hybrid hops
+are out of scope.
+
 Stories 71–77 and symbolic-execution 26–29 come from the grilling of 2026-10-12/20. The merges land
 in the order 71 → symbolic-execution 26 → 74. Not merged: the rest of Christoph Egger's stack (not
 stable) and `keks/ty-params` (it sits on the old stack). **Candidate, blocked, not designed:** the

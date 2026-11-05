@@ -1,6 +1,6 @@
 # Story 97 — A hand-written reduction proof fixes the script
 
-**Epic:** EasyCrypt Export — read `docs/stories/easycrypt/00-overview.md` first.
+**Epic:** EasyCrypt export: reductions and propositions — `docs/stories/easycrypt/epic-reductions-and-propositions.md` (part of the EasyCrypt Export epic, `00-overview.md`).
 **Branch:** `amir/easycrypt-export`
 **Depends on:** nothing.
 **Blocks:** 98, 99.

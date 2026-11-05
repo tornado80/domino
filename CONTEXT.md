@@ -110,7 +110,8 @@ assumption games. Equal, not at most: a perfect reduction loses nothing.
 between its two game instances is at most the sum of the right sides of the bound lemmas, one term
 for each reduction step on the path, in path order. Equivalences give no term. An **open hop** — a
 hop on the path that translation does not prove, such as a conjecture — gives the original
-adversary's own advantage between its two game instances as its term.
+adversary's own advantage between its two game instances as its term. A hybrid hop is not an open
+hop: a proposition whose path has one has no proposition lemma.
 
 **Claim** — one obligation of an equivalence for one oracle: `invariant`, `same-output` or
 `equal-aborts`, each with its dependencies.
