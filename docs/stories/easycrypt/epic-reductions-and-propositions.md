@@ -55,9 +55,9 @@ The stories are sequential: each one needs the output of the one before it.
 
 ## 5. Done when
 
-- [ ] Stories 97–100 are done, each with its implementation report.
-- [ ] `domino easycrypt export` on kem-dem-cca-ssp writes three `Red_*.ec` files and `Prop_Main.ec`,
+- [x] Stories 97–100 are done, each with its implementation report.
+- [x] `domino easycrypt export` on kem-dem-cca-ssp writes three `Red_*.ec` files and `Prop_Main.ec`,
       and the whole tree compiles with no `admit` in a `Red_*.ec` or `Prop_*.ec` file.
-- [ ] `domino easycrypt export` on hello-world-hybrid reports its proposition as skipped because of
+- [x] `domino easycrypt export` on hello-world-hybrid reports its proposition as skipped because of
       the hybrid hop.
-- [ ] `docs/easycrypt-export.md` describes the reduction translation and no longer says "skip".
+- [x] `docs/easycrypt-export.md` describes the reduction translation and no longer says "skip".
