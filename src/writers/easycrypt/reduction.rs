@@ -510,7 +510,7 @@ fn render_run_arg(v: &RunArgValue) -> String {
     }
 }
 
-fn push_unique(list: &mut Vec<String>, item: String) {
+pub(super) fn push_unique(list: &mut Vec<String>, item: String) {
     if !list.contains(&item) {
         list.push(item);
     }

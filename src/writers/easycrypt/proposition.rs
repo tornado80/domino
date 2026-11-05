@@ -28,7 +28,7 @@ use super::ast::{
 use super::interfaces::{composition_span, InterfacesOutput};
 use super::names::{NameKind, Names};
 use super::proof::{literal_text_to_expr, side_run_args, EquivalenceFiles, RunArgValue};
-use super::reduction::ReductionFile;
+use super::reduction::{push_unique, ReductionFile};
 use super::render::render_expr;
 use super::types::translate_type;
 use super::EcExportError;
@@ -115,8 +115,8 @@ struct Ctx<'a, 't> {
     binders: HashMap<String, String>,
 }
 
-/// One step of the path: the hop, and the two neighbouring game instances in path order with
-/// the constants that their specializations fix.
+/// One step of the path: the hop, and the two neighbouring (specialized) game instances in path
+/// order.
 struct Step<'p> {
     hop: &'p GameHop<'p>,
     from: &'p GameInstance,
@@ -140,12 +140,6 @@ struct Body {
 impl Body {
     fn require(&mut self, theory: String) {
         push_unique(&mut self.requires, theory);
-    }
-}
-
-fn push_unique(list: &mut Vec<String>, item: String) {
-    if !list.contains(&item) {
-        list.push(item);
     }
 }
 
@@ -194,7 +188,9 @@ impl Ctx<'_, '_> {
                 match found {
                     Some(ef) => {
                         let stem = stem(&ef.proof.file_name);
-                        let lemma = format!("{l}_{r}_equiv");
+                        // the name proof.rs gives the equivalence lemma
+                        let lemma =
+                            Names::new().mangle(NameKind::Lemma, &format!("{l}_{r}_equiv"))?;
                         self.use_lemma(step, &ef.proof.file, &stem, &lemma, body);
                     }
                     None => self.open_hop("equivalence", step, body),
@@ -302,7 +298,15 @@ impl Ctx<'_, '_> {
             generic(step.hop.left_game_instance_name()),
             generic(step.hop.right_game_instance_name()),
         );
-        let forward = game_is_compatible(step.from, gl) && game_is_compatible(step.to, gr);
+        // the path neighbour's name decides; compatibility when the path names neither side
+        // (an end of the path is a theorem instance with its own name)
+        let forward = if step.from.name == gl.name || step.to.name == gr.name {
+            true
+        } else if step.from.name == gr.name || step.to.name == gl.name {
+            false
+        } else {
+            game_is_compatible(step.from, gl) && game_is_compatible(step.to, gr)
+        };
         let (sl, sr) = if forward {
             (step.from, step.to)
         } else {
