@@ -52,7 +52,8 @@ const LADDER_RUNGS: usize = 8;
 pub(super) struct LemmaInput<'a> {
     pub stem: &'a str,
     pub router: &'a str,
-    pub b: &'a str,
+    /// The reduction adversary module, `B_<hop>`.
+    pub adversary: &'a str,
     pub adv: &'a str,
     /// The left game's composition, whose instances the router clones.
     pub router_comp: &'a Composition,
@@ -291,20 +292,20 @@ fn side_spec(input: &LemmaInput<'_>, ctx: &SideCtx<'_>) -> Result<SideSpec, EcEx
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .find_map(|(g, v)| v.map(|v| (g, v)));
-        if let Some((g, var)) = found {
-            push_pair(
-                &mut args,
-                s.ty.clone(),
-                s.ty.clone(),
-                qualified(&ctx.names.clone_module(g), &var, 1),
-                qualified(input.b, &s.var, 2),
-            );
-        }
+        // `B` stores a constant only because a reduction package's parameter reads it.
+        let (g, var) = found.expect("a reduction package stores every constant that B stores");
+        push_pair(
+            &mut args,
+            s.ty.clone(),
+            s.ty.clone(),
+            qualified(&ctx.names.clone_module(g), &var, 1),
+            qualified(input.adversary, &s.var, 2),
+        );
     }
     // C4: each reduction package with its router clone, each mapped package with its partner.
     for &(g, r) in &ctx.reduction {
         let w = &input.router_wiring[r];
-        let router_clone = format!("Cloned_Pkg_{}.{}", w.mangled, w.variant);
+        let router_clone = router_clone(w);
         let left = ctx.names.clone_module(g);
         push_pair(
             &mut args,
@@ -341,6 +342,34 @@ fn side_spec(input: &LemmaInput<'_>, ctx: &SideCtx<'_>) -> Result<SideSpec, EcEx
         exclusions,
         meq,
     })
+}
+
+/// `Cloned_Pkg_<m>.<V>`: a router clone, unapplied.
+fn router_clone(w: &InstanceWiring) -> String {
+    format!("Cloned_Pkg_{}.{}", w.mangled, w.variant)
+}
+
+/// The modules `A` may not touch: every game and package of the four compositions, the router,
+/// `B` and the router's clones.
+fn adversary_restrictions(input: &LemmaInput<'_>, ctxs: &[SideCtx<'_>; 2]) -> Vec<String> {
+    let mut restrictions = Vec::new();
+    let extra = [input.router.to_string(), input.adversary.to_string()];
+    let clones = input
+        .reduction_order
+        .iter()
+        .map(|&idx| router_clone(&input.router_wiring[idx]));
+    let all = ctxs
+        .iter()
+        .flat_map(|c| [&c.names, &c.assm])
+        .flat_map(|n| n.restrictions())
+        .chain(extra)
+        .chain(clones);
+    for r in all {
+        if !restrictions.contains(&r) {
+            restrictions.push(r);
+        }
+    }
+    restrictions
 }
 
 fn inv_op(name: &str, spec: &SideSpec) -> EcItem {
@@ -552,20 +581,7 @@ pub(super) fn reduction_lemmas(
         inv_names.push(name);
     }
 
-    let mut restrictions = Vec::new();
-    for names in ctxs.iter().flat_map(|c| [&c.names, &c.assm]) {
-        for r in names.restrictions() {
-            if !restrictions.contains(&r) {
-                restrictions.push(r);
-            }
-        }
-    }
-    restrictions.push(input.router.to_string());
-    restrictions.push(input.b.to_string());
-    for &idx in input.reduction_order {
-        let w = &input.router_wiring[idx];
-        restrictions.push(format!("Cloned_Pkg_{}.{}", w.mangled, w.variant));
-    }
+    let restrictions = adversary_restrictions(input, &ctxs);
 
     let mut procs = Vec::new();
     for export in &input.router_comp.exports {

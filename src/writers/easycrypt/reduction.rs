@@ -597,7 +597,7 @@ fn build_reduction_file(
         &LemmaInput {
             stem: &stem,
             router: &router_name,
-            b: &b_name,
+            adversary: &b_name,
             adv,
             router_comp: ctx.comp,
             router_wiring: &ctx.wiring,
