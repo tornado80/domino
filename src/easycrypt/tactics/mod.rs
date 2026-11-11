@@ -2038,7 +2038,7 @@ where
         _ => resuming(project, theorem, eq, kind, oracle, proof, options),
     };
     let (walked, resume_from) = match resumed {
-        _ if matches!(kind, JobKind::Reduction(_)) => (WalkedTree::blind(), None),
+        None if matches!(kind, JobKind::Reduction(_)) => (WalkedTree::blind(), None),
         Some(Resuming { tree, from }) => {
             live.oracle_resumed(&from.in_flight, from.mode.slug());
             let dir = kind.debug_dir(proof.out_dir, eq, oracle);
