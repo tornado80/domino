@@ -1123,3 +1123,132 @@ fn kitchen_sink_compiles_under_easycrypt() {
     let file = format!("{dir}/kitchen-sink.ec");
     super::test_support::assert_compiles(dir, &file);
 }
+
+// --- probability lemmas: one term per line ------------------------------
+
+fn pr(module: &str, arg: bool) -> EcExpr {
+    EcExpr::Pr {
+        module: module.to_string(),
+        proc: "run".to_string(),
+        args: vec![EcExpr::Bool(arg)],
+        memory: "m".to_string(),
+        event: Box::new(var("res")),
+    }
+}
+
+fn advantage(module: &str) -> EcExpr {
+    EcExpr::Abs(Box::new(binop(
+        EcBinop::Sub,
+        pr(module, false),
+        pr(module, true),
+    )))
+}
+
+fn pr_lemma(name: &str, statement: EcExpr) -> EcLemma {
+    EcLemma {
+        name: name.to_string(),
+        binders: vec![LemmaBinder::Memory("m".to_string())],
+        statement,
+        proof: vec![ProofLine::Tactic {
+            indent: 0,
+            bullet: None,
+            text: "smt().".to_string(),
+        }],
+    }
+}
+
+#[test]
+fn a_bound_lemma_puts_each_probability_on_its_own_line() {
+    let lemma = pr_lemma(
+        "bound_H",
+        binop(EcBinop::Eq, advantage("G(A)"), advantage("Assm(B(A))")),
+    );
+    assert_eq!(
+        super::render::render_lemma(&lemma),
+        "lemma bound_H &m :
+  `|Pr[G(A).run(false) @ &m : res]
+    - Pr[G(A).run(true) @ &m : res]|
+  =
+  `|Pr[Assm(B(A)).run(false) @ &m : res]
+    - Pr[Assm(B(A)).run(true) @ &m : res]|.
+proof.
+smt().
+qed."
+    );
+}
+
+#[test]
+fn a_proposition_lemma_puts_each_term_of_its_sum_on_its_own_line() {
+    let sum = binop(
+        EcBinop::Add,
+        binop(EcBinop::Add, advantage("X(A)"), advantage("Y(A)")),
+        advantage("Z(A)"),
+    );
+    let lemma = pr_lemma("Main", binop(EcBinop::Le, advantage("G(A)"), sum));
+    assert_eq!(
+        super::render::render_lemma(&lemma),
+        "lemma Main &m :
+  `|Pr[G(A).run(false) @ &m : res]
+    - Pr[G(A).run(true) @ &m : res]|
+  <=
+  `|Pr[X(A).run(false) @ &m : res]
+    - Pr[X(A).run(true) @ &m : res]|
+  + `|Pr[Y(A).run(false) @ &m : res]
+      - Pr[Y(A).run(true) @ &m : res]|
+  + `|Pr[Z(A).run(false) @ &m : res]
+      - Pr[Z(A).run(true) @ &m : res]|.
+proof.
+smt().
+qed."
+    );
+}
+
+#[test]
+fn an_equivalence_lemma_puts_each_side_on_its_own_line() {
+    let lemma = pr_lemma(
+        "equiv_H",
+        binop(EcBinop::Eq, pr("G(A)", false), pr("Assm(B(A))", false)),
+    );
+    assert_eq!(
+        super::render::render_lemma(&lemma),
+        "lemma equiv_H &m :
+  Pr[G(A).run(false) @ &m : res]
+  =
+  Pr[Assm(B(A)).run(false) @ &m : res].
+proof.
+smt().
+qed."
+    );
+}
+
+#[test]
+fn a_probability_layout_keeps_the_parentheses_a_term_needs() {
+    // a - (b - c): the right operand of `-` keeps its parentheses
+    let rhs = binop(
+        EcBinop::Sub,
+        pr("X(A)", false),
+        binop(EcBinop::Sub, pr("Y(A)", false), pr("Z(A)", false)),
+    );
+    let lemma = pr_lemma("p", binop(EcBinop::Le, pr("G(A)", false), rhs));
+    assert_eq!(
+        super::render::render_lemma(&lemma),
+        "lemma p &m :
+  Pr[G(A).run(false) @ &m : res]
+  <=
+  Pr[X(A).run(false) @ &m : res]
+  - (Pr[Y(A).run(false) @ &m : res]
+     - Pr[Z(A).run(false) @ &m : res]).
+proof.
+smt().
+qed."
+    );
+}
+
+#[test]
+fn a_lemma_with_no_probability_stays_on_one_line() {
+    let lemma = pr_lemma("p", binop(EcBinop::Eq, int(1), int(1)));
+    assert_eq!(
+        super::render::render_lemma(&lemma),
+        "lemma p &m : 1 = 1.\nproof.\nsmt().\nqed."
+    );
+}

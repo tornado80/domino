@@ -11,7 +11,10 @@ section.
 
 declare module A <: Interfaces.Adv_Game { -Comp_Game.Game_Game, -Comp_Game.Pkg_Inst_C }.
 
-lemma L_R_equiv &m : Pr[Comp_Game.Exp_Game(A).run() @ &m : res] = Pr[Comp_Game.Exp_Game(A).run() @ &m : res].
+lemma L_R_equiv &m :
+  Pr[Comp_Game.Exp_Game(A).run() @ &m : res]
+  =
+  Pr[Comp_Game.Exp_Game(A).run() @ &m : res].
 proof.
 byequiv
   (: ={glob A}

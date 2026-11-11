@@ -56,7 +56,7 @@ by rewrite !(equiv_mod_real_mod_ideal_b_true &m).
 qed.
 
 (* The proposition lemma of the path, with the open hop `mod_ideal[b := false] ~ mod_ideal[b := true]` as its own term. *)
-lemma FlipBound &m : `|Pr[Comp_ModGame.Exp_ModGame(A).run(false, false) @ &m : res] - Pr[Comp_ModGame.Exp_ModGame(A).run(true, false) @ &m : res]| <= `|Pr[Comp_KeyGame.Exp_KeyGame(B_mod_real_mod_ideal_b_false(A)).run(false) @ &m : res] - Pr[Comp_KeyGame.Exp_KeyGame(B_mod_real_mod_ideal_b_false(A)).run(true) @ &m : res]| + (`|Pr[Comp_ModGame.Exp_ModGame(A).run(false, true) @ &m : res] - Pr[Comp_ModGame.Exp_ModGame(A).run(true, true) @ &m : res]| + `|Pr[Comp_KeyGame.Exp_KeyGame(B_mod_real_mod_ideal_b_true(A)).run(false) @ &m : res] - Pr[Comp_KeyGame.Exp_KeyGame(B_mod_real_mod_ideal_b_true(A)).run(true) @ &m : res]|).
+lemma FlipBound &m : `|Pr[Comp_ModGame.Exp_ModGame(A).run(false, false) @ &m : res] - Pr[Comp_ModGame.Exp_ModGame(A).run(true, false) @ &m : res]| <= `|Pr[Comp_KeyGame.Exp_KeyGame(B_mod_real_mod_ideal_b_false(A)).run(false) @ &m : res] - Pr[Comp_KeyGame.Exp_KeyGame(B_mod_real_mod_ideal_b_false(A)).run(true) @ &m : res]| + `|Pr[Comp_ModGame.Exp_ModGame(A).run(false, true) @ &m : res] - Pr[Comp_ModGame.Exp_ModGame(A).run(true, true) @ &m : res]| + `|Pr[Comp_KeyGame.Exp_KeyGame(B_mod_real_mod_ideal_b_true(A)).run(false) @ &m : res] - Pr[Comp_KeyGame.Exp_KeyGame(B_mod_real_mod_ideal_b_true(A)).run(true) @ &m : res]|.
 proof.
 have h0 := bound_mod_real_mod_ideal_b_false &m.
 have h1 := bound_mod_real_mod_ideal_b_true &m.

@@ -588,7 +588,15 @@ impl Ctx<'_, '_> {
                 });
             }
         }
-        let rhs = EcExpr::right_chain(EcBinop::Add, body.terms)
+        // `+` associates to the left, so a left-nested sum needs no parentheses
+        let rhs = body
+            .terms
+            .into_iter()
+            .reduce(|sum, term| EcExpr::Binop {
+                op: EcBinop::Add,
+                lhs: Box::new(sum),
+                rhs: Box::new(term),
+            })
             .unwrap_or_else(|| EcExpr::Var("0%r".to_string()));
         let mut proof: Vec<ProofLine> = body.haves.into_iter().map(tactic).collect();
         proof.push(tactic("smt().".to_string()));

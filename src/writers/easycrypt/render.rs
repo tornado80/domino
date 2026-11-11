@@ -427,7 +427,10 @@ fn render_declare_module(d: &DeclareModule) -> String {
     out
 }
 
-fn render_lemma(lemma: &EcLemma) -> String {
+/// A lemma. A statement about probabilities (an equivalence, bound or proposition lemma)
+/// starts on the line after the name, laid out by [`render_probability_block`]; any other
+/// statement follows the name on the same line.
+pub(super) fn render_lemma(lemma: &EcLemma) -> String {
     let binders: String = lemma
         .binders
         .iter()
@@ -435,17 +438,95 @@ fn render_lemma(lemma: &EcLemma) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     let sep = if binders.is_empty() { "" } else { " " };
-    let mut out = format!(
-        "lemma {}{sep}{binders} : {}.\nproof.\n",
-        lemma.name,
-        render_expr(&lemma.statement)
-    );
+    let statement = if mentions_probability(&lemma.statement) {
+        format!(
+            "\n{INDENT}{}",
+            render_probability_block(&lemma.statement, INDENT.len())
+        )
+    } else {
+        format!(" {}", render_expr(&lemma.statement))
+    };
+    let mut out = format!("lemma {}{sep}{binders} :{statement}.\nproof.\n", lemma.name);
     for line in &lemma.proof {
         out.push_str(&render_proof_line(line));
         out.push('\n');
     }
     out.push_str("qed.");
     out
+}
+
+fn mentions_probability(e: &EcExpr) -> bool {
+    matches!(e, EcExpr::Pr { .. }) || e.children().into_iter().any(mentions_probability)
+}
+
+/// A probability formula laid out one term per line. `col` is as for [`render_expr_block`]:
+/// - a comparison puts its operator on a line of its own between its two sides;
+/// - a chain of `+` and `-` puts each operator first on its line, before its term;
+/// - `` `|e| `` lays out `e` just inside the bars, so the `-` of a difference of two
+///   probabilities lines up under the first one;
+/// - an operand that needs parentheses is laid out inside them;
+/// - everything else is [`render_expr`]'s single line.
+fn render_probability_block(e: &EcExpr, col: usize) -> String {
+    let pad = " ".repeat(col);
+    match e {
+        EcExpr::Binop {
+            op:
+                op @ (EcBinop::Eq | EcBinop::Ne | EcBinop::Lt | EcBinop::Le | EcBinop::Gt | EcBinop::Ge),
+            lhs,
+            rhs,
+        } => {
+            let (sym, level, _) = binop_info(*op);
+            // `=` and `<>` do not associate, and a chain of comparisons does not typecheck
+            format!(
+                "{}\n{pad}{sym}\n{pad}{}",
+                render_probability_operand(lhs, level + 1, col),
+                render_probability_operand(rhs, level + 1, col)
+            )
+        }
+        EcExpr::Binop {
+            op: EcBinop::Add | EcBinop::Sub,
+            ..
+        } => render_sum_block(e, col),
+        EcExpr::Abs(inner) => format!("`|{}|", render_probability_block(inner, col + 2)),
+        _ => render_expr(e),
+    }
+}
+
+/// A left-nested chain of `+` and `-` rooted at `e`: the first term, then each operator at
+/// the start of a new line at `col`, followed by its term.
+fn render_sum_block(e: &EcExpr, col: usize) -> String {
+    let (_, level, _) = binop_info(EcBinop::Add);
+    let mut tail: Vec<(&'static str, &EcExpr)> = Vec::new();
+    let mut first = e;
+    while let EcExpr::Binop {
+        op: op @ (EcBinop::Add | EcBinop::Sub),
+        lhs,
+        rhs,
+    } = first
+    {
+        tail.push((binop_info(*op).0, rhs));
+        first = lhs;
+    }
+    let mut out = render_probability_operand(first, level, col);
+    for (sym, term) in tail.into_iter().rev() {
+        let term_col = col + sym.len() + 1;
+        out.push_str(&format!(
+            "\n{}{sym} {}",
+            " ".repeat(col),
+            render_probability_operand(term, level + 1, term_col)
+        ));
+    }
+    out
+}
+
+/// [`render_probability_block`] for a position that requires at least `min_prec`, in
+/// parentheses exactly where [`render_operand`] puts them.
+fn render_probability_operand(e: &EcExpr, min_prec: i8, col: usize) -> String {
+    if prec(e) < min_prec {
+        format!("({})", render_probability_block(e, col + 1))
+    } else {
+        render_probability_block(e, col)
+    }
 }
 
 fn render_lemma_binder(b: &LemmaBinder) -> String {
