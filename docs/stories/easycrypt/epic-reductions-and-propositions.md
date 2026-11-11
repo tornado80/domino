@@ -3,6 +3,8 @@
 **Parent epic:** EasyCrypt Export — read `docs/stories/easycrypt/00-overview.md` first.
 **Branch:** `amir/easycrypt-export`
 **ADR:** `docs/adr/0022-a-reduction-is-a-router-an-adversary-and-an-experiment.md`
+**Followed by:** `epic-reductions-without-an-experiment.md` (ADR 0023 removes the reduction
+experiment and moves the reduction adversaries to the proposition file).
 **Glossary:** `CONTEXT.md` — **Assumption**, **Reduction**, **Mapped package**, **Reduction
 package**, **Reduction router**, **Reduction adversary**, **Reduction experiment**, **Bound lemma**,
 **Proposition**, **Proposition lemma**, **Open hop**.

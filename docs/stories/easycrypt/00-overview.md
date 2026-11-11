@@ -222,10 +222,17 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 98 | A reduction exports its router, adversary and experiment (`Red_<L>_<R>.ec`, modules) | `98-a-reduction-exports-its-router-adversary-and-experiment.md` | 97 |
 | 99 | A reduction exports its equivalences and its bound lemma, with the whole proof | `99-a-reduction-exports-its-equivalences-and-bound-lemma.md` | 97, 98 |
 | 100 | A proposition exports its lemma (`Prop_<Name>.ec`) | `100-a-proposition-exports-its-lemma.md` | 99 |
+| 101 | A hand-written prototype fixes the new reduction layout (prototype) | `101-a-hand-written-prototype-fixes-the-new-reduction-layout.md` | — |
+| 102 | A proposition defines its reduction adversaries (no `RedExp`; router, oracle and run files) | `102-a-proposition-defines-its-reduction-adversaries.md` | 101 |
+| 103 | A proof job proves a reduction's oracle lemmas (blind walk) | `103-a-proof-job-proves-a-reductions-oracle-lemmas.md` | 102 |
 
 Stories 97–100 are the epic **EasyCrypt export: reductions and propositions**
 (`epic-reductions-and-propositions.md`, ADR 0022), from the grilling of 2026-11-04/05. Hybrid hops
 are out of scope.
+
+Stories 101–103 are the epic **EasyCrypt export: reductions without an experiment**
+(`epic-reductions-without-an-experiment.md`, ADR 0023, which supersedes parts of ADR 0022), from the
+grilling of 2026-11-10/11.
 
 Stories 71–77 and symbolic-execution 26–29 come from the grilling of 2026-10-12/20. The merges land
 in the order 71 → symbolic-execution 26 → 74. Not merged: the rest of Christoph Egger's stack (not

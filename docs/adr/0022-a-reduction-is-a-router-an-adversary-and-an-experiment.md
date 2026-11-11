@@ -1,7 +1,9 @@
 # A reduction is a router, an adversary and an experiment
 
-**Status:** accepted. Implemented by `docs/stories/easycrypt/97-…` to `100-…`. Grilling of
-2026-11-04/05, Questions 1 to 7.
+**Status:** accepted; decisions 2, 3, 4, 5 and 8, the reduction adversary of decision 1, and the
+rejection of anti-unification are superseded by ADR 0023
+(`docs/adr/0023-a-proposition-owns-its-reduction-adversaries.md`). Implemented by
+`docs/stories/easycrypt/97-…` to `100-…`. Grilling of 2026-11-04/05, Questions 1 to 7.
 
 Translation skips reduction hops until now. A reduction maps the packages of an assumption game to
 packages of the hop's game instance; the other packages are the reduction packages. We want to reuse
@@ -14,16 +16,17 @@ We decided:
    adapters and the same abort-flag wrapping as a composition's `Game_<C>`. A call that reaches a
    mapped package goes to `O`. It has its own abort flag, because a reduction package can abort while
    the assumption game does not. The **reduction adversary** `B_<hop>(A)(O)` starts the router and
-   runs `A(Red_<hop>(O))`.
+   runs `A(Red_<hop>(O))`. *(The reduction adversary is superseded by ADR 0023: one for each set of
+   values, in the proposition file.)*
 2. **No hypothesis on the start memory.** An EasyCrypt adversary's `run()` has no arguments, and a
    module cannot read a lemma argument. So the theorem constants that the reduction packages need
    (booleans and integers that are not widths) go through a **reduction experiment**
    `RedExp_<hop>(A).run(consts..)`. It calls `B_<hop>(A).setup(consts..)`, which stores them in
    `B_<hop>`, and then runs the assumption game's own `Exp_<Assm>(B_<hop>(A))`, unchanged. The
-   reduction's lemmas quantify the constants as lemma arguments, as the equivalence lemmas do.
+   reduction's lemmas quantify the constants as lemma arguments, as the equivalence lemmas do. *(Superseded by ADR 0023.)*
 3. **Every reduction has a reduction experiment**, also when it needs no constants, so the
    proposition lemma treats all reductions the same. When the two assumption games are different
-   compositions, there is one reduction experiment for each side.
+   compositions, there is one reduction experiment for each side. *(Superseded by ADR 0023.)*
 
 4. **Translation writes the whole proof of the reduction equivalences** (`Exp_<G>(A)` against
    `RedExp_<hop>(A)` for each side), with no `admit`. The code on the two sides is the same package
@@ -32,11 +35,11 @@ We decided:
    flags of the hop's game and the router, the assumption game's abort flag implies the router's,
    and the constants stored in the adversary equal the game's. No hand-written SMT-LIB and no proof
    job. A proof that EasyCrypt does not accept is a translation bug. A hand-written prototype on
-   hello-world and on the first kem-dem reduction fixes the script before translation generates it.
+   hello-world and on the first kem-dem reduction fixes the script before translation generates it. *(Superseded by ADR 0023.)*
 
 5. **Two reduction equivalences, one for each side**, with the game instances' own arguments
    (theorem constants that stay free are lemma arguments). Their oracle lemmas mention no constant
-   value, so the two sides share them when they use the same compositions.
+   value, so the two sides share them when they use the same compositions. *(Superseded by ADR 0023.)*
 6. **The bound lemma states equality** of the two advantages, as EasyCrypt's `elgamal.ec`
    `conclusion` does. Only the **proposition lemma** uses `<=`: the sum of the bound lemmas' right
    sides, one term for each reduction step in path order, each term in its hop's own direction so it
@@ -55,6 +58,7 @@ We decided:
    so the one-file-per-oracle rule of ADR 0013 does not apply. A proposition is `Prop_<Name>.ec`.
    If two theorems must load together, each theorem directory gets a named EasyCrypt load path
    (`-I Name:dir`, `from Name require ..`), which covers every file and not only the hop files.
+   *(The one-file rule is superseded by ADR 0023; the rest of this decision stays.)*
 
 ## Considered options
 
@@ -78,6 +82,7 @@ We decided:
   Domino has already discharged.
 - **One reduction equivalence by anti-unification** of the two sides' arguments. Closer to the
   equivalence lemmas, but it needs an algorithm and a fallback, and no caller needs the general form.
+  *(Superseded by ADR 0023: on flat literal arguments it is a short loop with a simple fallback.)*
 - **A chain of lemmas for each path position.** More lemmas for a generated proof, with no gain.
 - **Assumptions as axioms with an epsilon.** An axiom over every adversary with no resource bound is
   false in EasyCrypt.
