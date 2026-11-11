@@ -271,7 +271,10 @@ pub enum EcExpr {
     /// `glob M`: the state of module `M`, as an argument of an operator (story 76).
     Glob(String),
     /// `(glob M){i}`: the state of module `M` in memory `i` of a relational formula (story 99).
-    GlobAt { module: String, mem: u8 },
+    GlobAt {
+        module: String,
+        mem: u8,
+    },
     /// `` `|e| ``: the absolute value of a real (story 99's bound lemma).
     Abs(Box<EcExpr>),
     /// `={glob M}` — the two runs' own copies of `M`'s glob state are equal.

@@ -26,10 +26,10 @@ use super::ast::{
     EcSection, EcStmt, EcType, LemmaBinder, ProofLine, Require,
 };
 use super::game::composition_const_needs_arg;
-use super::prop_reduction;
 use super::interfaces::{composition_span, InterfacesOutput};
 use super::names::{NameKind, Names};
 use super::proof::{literal_text_to_expr, side_run_args, EquivalenceFiles, RunArgValue};
+use super::prop_reduction;
 use super::reduction::{push_unique, ReductionFile};
 use super::render::render_expr;
 use super::types::translate_type;
@@ -288,8 +288,10 @@ impl Ctx<'_, '_> {
             body.lemmas.extend(lemmas);
         }
         let n = body.haves.len();
-        body.haves
-            .push(format!("have h{n} := {} &m{}.", names.bound, names.free_args));
+        body.haves.push(format!(
+            "have h{n} := {} &m{}.",
+            names.bound, names.free_args
+        ));
         body.terms.push(term);
         body.reduction_terms += 1;
         body.reduction_steps.push(ReductionStep {
@@ -705,7 +707,10 @@ fn step_lemmas(
             binders,
             statement: eq(pr(&sides.game_exps[i], game), pr(&sides.assm_exps[i], assm)),
             proof: vec![
-                tactic(format!("byequiv (: {} ==> ={{res}}) => //.", pre.join(" /\\ "))),
+                tactic(format!(
+                    "byequiv (: {} ==> ={{res}}) => //.",
+                    pre.join(" /\\ ")
+                )),
                 tactic("proc; inline *; wp.".to_string()),
                 tactic(format!("call ({}.{} A).", names.join, names.run[i])),
                 tactic("by auto => /#.".to_string()),
@@ -1023,7 +1028,11 @@ pub(crate) mod tests {
     #[test]
     fn a_path_that_fixes_the_constant_gets_one_adversary_for_each_value() {
         let e = export(RED_CONSTS, "RedConsts");
-        let flip = e.propositions.iter().find(|p| p.name == "FlipBound").unwrap();
+        let flip = e
+            .propositions
+            .iter()
+            .find(|p| p.name == "FlipBound")
+            .unwrap();
         let hop = "mod_real_mod_ideal";
         let advs: Vec<&str> = flip
             .reduction_steps

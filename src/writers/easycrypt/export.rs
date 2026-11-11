@@ -391,7 +391,7 @@ pub fn export_theorem_observed(
             .iter()
             .map(|o| render_file(&o.file))
             .chain([joined.clone(), router.clone()])
-            .map(|t| t.matches("admit").count())
+            .map(|t| t.matches("admit.").count())
             .sum();
         files.insert(PathBuf::from(rf.file_name.clone()), joined);
         files.insert(PathBuf::from(rf.router_file_name.clone()), router);

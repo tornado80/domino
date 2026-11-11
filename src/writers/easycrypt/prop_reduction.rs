@@ -153,14 +153,7 @@ mod tests {
         let gl = [lit(false), lit(false)];
         let gr = [lit(false), lit(true)];
         let (al, ar) = ([lit(false)], [lit(true)]);
-        let m = merge(
-            [&gl, &gr],
-            [&al, &ar],
-            &params(&["kx", "ideal"]),
-            true,
-            &[],
-        )
-        .unwrap();
+        let m = merge([&gl, &gr], [&al, &ar], &params(&["kx", "ideal"]), true, &[]).unwrap();
         assert_eq!(m.binders, params(&["ideal"]));
         let var = EcExpr::Var("ideal".to_string());
         assert_eq!(m.game, vec![lit(false), var.clone()]);
@@ -171,25 +164,41 @@ mod tests {
     fn an_assumption_pair_that_the_game_does_not_have_gives_two_lemmas() {
         let g = [lit(false)];
         let (al, ar) = ([lit(false)], [lit(true)]);
-        assert_eq!(merge([&g, &g], [&al, &ar], &params(&["x"]), true, &[]), None);
+        assert_eq!(
+            merge([&g, &g], [&al, &ar], &params(&["x"]), true, &[]),
+            None
+        );
     }
 
     #[test]
     fn different_compositions_give_two_lemmas() {
         let (gl, gr) = ([lit(false)], [lit(true)]);
-        assert_eq!(merge([&gl, &gr], [&gl, &gr], &params(&["x"]), false, &[]), None);
+        assert_eq!(
+            merge([&gl, &gr], [&gl, &gr], &params(&["x"]), false, &[]),
+            None
+        );
     }
 
     #[test]
     fn a_reversed_pair_is_a_different_pair() {
         let (gl, gr) = ([lit(false)], [lit(true)]);
-        assert_eq!(merge([&gl, &gr], [&gr, &gl], &params(&["x"]), true, &[]), None);
+        assert_eq!(
+            merge([&gl, &gr], [&gr, &gl], &params(&["x"]), true, &[]),
+            None
+        );
     }
 
     #[test]
     fn a_binder_does_not_take_a_name_in_use() {
         let (gl, gr) = ([lit(false)], [lit(true)]);
-        let m = merge([&gl, &gr], [&gl, &gr], &params(&["b"]), true, &["b".to_string()]).unwrap();
+        let m = merge(
+            [&gl, &gr],
+            [&gl, &gr],
+            &params(&["b"]),
+            true,
+            &["b".to_string()],
+        )
+        .unwrap();
         assert_eq!(m.binders, params(&["b_"]));
     }
 

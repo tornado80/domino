@@ -32,8 +32,8 @@ use super::interfaces::{composition_span, InterfacesOutput};
 use super::names::{NameKind, Names};
 use super::package::{param_needs_var, pkg_needs_init};
 use super::proof::{side_run_args, RunArgValue};
-use super::reduction_lemmas::{reduction_lemmas, LemmaInput};
 pub use super::reduction_lemmas::ReductionOracleFile;
+use super::reduction_lemmas::{reduction_lemmas, LemmaInput};
 use super::types::{translate_expr, translate_type};
 use super::EcExportError;
 
@@ -86,7 +86,7 @@ pub struct ReductionSide {
     pub assumption_args: Vec<String>,
 }
 
-/// One `Red_<L>_<R>.ec` for each reduction hop of `theorem`, in `theorem.game_hops` order.
+/// The files of each reduction hop of `theorem` (router, oracle files, joining file), in `theorem.game_hops` order.
 /// Reductions inside a hybrid hop are not translated (ADR 0022, decision 7).
 pub fn compute_reduction_files(
     theorem: &Theorem<'_>,
@@ -636,7 +636,11 @@ mod tests {
         for f in &files {
             let stem = f.file_name.trim_end_matches(".ec");
             assert_eq!(f.router_file_name, format!("{stem}_Router.ec"));
-            let oracles: Vec<&str> = f.oracle_files.iter().map(|o| o.file_name.as_str()).collect();
+            let oracles: Vec<&str> = f
+                .oracle_files
+                .iter()
+                .map(|o| o.file_name.as_str())
+                .collect();
             assert_eq!(
                 oracles,
                 ["PKGEN", "PKENC", "PKDEC"].map(|o| format!("{stem}_{o}.ec"))
@@ -658,7 +662,10 @@ mod tests {
         let join = render_file(&f.file);
         let proto = prototype("kem-dem", &format!("Red_{stem}.ec"));
         let run = format!("run_{stem}");
-        assert_eq!(statement(&join, "lemma", &run), statement(&proto, "lemma", &run));
+        assert_eq!(
+            statement(&join, "lemma", &run),
+            statement(&proto, "lemma", &run)
+        );
         assert!(
             join.contains(&format!("+ by conseq Red_{stem}_PKDEC => /#.")),
             "{join}"
@@ -666,7 +673,10 @@ mod tests {
         let router = render_file(&f.router_file);
         let proto = prototype("kem-dem", &format!("Red_{stem}_Router.ec"));
         let inv = format!("inv_{stem}");
-        assert_eq!(statement(&router, "op", &inv), statement(&proto, "op", &inv));
+        assert_eq!(
+            statement(&router, "op", &inv),
+            statement(&proto, "op", &inv)
+        );
         let oracle = render_file(&f.oracle_files[2].file);
         let proto = prototype("kem-dem", &format!("Red_{stem}_PKDEC.ec"));
         let lemma = format!("Red_{stem}_PKDEC");
@@ -704,7 +714,10 @@ mod tests {
         assert_eq!(files.len(), 1);
         let f = &files[0];
         let stem = "big_composition_medium_composition_more_oracles";
-        assert_eq!(f.package_pairs, vec![("fwd2".to_string(), "fwd".to_string())]);
+        assert_eq!(
+            f.package_pairs,
+            vec![("fwd2".to_string(), "fwd".to_string())]
+        );
         assert_eq!(
             f.run_lemmas,
             [format!("run_{stem}_L"), format!("run_{stem}_R")]
@@ -714,7 +727,10 @@ mod tests {
             vec![format!("inv_{stem}_L"), format!("inv_{stem}_R")]
         );
         let router = render_file(&f.router_file);
-        assert!(router.contains("clone Pkg_Fwd as Cloned_Pkg_Fwd2."), "{router}");
+        assert!(
+            router.contains("clone Pkg_Fwd as Cloned_Pkg_Fwd2."),
+            "{router}"
+        );
         assert_eq!(
             module(&f.router_file, &format!("Red_{stem}"))
                 .implements
@@ -724,7 +740,10 @@ mod tests {
         let join = render_file(&f.file);
         let proto = prototype("hello-world", &format!("Red_{stem}.ec"));
         for run in &f.run_lemmas {
-            assert_eq!(statement(&join, "lemma", run), statement(&proto, "lemma", run));
+            assert_eq!(
+                statement(&join, "lemma", run),
+                statement(&proto, "lemma", run)
+            );
         }
         // each oracle file holds the lemmas of both sides
         let oracle = render_file(&f.oracle_files[0].file);
@@ -732,10 +751,19 @@ mod tests {
             f.oracle_files[0].file_name,
             format!("Red_{stem}_UsefulOracle.ec")
         );
-        assert!(oracle.contains(&format!("lemma Red_{stem}_UsefulOracle_L :")), "{oracle}");
-        assert!(oracle.contains(&format!("lemma Red_{stem}_UsefulOracle_R :")), "{oracle}");
+        assert!(
+            oracle.contains(&format!("lemma Red_{stem}_UsefulOracle_L :")),
+            "{oracle}"
+        );
+        assert!(
+            oracle.contains(&format!("lemma Red_{stem}_UsefulOracle_R :")),
+            "{oracle}"
+        );
         for (name, text) in texts(f) {
-            assert!(!text.contains("RedExp") && !text.contains("setup"), "{name}");
+            assert!(
+                !text.contains("RedExp") && !text.contains("setup"),
+                "{name}"
+            );
         }
     }
 

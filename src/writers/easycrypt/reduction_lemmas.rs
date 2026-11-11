@@ -18,8 +18,7 @@ use crate::parser::reduction::ReductionMapping;
 use crate::theorem::{GameInstance, Theorem};
 
 use super::ast::{
-    DeclareModule, EcBinop, EcExpr, EcFile, EcItem, EcLemma, EcSection, EcType, ProofLine,
-    Require,
+    DeclareModule, EcBinop, EcExpr, EcFile, EcItem, EcLemma, EcSection, EcType, ProofLine, Require,
 };
 use super::game::{instance_wirings, InstanceWiring};
 use super::interfaces::InterfacesOutput;
