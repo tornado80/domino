@@ -134,6 +134,15 @@ pub fn proof_progress(text: &str) -> OracleCounts {
     counts
 }
 
+/// Whether the file named `name` holds oracle bullets that a proof job proves: an `Eq_*.ec`
+/// (not its invariants) or a `Red_*.ec` (story 103; a reduction's router and joining file have
+/// no bullet, so they never count).
+fn is_proof_file(name: &str) -> bool {
+    name.ends_with(".ec")
+        && (name.starts_with("Eq_") && !name.ends_with("_Invariants.ec")
+            || name.starts_with("Red_"))
+}
+
 /// The export would write where files other than run artifacts already are.
 #[derive(Debug, Error)]
 #[error(
@@ -244,9 +253,9 @@ pub fn check_export_tree(out: &Path, mut theorems: &[&str]) -> Result<(), Export
         // in a theorem's directory: `--force` leaves files directly in `out` alone
         .filter(|f| f.components().count() == 2)
         .filter(|f| {
-            f.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-                n.starts_with("Eq_") && n.ends_with(".ec") && !n.ends_with("_Invariants.ec")
-            })
+            f.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(is_proof_file)
         })
         .filter_map(|f| {
             let text = std::fs::read_to_string(out.join(f)).ok()?;
@@ -551,6 +560,38 @@ qed.
         );
         let message = o.to_string();
         assert!(message.contains("  A/Eq_l_r.ec\n  A/Types.ec"), "{message}");
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    /// Story 103: a proved reduction oracle file is listed with its progress; the router file,
+    /// which has no oracle bullet, is not.
+    #[test]
+    fn the_refusal_lists_a_proved_reduction_oracle_file() {
+        let out = scratch("reduction");
+        let proved = "lemma Red_a_b_O : equiv[G.d_O ~ Red_a_b(A).d_O : true ==> true].\n\
+                      proof.\n(* d_O *)\n+ proc; inline *.\n  auto => /#.\nqed.\n";
+        touch(&out.join("A/Red_a_b_O.ec"), proved);
+        touch(
+            &out.join("A/Red_a_b_Router.ec"),
+            "op inv_a_b : bool = true.\n",
+        );
+        let o = occupied(&out, &["A"]);
+        assert_eq!(
+            o.proofs,
+            vec![ProofProgress {
+                file: PathBuf::from("A/Red_a_b_O.ec"),
+                oracles: OracleCounts {
+                    proved: 1,
+                    partial: 0,
+                    total: 1
+                },
+            }]
+        );
+        let help = o.help().unwrap().to_string();
+        assert!(
+            help.contains("A/Red_a_b_O.ec: 1 of 1 oracles already proved"),
+            "{help}"
+        );
         let _ = std::fs::remove_dir_all(&out);
     }
 }

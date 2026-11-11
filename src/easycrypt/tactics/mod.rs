@@ -89,11 +89,11 @@ use crate::transforms::theorem_transforms::EasyCryptTransform;
 use crate::transforms::TheoremTransform;
 use crate::util::smtsolver::SmtSolverBackend;
 use crate::writers::easycrypt::export::{
-    EquivalenceReport, ExportedTheorem, PkgInvReport, SideInvReport,
+    EquivalenceReport, ExportedTheorem, PkgInvReport, ReductionReport, SideInvReport,
 };
 use crate::writers::easycrypt::invariant::{
     invariant_ops, leaf_part_ops, package_invariant_ops, side_conjuncts, side_inv_drop_ops,
-    side_job_ops,
+    side_job_ops, InvariantOp,
 };
 use crate::writers::easycrypt::lower::inline_oracle_ec;
 use crate::writers::easycrypt::progress::{NopProgressBoard, ProgressBoard};
@@ -439,6 +439,9 @@ pub(super) enum JobKind<'a> {
     /// The package lemmas of one variant of a package (its Domino name, story 76): the
     /// package-invariant lemmas along package trees, then the frame lemmas and the start lemma.
     PackageInvariants(&'a str),
+    /// The oracle lemmas of a reduction (story 103, ADR 0023): each walked blind from
+    /// `proc; inline *.`, with no lockstep execution, no solver and no side-invariant files.
+    Reduction(&'a ReductionReport),
 }
 
 impl JobKind<'_> {
@@ -446,7 +449,7 @@ impl JobKind<'_> {
     fn composition(self) -> Option<String> {
         match self {
             JobKind::SideInvariants(c) => Some(c.to_string()),
-            JobKind::Equivalence | JobKind::PackageInvariants(_) => None,
+            JobKind::Equivalence | JobKind::PackageInvariants(_) | JobKind::Reduction(_) => None,
         }
     }
 
@@ -455,6 +458,7 @@ impl JobKind<'_> {
     fn run_failed(self) -> &'static str {
         match self {
             JobKind::Equivalence => "lockstep execution failed",
+            JobKind::Reduction(_) => "the blind walk failed",
             JobKind::SideInvariants(_) | JobKind::PackageInvariants(_) => {
                 "one-sided execution failed"
             }
@@ -465,14 +469,16 @@ impl JobKind<'_> {
     fn package(self) -> Option<String> {
         match self {
             JobKind::PackageInvariants(p) => Some(p.to_string()),
-            JobKind::Equivalence | JobKind::SideInvariants(_) => None,
+            JobKind::Equivalence | JobKind::SideInvariants(_) | JobKind::Reduction(_) => None,
         }
     }
 
     /// Where the lockstep or one-sided execution of `oracle` writes its artifacts.
     fn debug_dir(self, out_dir: &Path, eq: &EquivalenceReport, oracle: &str) -> PathBuf {
         match self {
-            JobKind::Equivalence => debug_dir(out_dir, &eq.left_name, &eq.right_name, oracle),
+            JobKind::Equivalence | JobKind::Reduction(_) => {
+                debug_dir(out_dir, &eq.left_name, &eq.right_name, oracle)
+            }
             JobKind::SideInvariants(c) => side_debug_dir(out_dir, c, oracle),
             JobKind::PackageInvariants(p) => pkg_debug_dir(out_dir, p, oracle),
         }
@@ -487,7 +493,9 @@ impl JobKind<'_> {
         oracle: &str,
     ) -> Result<Fingerprint, crate::debug::driver::DebugError> {
         match self {
-            JobKind::Equivalence => Fingerprint::of(project, theorem, eq.proofstep, oracle),
+            JobKind::Equivalence | JobKind::Reduction(_) => {
+                Fingerprint::of(project, theorem, eq.proofstep, oracle)
+            }
             JobKind::SideInvariants(c) => side_fingerprint(project, &theorem.name, c, oracle),
             JobKind::PackageInvariants(p) => pkg_fingerprint(project, p, oracle),
         }
@@ -875,16 +883,12 @@ where
         #[cfg(test)]
         fake: tests::TEST_EASYCRYPT.with(|t| t.borrow().clone()),
     };
-    let eqs = || {
-        plan.equivalences
-            .iter()
-            .map(|eq| (eq, JobKind::Equivalence))
-    };
+    let eqs = || hop_jobs(&plan, exported);
     // the package-invariant and side-invariant jobs, one after another (story 77): a side job
     // after the package jobs of its own composition; on a thread of their own while the
     // equivalences' proof jobs run (story 69 §3.3)
     let (equivalences, (side_invariants, package_invariants, unproved_packages)) =
-        if plan.equivalences.is_empty() {
+        if plan.equivalences.is_empty() && plan.reductions.is_empty() {
             (Vec::new(), run_side_chain(&ctx, &plan, board)?)
         } else if plan.side.is_empty() && plan.packages.is_empty() {
             (
@@ -909,6 +913,26 @@ where
         elapsed: started.elapsed(),
         swallowed_interrupt: swallow.warning(),
     })
+}
+
+/// The proof jobs of the game hops of `plan`, equivalences and reductions, in hop order
+/// (story 103: a reduction hop is a game hop).
+fn hop_jobs<'a>(
+    plan: &'a RunPlan,
+    exported: &'a ExportedTheorem,
+) -> impl Iterator<Item = (&'a EquivalenceReport, JobKind<'a>)> {
+    let mut jobs: Vec<(&EquivalenceReport, JobKind<'a>)> = plan
+        .equivalences
+        .iter()
+        .map(|eq| (eq, JobKind::Equivalence))
+        .chain(
+            plan.reductions
+                .iter()
+                .map(|(eq, i)| (eq, JobKind::Reduction(&exported.reductions[*i]))),
+        )
+        .collect();
+    jobs.sort_by_key(|(eq, _)| eq.proofstep);
+    jobs.into_iter()
 }
 
 /// The package-invariant and side-invariant jobs of `plan`, one after another, in the order of
@@ -1041,6 +1065,9 @@ fn package_files_on_disk(exported: &ExportedTheorem, out_dir: &Path, package: &s
 struct RunPlan {
     /// The equivalences whose proof jobs run, in theorem order.
     equivalences: Vec<EquivalenceReport>,
+    /// The reductions whose proof jobs run (story 103), in theorem order: the job's report
+    /// ([`reduction_job_report`]) and the index of the reduction in the export's reductions.
+    reductions: Vec<(EquivalenceReport, usize)>,
     /// The side-invariant jobs that run: the job's report (its files are the side-invariant
     /// files of the composition, [`side_job_report`]) and the composition's Domino name.
     side: Vec<(EquivalenceReport, String)>,
@@ -1079,6 +1106,7 @@ fn plan_run(
         }
         return Ok(RunPlan {
             equivalences: Vec::new(),
+            reductions: Vec::new(),
             side: Vec::new(),
             unproved: Vec::new(),
             packages,
@@ -1094,14 +1122,25 @@ fn plan_run(
             })?;
         return Ok(RunPlan {
             equivalences: Vec::new(),
+            reductions: Vec::new(),
             side: vec![side_job(side)],
             unproved: Vec::new(),
             packages: Vec::new(),
         });
     }
+    let reductions = |hop: Option<usize>| -> Vec<(EquivalenceReport, usize)> {
+        exported
+            .reductions
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| hop.is_none_or(|h| h == r.proofstep))
+            .map(|(i, r)| (reduction_job_report(r), i))
+            .collect()
+    };
     let Some(proofstep) = options.proofstep else {
         return Ok(RunPlan {
             equivalences: exported.equivalences.clone(),
+            reductions: reductions(None),
             side: exported.side_invariants.iter().map(side_job).collect(),
             unproved: Vec::new(),
             packages: exported
@@ -1111,8 +1150,10 @@ fn plan_run(
                 .collect(),
         });
     };
+    // a reduction hop waits for no side-invariant file (story 103)
     let mut plan = RunPlan {
         equivalences: Vec::new(),
+        reductions: reductions(Some(proofstep)),
         side: Vec::new(),
         unproved: Vec::new(),
         packages: Vec::new(),
@@ -1175,6 +1216,26 @@ fn side_job_report(side: &SideInvReport) -> EquivalenceReport {
         oracle_files: side.oracle_files.clone(),
         oracle_count: side.oracle_files.len(),
         admit_count: side.oracle_files.len(),
+        oracle_set_mismatch: None,
+        state_relations: Vec::new(),
+        helpers: Vec::new(),
+        side_compositions: Vec::new(),
+    }
+}
+
+/// The report the reduction proof job of `red` works from (story 103): its "proof file" is the
+/// joining file `Red_<L>_<R>.ec`, so its records, locks and pages are under `Red_<L>_<R>`, and
+/// its oracle files are the reduction's oracle lemma files.
+fn reduction_job_report(red: &ReductionReport) -> EquivalenceReport {
+    EquivalenceReport {
+        proofstep: red.proofstep,
+        left_name: red.left_name.clone(),
+        right_name: red.right_name.clone(),
+        invariants_file: String::new(),
+        proof_file: red.file.clone(),
+        oracle_files: red.oracle_files.clone(),
+        oracle_count: red.oracle_files.len(),
+        admit_count: red.oracle_files.len(),
         oracle_set_mismatch: None,
         state_relations: Vec::new(),
         helpers: Vec::new(),
@@ -1637,6 +1698,40 @@ struct WalkedTree {
     id: Option<String>,
 }
 
+impl WalkedTree {
+    /// No tree: what the blind walk of a reduction's oracle starts from (story 103).
+    fn blind() -> WalkedTree {
+        WalkedTree {
+            outcome: LockstepOutcome {
+                tree: Default::default(),
+                pairs: Vec::new(),
+                stuck: Vec::new(),
+                stop_reason: crate::debug::driver::StopReason::Completed,
+            },
+            summary: Default::default(),
+            relations: Vec::new(),
+            helpers: Vec::new(),
+            lockstep_time: Duration::ZERO,
+            id: None,
+        }
+    }
+}
+
+/// The invariant operator of `oracle`'s lemma in reduction `red`: `inv_<L>_<R>`, or `_L`/`_R`.
+fn reduction_invariant_op(red: &ReductionReport, oracle: &str) -> InvariantOp {
+    let name = red
+        .oracle_lemmas
+        .iter()
+        .find(|o| o.oracle == oracle)
+        .map(|o| o.invariant.clone())
+        .expect("the job proves the oracle lemmas of its reduction");
+    InvariantOp {
+        name,
+        claim: None,
+        relation: None,
+    }
+}
+
 /// What resuming an interrupted oracle starts from, besides its saved tree.
 struct ResumeFrom {
     closed: Vec<ClosedNode>,
@@ -1824,6 +1919,7 @@ where
             lockstep_observer.as_mut(),
             options.stop.as_deref(),
         ),
+        JobKind::Reduction(_) => unreachable!("a reduction's oracle is walked blind"),
     };
     // its bars go before the summary line is printed
     drop(lockstep_observer);
@@ -1935,8 +2031,14 @@ where
     B: SmtSolverBackend,
 {
     live.oracle_started(oracle);
-    // an interrupted oracle of the session record: its saved joint tree, no lockstep execution
-    let (walked, resume_from) = match resuming(project, theorem, eq, kind, oracle, proof, options) {
+    // an interrupted oracle of the session record: its saved joint tree, no lockstep execution;
+    // a reduction's oracle has no tree, and an interrupted one is walked again from the start
+    let resumed = match kind {
+        JobKind::Reduction(_) => None,
+        _ => resuming(project, theorem, eq, kind, oracle, proof, options),
+    };
+    let (walked, resume_from) = match resumed {
+        _ if matches!(kind, JobKind::Reduction(_)) => (WalkedTree::blind(), None),
         Some(Resuming { tree, from }) => {
             live.oracle_resumed(&from.in_flight, from.mode.slug());
             let dir = kind.debug_dir(proof.out_dir, eq, oracle);
@@ -1983,6 +2085,11 @@ where
             let ops = package_invariant_ops(project, inst).map_err(EcExportError::from)?;
             (ops.clone(), ops, Judgement::Package)
         }
+        // the invariant operator of the oracle's lemma, by the name rule (ADR 0018)
+        JobKind::Reduction(red) => {
+            let ops = vec![reduction_invariant_op(red, oracle)];
+            (ops.clone(), ops, Judgement::Reduction)
+        }
     };
     let unfold_ops: Vec<String> = unfold.into_iter().map(|op| op.name).collect();
     // story 92: the side invariants of the precondition, which the pruned crush drops
@@ -1990,7 +2097,7 @@ where
     let comps = match kind {
         JobKind::Equivalence => vec![left.game(), right.game()],
         JobKind::SideInvariants(_) => vec![left.game()],
-        JobKind::PackageInvariants(_) => Vec::new(),
+        JobKind::PackageInvariants(_) | JobKind::Reduction(_) => Vec::new(),
     };
     let drop_ops = side_inv_drop_ops(&comps);
     let conjuncts = side_conjuncts(theorem, project, &comps)?;
@@ -2000,7 +2107,7 @@ where
             inline_oracle_ec(setup.left_inst, oracle)?,
             inline_oracle_ec(setup.right_inst, oracle)?,
         )),
-        JobKind::SideInvariants(_) | JobKind::PackageInvariants(_) => None,
+        JobKind::SideInvariants(_) | JobKind::PackageInvariants(_) | JobKind::Reduction(_) => None,
     };
     let began = Instant::now();
     let resumed_at = |kept: usize| {
@@ -2259,15 +2366,20 @@ impl EquivalenceTactics {
             }
             out.push('\n');
         }
-        let _ = writeln!(
-            out,
-            "  {}: lockstep {} joint paths, {} nodes, {} stuck points ({})",
-            o.oracle,
-            o.joint_paths,
-            o.nodes,
-            o.stuck_points,
-            secs(o.lockstep_time)
-        );
+        if self.proof_file.starts_with("Red_") {
+            // a reduction's oracle is walked blind (story 103)
+            let _ = writeln!(out, "  {}: blind walk, no joint tree", o.oracle);
+        } else {
+            let _ = writeln!(
+                out,
+                "  {}: lockstep {} joint paths, {} nodes, {} stuck points ({})",
+                o.oracle,
+                o.joint_paths,
+                o.nodes,
+                o.stuck_points,
+                secs(o.lockstep_time)
+            );
+        }
         let admits = o.admits_summary() + &o.split_and_retry_summary();
         let _ = writeln!(
             out,

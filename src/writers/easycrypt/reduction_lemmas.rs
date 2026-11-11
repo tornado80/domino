@@ -2,14 +2,14 @@
 
 //! The lemmas of a reduction (story 99, story 102, ADR 0023 decisions 2 and 6): the invariant
 //! of each side (in `Red_<L>_<R>_Router.ec`), one oracle lemma file `Red_<L>_<R>_<O>.ec` for each
-//! exported oracle, and the **run lemma** of each side in `Red_<L>_<R>.ec`. The oracle proof is
-//! still the ladder of story 97 (`docs/research/reduction-proof-script.md`); story 103 replaces it.
+//! exported oracle, and the **run lemma** of each side in `Red_<L>_<R>.ec`.
 //!
-//! The oracle-lemma proof is the same text for every oracle of every reduction. Only the
-//! exclusion list of its `inline` (the mapped instances, each by both of its names) and `MEQ`
-//! (the equal states of the mapped packages) change, and both come from the map. The two sides
-//! share the invariant and the oracle lemmas when everything the lemmas name is the same on
-//! both sides (ADR 0022, decision 5).
+//! An oracle lemma's proof is the placeholder of an equivalence oracle file, `(* <proc> *)` and
+//! `+ proc; inline. admit.`: the reduction proof job (story 103, `JobKind::Reduction`) proves it
+//! by the blind walk. The two sides share the invariant and the oracle lemmas when everything
+//! the lemmas name is the same on both sides (ADR 0022, decision 5). Otherwise each side's
+//! oracle lemma has a file of its own, `Red_<L>_<R>_<O>_L.ec` and `_R.ec`, so that each file
+//! holds one lemma for the job to prove.
 
 use crate::gamehops::reduction::Reduction;
 use crate::package::Composition;
@@ -26,11 +26,16 @@ use super::names::{NameKind, Names};
 use super::render::render_expr;
 use super::EcExportError;
 
-/// One oracle's lemma file of a reduction, `Red_<L>_<R>_<O>.ec`: the oracle lemma of each side
-/// (one lemma when the sides share it).
+/// One oracle lemma file of a reduction, `Red_<L>_<R>_<O>.ec` (or `_<O>_L.ec`/`_<O>_R.ec`
+/// when the sides do not share their lemmas): the one oracle lemma that a proof job proves.
 pub struct ReductionOracleFile {
-    /// The exported oracle's name, the `<O>` of the file name.
+    /// The name the proof job knows the lemma by: the exported oracle's name, the `<O>` of the
+    /// file name, with `_L` or `_R` when the sides do not share their lemmas.
     pub oracle: String,
+    /// The procedure the lemma is about, `d_<O>`: the marker of its placeholder.
+    pub proc_name: String,
+    /// The invariant operator its statement applies, `inv_<L>_<R>` (or `_L`/`_R`).
+    pub invariant: String,
     pub file_name: String,
     pub file: EcFile,
 }
@@ -43,11 +48,6 @@ pub(super) struct ReductionLemmas {
     /// The section of `Red_<L>_<R>.ec`, with the run lemmas.
     pub section: EcSection,
 }
-
-/// Number of `alias`/`seq` rungs in the oracle-lemma walk: one is needed for each mapped call
-/// or sampling on one path of an oracle (story 97 §4.3). A rung that is not needed costs one
-/// type error.
-const LADDER_RUNGS: usize = 8;
 
 /// What the lemmas of the reduction need from `build_reduction_file`.
 pub(super) struct LemmaInput<'a> {
@@ -97,10 +97,6 @@ impl CompNames {
         format!("{}.Cloned_Pkg_{}.{}", self.theory, w.mangled, w.variant)
     }
 
-    fn inst_module(&self, idx: usize) -> String {
-        format!("{}.Pkg_Inst_{}", self.theory, self.wiring[idx].mangled)
-    }
-
     fn restrictions(&self) -> Vec<String> {
         let mut out = vec![self.game()];
         out.extend((0..self.wiring.len()).map(|i| self.clone_module(i)));
@@ -108,7 +104,7 @@ impl CompNames {
     }
 }
 
-/// The invariant, the exclusion list and `MEQ` of one side: everything an oracle lemma names.
+/// The invariant of one side: everything an oracle lemma names.
 #[derive(PartialEq)]
 struct SideSpec {
     game: String,
@@ -117,8 +113,6 @@ struct SideSpec {
     args: Vec<(String, EcType, EcExpr)>,
     /// The equality conjuncts after C1 and C2: `(left arg, right arg)` names.
     eqs: Vec<(String, String)>,
-    exclusions: Vec<String>,
-    meq: Vec<EcExpr>,
 }
 
 fn qualified(path: &str, field: &str, mem: u8) -> EcExpr {
@@ -264,32 +258,21 @@ fn side_spec(input: &LemmaInput<'_>, ctx: &SideCtx) -> Result<SideSpec, EcExport
             glob_at(router_clone, 2),
         );
     }
-    let mut exclusions = Vec::new();
-    let mut meq = Vec::new();
     for &(g, a) in &ctx.mapped {
         let (left, right) = (ctx.names.clone_module(g), ctx.assm.clone_module(a));
         push_pair(
             &mut args,
             EcType::Glob(left.clone()),
             EcType::Glob(right.clone()),
-            glob_at(left.clone(), 1),
-            glob_at(right.clone(), 2),
+            glob_at(left, 1),
+            glob_at(right, 2),
         );
-        meq.push(eq(glob_at(left.clone(), 1), glob_at(right.clone(), 2)));
-        exclusions.push(ctx.names.inst_module(g));
-        exclusions.push(left);
-    }
-    for &(_, a) in &ctx.mapped {
-        exclusions.push(ctx.assm.inst_module(a));
-        exclusions.push(ctx.assm.clone_module(a));
     }
     Ok(SideSpec {
         game,
         assm_game,
         args,
         eqs,
-        exclusions,
-        meq,
     })
 }
 
@@ -367,68 +350,37 @@ fn bullet(text: impl Into<String>) -> ProofLine {
     }
 }
 
-/// The names `alias` gives, newest first: `ec_fwd<n-2>`, …, `ec_fwd0`, `ec_fwd`.
-fn alias_names() -> Vec<String> {
-    (0..LADDER_RUNGS)
-        .rev()
-        .map(|k| match k {
-            0 => "ec_fwd".to_string(),
-            k => format!("ec_fwd{}", k - 1),
-        })
-        .collect()
+/// The proof of an oracle lemma that the reduction proof job owns: `(* <proc> *)` and
+/// `+ proc; inline. admit.`, the placeholder of an equivalence oracle file (story 103).
+fn placeholder(proc_name: &str) -> Vec<ProofLine> {
+    vec![
+        tactic(format!("(* {proc_name} *)")),
+        bullet("proc; inline. admit."),
+    ]
 }
 
-/// One rung for each alias name: split off the first instruction of both programs (a call or
-/// a sampling) and close it with `closer`.
-fn ladder(closer: &str, sep: &str) -> String {
-    alias_names()
-        .iter()
-        .map(|name| {
-            format!(
-                "{sep}|| (alias{{1}} 1 with ec_fwd; alias{{2}} 1 with ec_fwd;{sep}    \
-                 seq 1 1 : (#pre /\\ ={{{name}}});{sep}    first by {closer})"
-            )
-        })
-        .collect()
-}
-
-/// The oracle-lemma proof of story 97 §4.3, with two additions found on the kem-dem
-/// reductions that story 97 did not prove by hand:
-///
-/// - `try (elim* => *)` after `sp`: once reduction code wrote a state that the invariant reads,
-///   `sp` keeps the old value under an `exists`, and `smt` cannot carry an `exists` over a
-///   mapped call. `elim*` makes it a logical variable.
-/// - When `sim` cannot prove a mapped call (a mapped package that reads a local it did not
-///   write on every path, such as `DEM.d_ENC`'s `c_`), the call's body is walked forward, as
-///   the oracle is: the two bodies are the same code, so only `if`s and samplings remain.
-fn oracle_proof(spec: &SideSpec) -> Vec<ProofLine> {
-    let mut inline = "proc; inline *".to_string();
-    for e in &spec.exclusions {
-        inline.push_str(&format!("\n  -{e}"));
-    }
-    inline.push('.');
-    let closer = if spec.meq.is_empty() {
-        "auto => /#".to_string()
-    } else {
-        let meq = render_expr(&and_all(spec.meq.clone()));
-        let body = format!(
-            "inline *; do ? (sp; try (elim* => *); ((if; first by move=> /#){})); auto => /#",
-            ladder("auto => /#", " ")
-        );
-        format!(
-            "(call (: {meq}); [by sim | by auto => /#])\n        \
-             || (call (: {meq}); [by {body} | by auto => /#])\n        \
-             || (auto => /#)"
-        )
-    };
-    let walk = format!(
-        "do ? (sp; try (elim* => *); (\n     (if; first by move=> /#)\n  \
-         || (rcondt{{2}} 1; first by auto => /#)\n  \
-         || (rcondf{{2}} 1; first by auto => /#){}\n  \
-         || if{{2}})); auto => /#.",
-        ladder(&closer, "\n  ")
-    );
-    vec![tactic(inline), tactic(walk)]
+/// The oracle file `<file_stem>.ec` of oracle `oracle`, holding `lemma`.
+fn oracle_file(
+    input: &LemmaInput<'_>,
+    oracle: &str,
+    file_stem: &str,
+    lemma: EcItem,
+    wrap: impl FnOnce(EcFile) -> ReductionOracleFile,
+) -> ReductionOracleFile {
+    let mut requires = input.requires.to_vec();
+    requires.push(Require {
+        import: true,
+        names: vec![format!("Red_{}_Router", input.stem)],
+    });
+    wrap(EcFile {
+        header: vec![format!(
+            "{file_stem}.ec for theorem `{}`: the oracle lemma of `{oracle}` in the reduction \
+             `{}` — generated by `domino easycrypt`.",
+            input.theorem, input.stem
+        )],
+        requires,
+        items: vec![lemma],
+    })
 }
 
 /// One `+ by conseq <lemma> => /#.` for each oracle; no bullet when there is one oracle.
@@ -481,11 +433,10 @@ pub(super) fn reduction_lemmas(
     for export in &input.router_comp.exports {
         let p = Names::new().mangle(NameKind::Proc, export.name())?;
         let oracle_stem = format!("Red_{stem}_{}", export.name());
-        let mut lemmas = Vec::new();
         for &i in sides {
             let name =
                 lemma_names.mangle(NameKind::Lemma, &format!("{oracle_stem}{}", suffix(i)))?;
-            lemmas.push(EcItem::Lemma(EcLemma {
+            let lemma = EcItem::Lemma(EcLemma {
                 name: name.clone(),
                 binders: vec![],
                 statement: EcExpr::OracleEquiv {
@@ -494,33 +445,23 @@ pub(super) fn reduction_lemmas(
                     inv: Box::new(inv_applied(&inv_names[i], &specs[i])),
                     assumed: vec![],
                 },
-                proof: oracle_proof(&specs[i]),
-            }));
+                proof: placeholder(&p),
+            });
             oracle_lemmas[i].push(name);
+            let file_stem = format!("{oracle_stem}{}", suffix(i));
+            oracle_files.push(oracle_file(input, export.name(), &file_stem, lemma, |f| {
+                ReductionOracleFile {
+                    oracle: format!("{}{}", export.name(), suffix(i)),
+                    proc_name: p.clone(),
+                    invariant: inv_names[i].clone(),
+                    file_name: format!("{file_stem}.ec"),
+                    file: f,
+                }
+            }));
         }
         if shared {
             oracle_lemmas[1] = oracle_lemmas[0].clone();
         }
-        let mut requires = input.requires.to_vec();
-        requires.push(Require {
-            import: true,
-            names: vec![format!("Red_{stem}_Router")],
-        });
-        oracle_files.push(ReductionOracleFile {
-            oracle: export.name().to_string(),
-            file_name: format!("{oracle_stem}.ec"),
-            file: EcFile {
-                header: vec![format!(
-                    "{oracle_stem}.ec for theorem `{}`: the oracle lemma of `{}` in the \
-                     reduction `{}` — generated by `domino easycrypt`.",
-                    input.theorem,
-                    export.name(),
-                    stem
-                )],
-                requires,
-                items: lemmas,
-            },
-        });
         procs.push(p);
     }
 

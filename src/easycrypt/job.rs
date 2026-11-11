@@ -71,7 +71,8 @@ pub fn create_if_absent(path: &Path, text: &str) -> std::io::Result<bool> {
 /// (story 69), which the side-invariant job of the composition owns, or a package lemma file
 /// `PkgInv_<V>_<O>.ec`, `Frame_<V>_<O>.ec` or `PkgInv_<V>_init.ec` (story 76), which the
 /// package-invariant job of the package owns, or `SideInvInit_<C>.ec` (story 77), which the
-/// side-invariant job owns. Every other file, the equivalence's glue
+/// side-invariant job owns, or a reduction oracle file `Red_<L>_<R>_<O>.ec` (story 103), which
+/// the reduction proof job owns. Every other file, the equivalence's glue
 /// `Eq_<L>_<R>.ec`, its `Eq_<L>_<R>_Invariants.ec`, `SideInv_<C>.ec` and `PkgInv_<V>.ec`
 /// included, is a translation file, created when missing.
 pub fn is_oracle_file(exported: &ExportedTheorem, rel: &Path) -> bool {
@@ -90,6 +91,12 @@ pub fn is_oracle_file(exported: &ExportedTheorem, rel: &Path) -> bool {
                 .package_invariants
                 .iter()
                 .flat_map(|p| p.oracle_files.iter().chain(&p.frame_files)),
+        )
+        .chain(
+            exported
+                .reductions
+                .iter()
+                .flat_map(|r| r.oracle_files.iter()),
         )
         .any(|(_, file)| Path::new(file) == rel)
         || exported

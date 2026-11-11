@@ -241,20 +241,39 @@ what is generic, true for all values of the reduction parameters:
   clones, mapped packages with the assumption game's). It relates the parameters only through
   these states, because `init` stores them in the package state.
 - `Red_<L>_<R>_<O>.ec`, one for each exported oracle: the **oracle lemma**
-  `Red_<L>_<R>_<O>`, `Game_<G>.<o> ~ Red_<L>_<R>(Game_<Assm>).<o>`, or `_L` and `_R` in the same
-  file when the sides differ. Until story 103, the proof is the generated ladder of story 97
-  (`docs/research/reduction-proof-script.md`); it has no `admit`.
+  `Red_<L>_<R>_<O>`, `Game_<G>.<o> ~ Red_<L>_<R>(Game_<Assm>).<o>`. When the sides differ, each
+  side's lemma has its own file, `Red_<L>_<R>_<O>_L.ec` with `Red_<L>_<R>_<O>_L` and `_R.ec`
+  with `_R`, so that each file holds one lemma. Translation writes the placeholder of an
+  equivalence oracle file, `(* d_<O> *)` and `+ proc; inline. admit.`, and
+  `domino easycrypt prove` replaces it (story 103, below).
 - `Red_<L>_<R>.ec`: the **run lemma** `run_<L>_<R>` (or `run_<L>_<R>_L` and `_R` when the sides
   use different compositions),
   `equiv[A(Game_<G>).run ~ A(Red_<L>_<R>(Game_<Assm>)).run : ={glob A} /\ inv ==> ={res} /\ inv]`,
   proved by `proc (inv ..) => //.` and one `by conseq <oracle lemma> => /#.` for each oracle. This
   is the only lemma of a reduction that a proposition names.
 
-The name rule of ADR 0013 also covers the oracle files: an oracle called `Router` is rejected.
+The name rule of ADR 0013 also covers the oracle files: with shared lemmas, an oracle called
+`Router` is rejected (its file would be the router file).
 The `domino easycrypt export` report names, for each reduction, the joining file, the run lemma(s),
 the number of oracle files and the number of `admit`s.
 
-Translation runs no EasyCrypt; a proof EasyCrypt does not accept is a translation bug.
+Translation runs no EasyCrypt; a proof EasyCrypt does not accept is a translation bug. After
+`export`, each oracle file has one `admit` (the report's admit count is the number of oracle
+files); the router, the joining file and the proposition files have none.
+
+**The reduction proof job** (story 103, ADR 0023). A reduction hop is a game hop:
+`domino easycrypt prove --gamehop N` on it, or a run without `--gamehop`, which proves the hops in
+order, runs the proof job of `JobKind::Reduction`. For each oracle file it sends
+`proc; inline *.`, then walks the program blind (`docs/proving-algorithm.md` §7.4): `sp k l` with
+the counts of EasyCrypt's goal, the quick close `auto => /#`, `rcondt`/`rcondf`, `if`,
+`if{1}`/`if{2}`, and `seq` at samplings; at a leaf it unfolds `inv_<L>_<R>` (or `_L`/`_R`, by
+the name rule) and splits it into conjuncts. There is no lockstep execution, no solver and no
+side-invariant file. A step that nothing closes is admitted `program-mismatch` (a loop stops the
+walk there); a conjunct that fails is admitted with its reason. `--oracle` (`<O>`, or `<O>_L`/
+`<O>_R`), `--jobs`, `--force` and resume work as for an equivalence, with the records in
+`session/Red_<L>_<R>/` and the pages in `progress/Red_<L>_<R>/`; an interrupted oracle is walked
+again from the start. The overwrite guard of `export` (ADR 0004) lists a proved `Red_*` oracle
+file with its progress.
 
 A reduction inside a hybrid hop is not translated.
 

@@ -648,7 +648,26 @@ mod tests {
             for (name, text) in texts(f) {
                 assert!(!text.contains("RedExp"), "{name}: {text}");
                 assert!(!text.contains("setup"), "{name}: {text}");
-                assert!(!text.contains("admit"), "{name}: {text}");
+            }
+            // story 103: each oracle lemma has the placeholder the proof job replaces, no ladder
+            for (o, proc) in f.oracle_files.iter().zip(["d_PKGEN", "d_PKENC", "d_PKDEC"]) {
+                let text = render_file(&o.file);
+                assert!(
+                    text.contains(&format!(
+                        "proof.\n(* {proc} *)\n+ proc; inline. admit.\nqed."
+                    )),
+                    "{text}"
+                );
+                assert_eq!(text.matches("admit.").count(), 1, "{text}");
+                assert!(!text.contains("alias") && !text.contains("do ?"), "{text}");
+                assert_eq!(o.proc_name, proc);
+                assert_eq!(
+                    o.invariant,
+                    format!("inv_{}", stem.trim_start_matches("Red_"))
+                );
+            }
+            for text in [render_file(&f.file), render_file(&f.router_file)] {
+                assert!(!text.contains("admit"), "{text}");
             }
         }
     }
@@ -745,18 +764,42 @@ mod tests {
                 statement(&proto, "lemma", run)
             );
         }
-        // each oracle file holds the lemmas of both sides
-        let oracle = render_file(&f.oracle_files[0].file);
+        // story 103: each side's oracle lemma has a file of its own, one lemma for the job
+        let names: Vec<(&str, &str, &str)> = f
+            .oracle_files
+            .iter()
+            .map(|o| {
+                (
+                    o.oracle.as_str(),
+                    o.file_name.as_str(),
+                    o.invariant.as_str(),
+                )
+            })
+            .collect();
+        let (l, r) = (format!("inv_{stem}_L"), format!("inv_{stem}_R"));
+        let files = [
+            format!("Red_{stem}_UsefulOracle_L.ec"),
+            format!("Red_{stem}_UsefulOracle_R.ec"),
+            format!("Red_{stem}_UselessOracle_L.ec"),
+            format!("Red_{stem}_UselessOracle_R.ec"),
+        ];
         assert_eq!(
-            f.oracle_files[0].file_name,
-            format!("Red_{stem}_UsefulOracle.ec")
+            names,
+            vec![
+                ("UsefulOracle_L", files[0].as_str(), l.as_str()),
+                ("UsefulOracle_R", files[1].as_str(), r.as_str()),
+                ("UselessOracle_L", files[2].as_str(), l.as_str()),
+                ("UselessOracle_R", files[3].as_str(), r.as_str()),
+            ]
         );
+        let oracle = render_file(&f.oracle_files[0].file);
         assert!(
             oracle.contains(&format!("lemma Red_{stem}_UsefulOracle_L :")),
             "{oracle}"
         );
+        assert!(!oracle.contains("_UsefulOracle_R"), "{oracle}");
         assert!(
-            oracle.contains(&format!("lemma Red_{stem}_UsefulOracle_R :")),
+            oracle.contains("(* d_UsefulOracle *)\n+ proc; inline. admit."),
             "{oracle}"
         );
         for (name, text) in texts(f) {

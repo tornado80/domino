@@ -294,6 +294,9 @@ pub(super) enum Judgement {
     /// imports, walked along the package tree (symbolic-execution story 29). As [`Self::Hoare`],
     /// but its program has no router, and each import call is an open call (ADR 0017).
     Package,
+    /// A reduction's oracle lemma (story 103, ADR 0023), `equiv[…]` as [`Self::Equiv`], walked
+    /// blind from `proc; inline *.`: there is no joint tree and no router prelude.
+    Reduction,
 }
 
 impl Judgement {
@@ -301,14 +304,14 @@ impl Judgement {
     /// `hoare` judgement, which has one program.
     fn side(self, side: u8) -> String {
         match self {
-            Judgement::Equiv => format!("{{{side}}}"),
+            Judgement::Equiv | Judgement::Reduction => format!("{{{side}}}"),
             Judgement::Hoare | Judgement::Package => String::new(),
         }
     }
 
     /// Whether the judgement is about one program: a `hoare` judgement.
     fn one_program(self) -> bool {
-        self != Judgement::Equiv
+        matches!(self, Judgement::Hoare | Judgement::Package)
     }
 }
 
@@ -1417,7 +1420,7 @@ impl Prover<'_> {
     /// invariant of a side-invariant lemma.
     fn whole_claim(&self) -> &'static str {
         match self.judgement {
-            Judgement::Equiv => "equal-output+invariant",
+            Judgement::Equiv | Judgement::Reduction => "equal-output+invariant",
             Judgement::Hoare => "side-invariant",
             Judgement::Package => "package-invariant",
         }
@@ -1662,7 +1665,7 @@ impl Prover<'_> {
         // §3.6: a claim that fails in Domino is not worth EasyCrypt's time
         if let Some(pair) = tree.pairs_below(idx).next() {
             let all_fail = tree.pairs_below(idx).all(|p| match self.judgement {
-                Judgement::Equiv => {
+                Judgement::Equiv | Judgement::Reduction => {
                     pair_view(p, &Part::EqualOutput) == DominoView::Fails
                         && pair_view(p, &Part::Invariant) == DominoView::Fails
                 }
@@ -1857,7 +1860,7 @@ impl Prover<'_> {
                 return Ok(false);
             }
             // a `hoare` side goal is a program judgement; `close_side_goal` reduces it
-            if self.judgement == Judgement::Equiv
+            if !self.judgement.one_program()
                 && !self
                     .front()
                     .is_some_and(|g| goals::is_ambient(g) || goals::is_skip_pair(g))
@@ -2190,7 +2193,7 @@ impl Prover<'_> {
     fn reduce_leaf(&mut self, premise: &str) -> R<bool> {
         let before = self.count();
         let sentence = match self.judgement {
-            Judgement::Equiv => format!("auto => &1 &2 {premise}."),
+            Judgement::Equiv | Judgement::Reduction => format!("auto => &1 &2 {premise}."),
             Judgement::Hoare | Judgement::Package => format!("auto => &hr {premise} /=."),
         };
         let reduced = self.attempt(&[&sentence], Want::Head, |p| {
@@ -2584,21 +2587,26 @@ impl Prover<'_> {
     }
 
     fn oracle_inner(&mut self, align: impl FnOnce(&Goal) -> Vec<String>) -> R<()> {
-        if !self.send("proc; inline.", Want::Full)? {
+        let prelude = self.prelude_sentence();
+        if !self.send(prelude, Want::Full)? {
             self.admit(
                 AdmitReason::ProgramMismatch,
                 "N0",
-                "proc; inline.",
+                prelude,
                 DominoView::NotApplicable,
             )?;
             return Ok(());
+        }
+        // a reduction's oracle: the blind walk from the root, as story 101 proved them by hand
+        if self.judgement == Judgement::Reduction {
+            return self.prove_blind(0, BLIND_BUDGET);
         }
         self.mismatches = self.front().map(align).unwrap_or_default();
         match self.judgement {
             Judgement::Hoare => return self.hoare_prelude(),
             // a package procedure has no router: the package tree begins at its first statement
             Judgement::Package => return self.prove_node(0),
-            Judgement::Equiv => {}
+            Judgement::Equiv | Judgement::Reduction => {}
         }
         // the router prelude, by construction: `sp`, `if`, then the condition, the guarded body
         // (where lockstep begins) and the case where both sides already aborted
@@ -2626,6 +2634,16 @@ impl Prover<'_> {
             }
             p.close_side_goal(0, "both-aborted", true)
         })
+    }
+
+    /// The first sentence of an oracle's proof: `proc; inline.`, which keeps the router's calls
+    /// to the packages for the tree to follow, or `proc; inline *.` for a reduction's oracle,
+    /// whose blind walk reads the whole program (story 101).
+    fn prelude_sentence(&self) -> &'static str {
+        match self.judgement {
+            Judgement::Reduction => "proc; inline *.",
+            Judgement::Equiv | Judgement::Hoare | Judgement::Package => "proc; inline.",
+        }
     }
 
     /// The router prelude of a side-invariant lemma (story 69): `sp`, then `if.` on
@@ -2768,6 +2786,9 @@ impl Prover<'_> {
         admit_mismatch(self)
     }
 }
+
+/// The step budget of a blind walk from the root of a reduction's oracle (story 103).
+const BLIND_BUDGET: usize = 64;
 
 /// When a leaf that starts being split by meaning at `now` runs out of time: `None` when the
 /// user gave no leaf budget. A budget of zero is a deadline of `now`.

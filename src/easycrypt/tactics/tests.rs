@@ -4935,9 +4935,9 @@ pub(super) mod side_invariant_jobs {
         assert!(result.equivalences.is_empty() && result.side_invariants.is_empty());
         assert_eq!(result.unproved_side_invariants, ["Game"]);
         assert!(
-            result.render().contains(
-                "side invariants of Game are not proved: run prove --game Game first"
-            ),
+            result
+                .render()
+                .contains("side invariants of Game are not proved: run prove --game Game first"),
             "{}",
             result.render()
         );
@@ -6413,4 +6413,252 @@ fn an_unfold_of_a_deep_premise_is_sent_and_unfolds() {
         unfolded = Some(p.unfold_premise("hpre").unwrap());
     });
     assert_eq!(unfolded, Some(true));
+}
+
+/// Story 103: the reduction proof job, without EasyCrypt.
+mod reduction_jobs {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::project::{DirectoryFiles, DirectoryProject};
+    use crate::writers::easycrypt::export::{export_theorem, ExportedTheorem};
+
+    const KEM_DEM: &str = "example-projects/kem-dem/kem-dem-cca-ssp";
+    const FIRST: &str =
+        "Red_Game_MOD_CCA_PKE_Real_KEM_Real_DEM_Game_MOD_CCA_PKE_Ideal_KEM_Real_DEM";
+
+    fn project() -> DirectoryProject<'static> {
+        let dir = PathBuf::from(KEM_DEM);
+        let files = Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
+        DirectoryProject::load(dir, files).unwrap()
+    }
+
+    fn exported() -> ExportedTheorem {
+        let project = project();
+        export_theorem(project.get_theorem("kem_dem_cca_ssp").unwrap(), &project).unwrap()
+    }
+
+    fn hop(n: usize) -> TacticsOptions {
+        TacticsOptions {
+            proofstep: Some(n),
+            ..TacticsOptions::default()
+        }
+    }
+
+    #[test]
+    fn gamehop_on_a_reduction_selects_a_reduction_job_that_waits_for_no_side_invariant_file() {
+        let exported = exported();
+        // an empty output directory: no side-invariant file is on disk
+        let out = tempfile::tempdir().unwrap();
+        let plan = plan_run(&exported, out.path(), &hop(1)).unwrap();
+        assert!(plan.equivalences.is_empty() && plan.unproved.is_empty());
+        let jobs: Vec<_> = hop_jobs(&plan, &exported).collect();
+        let [(report, kind)] = jobs.as_slice() else {
+            panic!("one job: {jobs:?}");
+        };
+        assert_eq!(*kind, JobKind::Reduction(&exported.reductions[0]));
+        // its records, locks and pages are under `Red_<L>_<R>`
+        assert_eq!(report.proof_file, format!("{FIRST}.ec"));
+        assert_eq!(report.proofstep, 1);
+        assert_eq!(
+            report.oracle_files,
+            ["PKGEN", "PKENC", "PKDEC"].map(|o| (o.to_string(), format!("{FIRST}_{o}.ec")))
+        );
+        assert_eq!(
+            crate::easycrypt::job::progress_dir(
+                out.path(),
+                report.proof_file.trim_end_matches(".ec")
+            ),
+            out.path().join("progress").join(FIRST)
+        );
+        // the equivalence hop selects no reduction
+        let plan = plan_run(&exported, out.path(), &hop(0)).unwrap();
+        assert!(plan.reductions.is_empty());
+    }
+
+    #[test]
+    fn a_whole_theorem_run_proves_the_hops_in_order() {
+        let exported = exported();
+        let out = tempfile::tempdir().unwrap();
+        let plan = plan_run(&exported, out.path(), &TacticsOptions::default()).unwrap();
+        let kinds: Vec<(usize, bool)> = hop_jobs(&plan, &exported)
+            .map(|(eq, kind)| (eq.proofstep, matches!(kind, JobKind::Reduction(_))))
+            .collect();
+        assert_eq!(kinds, [(0, false), (1, true), (2, true), (3, true)]);
+    }
+
+    #[test]
+    fn the_setup_and_the_invariant_come_from_the_reduction_report() {
+        let project = project();
+        let theorem = project.get_theorem("kem_dem_cca_ssp").unwrap();
+        let exported = export_theorem(theorem, &project).unwrap();
+        let (theorem_ec, _) = EasyCryptTransform.transform_theorem(theorem).unwrap();
+        let red = &exported.reductions[0];
+        let setup = crate::easycrypt::check::reduction_setup(&theorem_ec, red).unwrap();
+        assert_eq!(
+            setup.oracles,
+            ["PKGEN", "PKENC", "PKDEC"].map(|o| (o.to_string(), format!("d_{o}")))
+        );
+        let op = reduction_invariant_op(red, "PKENC");
+        assert_eq!(op.name, format!("inv_{}", FIRST.trim_start_matches("Red_")));
+        assert!(op.claim.is_none() && op.relation.is_none());
+    }
+
+    #[test]
+    fn resume_skips_an_oracle_that_its_session_record_holds_as_proved() {
+        let exported = exported();
+        let report = reduction_job_report(&exported.reductions[0]);
+        let oracles: Vec<String> = report.oracle_files.iter().map(|(o, _)| o.clone()).collect();
+        let out = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(session_dir(out.path(), &report.proof_file)).unwrap();
+        let mut done = OracleRecord::new("PKGEN", OracleStatus::Done);
+        done.script = Some("+ proc; inline *.\n  auto => /#.\n".to_string());
+        let record = SessionRecord::new("kem_dem_cca_ssp", "L", "R", vec![done]);
+        std::fs::write(
+            oracle_record_path(out.path(), &report.proof_file, "PKGEN"),
+            record.to_json(),
+        )
+        .unwrap();
+        // `--oracle PKGEN`: proved, skipped
+        let only = TacticsOptions {
+            oracle: Some("PKGEN".into()),
+            ..hop(1)
+        };
+        assert!(matches!(
+            plan_job(&report, out.path(), &only, &oracles).unwrap(),
+            JobPlan::Skip { .. }
+        ));
+        // the whole job: resumed, PKGEN kept as done, the others still to prove
+        let JobPlan::Prove { prior: Some(prior) } =
+            plan_job(&report, out.path(), &hop(1), &oracles).unwrap()
+        else {
+            panic!("a resumed job");
+        };
+        assert_eq!(prior.oracle("PKGEN").unwrap().status, OracleStatus::Done);
+        assert_ne!(prior.oracle("PKENC").unwrap().status, OracleStatus::Done);
+    }
+
+    fn backend() -> crate::util::smtsolver::process::IncrementalCvc5Backend {
+        // a reduction job runs no solver
+        crate::util::smtsolver::process::IncrementalCvc5Backend
+    }
+
+    /// Compiles `file` of `dir` on its own: `require` does not check a required file's proofs.
+    fn compiles(dir: &Path, file: &str) {
+        let output = std::process::Command::new(crate::easycrypt::session::locate_binary())
+            .args(["compile", "-no-eco", "-I"])
+            .arg(dir)
+            .arg(file)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{file}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// The tactic lines of a walked proof, without bullets and the placeholder's comment.
+    fn tactic_lines(text: &str) -> Vec<String> {
+        let proof =
+            &text[text.find("proof.").unwrap() + "proof.".len()..text.find("qed.").unwrap()];
+        proof
+            .lines()
+            .map(|l| {
+                l.trim()
+                    .trim_start_matches(['+', '-', '*'])
+                    .trim()
+                    .to_string()
+            })
+            .filter(|l| !l.is_empty() && !l.starts_with("(*"))
+            .collect()
+    }
+
+    /// Story 103 §4: `prove --gamehop 0` on `reduction-consts` closes the oracle lemma with only
+    /// the blind walk's steps, and then the whole tree compiles with no `admit`.
+    #[test]
+    fn prove_closes_the_reduction_consts_oracle_lemma_and_the_tree_compiles() {
+        if !crate::easycrypt::session::json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let dir = PathBuf::from("testdata/easycrypt/reduction-consts");
+        let files = Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
+        let project = DirectoryProject::load(dir, files).unwrap();
+        let theorem = project.get_theorem("RedConsts").unwrap();
+        let exported = export_theorem(theorem, &project).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        crate::writers::easycrypt::export::write_files(out.path(), &exported.files).unwrap();
+        let result = run_tactics(
+            theorem,
+            &project,
+            &exported,
+            out.path(),
+            &backend(),
+            &hop(0),
+        )
+        .unwrap();
+        assert_eq!(result.equivalences.len(), 1, "{}", result.render());
+        assert_eq!(result.admit_count(), 0, "{}", result.render());
+        let red = &exported.reductions[0];
+        let (_, oracle_file) = &red.oracle_files[0];
+        let text = std::fs::read_to_string(out.path().join(oracle_file)).unwrap();
+        let lines = tactic_lines(&text);
+        assert_eq!(lines[0], "proc; inline *.", "{text}");
+        for line in &lines[1..] {
+            let allowed = ["sp ", "if", "rcondt{", "rcondf{", "seq ", "auto"];
+            assert!(
+                allowed.iter().any(|a| line.starts_with(a)),
+                "{line} in:\n{text}"
+            );
+        }
+        let mut order = vec![
+            red.router_file.clone(),
+            oracle_file.clone(),
+            red.file.clone(),
+        ];
+        order.extend(exported.propositions.iter().map(|p| p.file.clone()));
+        for file in &order {
+            let text = std::fs::read_to_string(out.path().join(file)).unwrap();
+            assert!(!text.contains("admit"), "{file}: {text}");
+            compiles(out.path(), file);
+        }
+    }
+
+    /// Story 103 §4: `prove --gamehop 1 --oracle PKDEC` on the first kem-dem reduction closes
+    /// that oracle with no `admit`, and leaves the other oracles' placeholders.
+    #[test]
+    fn prove_closes_one_oracle_of_the_first_kem_dem_reduction() {
+        if !crate::easycrypt::session::json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let project = project();
+        let theorem = project.get_theorem("kem_dem_cca_ssp").unwrap();
+        let exported = export_theorem(theorem, &project).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        crate::writers::easycrypt::export::write_files(out.path(), &exported.files).unwrap();
+        let options = TacticsOptions {
+            oracle: Some("PKDEC".into()),
+            ..hop(1)
+        };
+        let result = run_tactics(
+            theorem,
+            &project,
+            &exported,
+            out.path(),
+            &backend(),
+            &options,
+        )
+        .unwrap();
+        assert_eq!(result.admit_count(), 0, "{}", result.render());
+        let pkdec = std::fs::read_to_string(out.path().join(format!("{FIRST}_PKDEC.ec"))).unwrap();
+        assert!(!pkdec.contains("admit"), "{pkdec}");
+        assert!(pkdec.contains("proc; inline *."), "{pkdec}");
+        compiles(out.path(), &format!("{FIRST}_Router.ec"));
+        compiles(out.path(), &format!("{FIRST}_PKDEC.ec"));
+        let pkgen = std::fs::read_to_string(out.path().join(format!("{FIRST}_PKGEN.ec"))).unwrap();
+        assert!(pkgen.contains("+ proc; inline. admit."), "{pkgen}");
+    }
 }

@@ -131,12 +131,28 @@ pub struct ReductionReport {
     pub file: String,
     /// `Red_<L>_<R>_Router.ec`.
     pub router_file: String,
-    /// `(oracle, Red_<L>_<R>_<O>.ec)` for each exported oracle, in the export order.
+    /// `(oracle, Red_<L>_<R>_<O>.ec)` for each oracle lemma, in the export order: the files the
+    /// reduction proof job owns (story 103). The oracle is `<O>`, or `<O>_L`/`<O>_R` when the
+    /// sides do not share their lemmas.
     pub oracle_files: Vec<(String, String)>,
+    /// What the proof job needs of each oracle lemma, in the order of `oracle_files`.
+    pub oracle_lemmas: Vec<ReductionOracleLemma>,
     /// `run_<L>_<R>`, or `run_<L>_<R>_L` and `run_<L>_<R>_R`.
     pub run_lemmas: Vec<String>,
-    /// The number of `admit`s in the reduction's files.
+    /// The number of `admit`s in the reduction's files: one for each oracle lemma after
+    /// `export`, until `prove` runs.
     pub admit_count: usize,
+}
+
+/// One oracle lemma of a reduction, as the reduction proof job sees it (story 103).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReductionOracleLemma {
+    /// The name in `ReductionReport::oracle_files`.
+    pub oracle: String,
+    /// The procedure, `d_<O>`: the marker of the lemma's placeholder.
+    pub proc_name: String,
+    /// The invariant operator of the lemma, `inv_<L>_<R>` (or `_L`/`_R`).
+    pub invariant: String,
 }
 
 /// One proposition's lemma file (story 100): `Prop_<Name>.ec`.
@@ -406,6 +422,15 @@ pub fn export_theorem_observed(
                 .oracle_files
                 .iter()
                 .map(|o| (o.oracle.clone(), o.file_name.clone()))
+                .collect(),
+            oracle_lemmas: rf
+                .oracle_files
+                .iter()
+                .map(|o| ReductionOracleLemma {
+                    oracle: o.oracle.clone(),
+                    proc_name: o.proc_name.clone(),
+                    invariant: o.invariant.clone(),
+                })
                 .collect(),
             run_lemmas: {
                 let mut names = rf.run_lemmas.to_vec();
@@ -812,13 +837,16 @@ mod tests {
             }
             compile(&base, &format!("{base}/{}", eq.proof_file));
         }
-        // each file on its own: `require` does not check a required file's proofs again
+        // each file on its own: `require` does not check a required file's proofs again. An
+        // oracle file holds the one placeholder the proof job replaces (story 103); the router
+        // and the joining file are complete.
         for red in &exported.reductions {
-            let oracles = red.oracle_files.iter().map(|(_, f)| f);
-            for file in std::iter::once(&red.router_file)
-                .chain(oracles)
-                .chain([&red.file])
-            {
+            for (_, file) in &red.oracle_files {
+                let text = &exported.files[Path::new(file)];
+                assert_eq!(text.matches("admit.").count(), 1, "{file}: {text}");
+                compile(&base, &format!("{base}/{file}"));
+            }
+            for file in [&red.router_file, &red.file] {
                 let text = &exported.files[Path::new(file)];
                 assert!(!text.contains("admit"), "{file}: {text}");
                 compile(&base, &format!("{base}/{file}"));
@@ -1526,20 +1554,21 @@ mod tests {
         assert_tree_compiles(&exported, "hello-world-proposition");
     }
 
+    /// Story 103: with `_L`/`_R` lemmas, an oracle called `Router` gets `.._Router_L.ec` and
+    /// `.._Router_R.ec`, which do not meet the router file. With shared lemmas its file would be
+    /// the router file, which the name rule rejects (`LemmaFileCollision`).
     #[test]
-    fn the_name_rule_rejects_a_reduction_oracle_called_router() {
+    fn a_split_reduction_oracle_called_router_does_not_meet_the_router_file() {
         let dir = hello_world_with_oracle("Router");
-        let err = export(dir.path().to_str().unwrap(), "Proof").unwrap_err();
-        let file = "Red_big_composition_medium_composition_more_oracles_Router.ec";
-        assert!(
-            matches!(&err, EcExportError::LemmaFileCollision { file: f, .. } if f == file),
-            "{err}"
-        );
-        let message = err.to_string();
-        assert!(
-            message.contains(&format!("the file `{file}` of the export")),
-            "{message}"
-        );
+        let exported = export(dir.path().to_str().unwrap(), "Proof").unwrap();
+        let stem = "Red_big_composition_medium_composition_more_oracles";
+        for file in [
+            format!("{stem}_Router.ec"),
+            format!("{stem}_Router_L.ec"),
+            format!("{stem}_Router_R.ec"),
+        ] {
+            assert!(exported.files.contains_key(Path::new(&file)), "{file}");
+        }
     }
 
     #[test]
@@ -1556,8 +1585,13 @@ mod tests {
                 file: format!("Red_{hop}.ec"),
                 router_file: format!("Red_{hop}_Router.ec"),
                 oracle_files: vec![("Query".to_string(), format!("Red_{hop}_Query.ec"))],
+                oracle_lemmas: vec![ReductionOracleLemma {
+                    oracle: "Query".to_string(),
+                    proc_name: "d_Query".to_string(),
+                    invariant: format!("inv_{hop}"),
+                }],
                 run_lemmas: vec![format!("run_{hop}")],
-                admit_count: 0,
+                admit_count: 1,
             }
         );
         for file in [

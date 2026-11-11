@@ -78,7 +78,7 @@ impl<'a> FixedFiles<'a> {
         let selected = |oracle: &str| job.options.oracle.as_deref().is_none_or(|o| o == oracle);
         let every = job.options.oracle.is_none();
         match job.kind {
-            JobKind::Equivalence => None,
+            JobKind::Equivalence | JobKind::Reduction(_) => None,
             JobKind::PackageInvariants(_) => {
                 let pkg = job
                     .exported

@@ -157,7 +157,8 @@ pub(crate) struct EcExport {
 pub(crate) enum EasycryptCommand {
     /// Translate a theorem to an EasyCrypt project; runs no EasyCrypt.
     Export(EcExport),
-    /// Prove as much of each oracle of an equivalence as possible against a live EasyCrypt.
+    /// Prove as much of each oracle lemma of an equivalence or a reduction as possible against
+    /// a live EasyCrypt.
     Prove(EcProve),
     /// Run lockstep execution on the EasyCrypt listing of every oracle.
     Debug(EcDebug),
@@ -173,7 +174,10 @@ pub(crate) struct EcProve {
     /// Name of the theorem to prove.
     #[clap(long)]
     pub(crate) theorem: String,
-    /// Only this game hop (as printed by `domino gamehops`). Without it the game hops run
+    /// Only this game hop (as printed by `domino gamehops`): an equivalence, or a reduction,
+    /// whose oracle lemmas `Red_<L>_<R>_<O>.ec` are walked blind (no lockstep execution, no
+    /// side-invariant files; records and pages under `session/Red_<L>_<R>/` and
+    /// `progress/Red_<L>_<R>/`). Without it the game hops run
     /// one after another in this process; to run them at once start one process each. Its
     /// equivalence does not start when the side-invariant files `SideInv_<C>.ec` and
     /// `SideInv_<C>_<O>.ec` of one of its compositions are missing (a file with admits counts):
@@ -197,10 +201,11 @@ pub(crate) struct EcProve {
     pub(crate) package: Option<String>,
     /// Only this exported oracle; the rest keep what their session records hold, or
     /// `+ proc; inline. admit.`. Each oracle has its own lock, so jobs on different oracles of
-    /// one equivalence can run at once.
+    /// one equivalence can run at once. A reduction whose sides have their own lemmas names
+    /// them `<O>_L` and `<O>_R`.
     #[clap(long)]
     pub(crate) oracle: Option<String>,
-    /// How many oracles of an equivalence are proved at once, each in an EasyCrypt process of
+    /// How many oracles of an equivalence or a reduction are proved at once, each in an EasyCrypt process of
     /// its own (story 68). Each worker has its own page and transcript under
     /// `progress/Eq_<L>_<R>/<O>/`.
     #[clap(long, default_value_t = 1)]
@@ -636,7 +641,11 @@ mod tests {
             "easycrypt debug --theorem T --game C --package P",
         ] {
             let err = parse(&words(line)).expect_err(line);
-            assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict, "{line}");
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{line}"
+            );
         }
     }
 
@@ -663,7 +672,13 @@ mod tests {
                 return Some(word);
             }
         }
-        let flags = ["--proof", "--path", "--side-inv", "--pkg-inv", "--debug-timeout"];
+        let flags = [
+            "--proof",
+            "--path",
+            "--side-inv",
+            "--pkg-inv",
+            "--debug-timeout",
+        ];
         flags.into_iter().find(|flag| {
             text.match_indices(flag).any(|(at, _)| {
                 let next = text[at + flag.len()..].chars().next();

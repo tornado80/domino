@@ -31,7 +31,9 @@ use crate::util::smtsolver::SmtSolverBackend;
 use crate::writers::easycrypt::export::{EquivalenceReport, ExportedTheorem};
 use crate::writers::easycrypt::progress::{ExportObserver, JobProgress, ProgressBoard};
 
-use super::super::check::{equivalence_setup, pkg_setup, side_setup, CheckError, EquivalenceSetup};
+use super::super::check::{
+    equivalence_setup, pkg_setup, reduction_setup, side_setup, CheckError, EquivalenceSetup,
+};
 use super::super::job::{
     create_if_absent, ensure_translation_files, oracle_lock_path, oracle_record_path, progress_dir,
     LiveJob, LockError, OracleStatus, ProofLock, SessionRecord,
@@ -114,6 +116,7 @@ where
         JobKind::Equivalence => equivalence_setup(job.theorem_ec, eq)?,
         JobKind::SideInvariants(c) => side_setup(job.theorem_ec, c)?,
         JobKind::PackageInvariants(p) => pkg_setup(job.theorem_ec, p)?,
+        JobKind::Reduction(red) => reduction_setup(job.theorem_ec, red)?,
     };
     check_wanted_oracle(job, &setup)?;
     let names: Vec<String> = setup.oracles.iter().map(|(n, _)| n.clone()).collect();

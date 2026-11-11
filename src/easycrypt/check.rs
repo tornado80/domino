@@ -20,7 +20,7 @@ use crate::debug::ir::InlinedOracle;
 use crate::theorem::Theorem;
 use crate::transforms::theorem_transforms::EasyCryptTransform;
 use crate::transforms::TheoremTransform;
-use crate::writers::easycrypt::export::{EquivalenceReport, ExportedTheorem};
+use crate::writers::easycrypt::export::{EquivalenceReport, ExportedTheorem, ReductionReport};
 use crate::writers::easycrypt::game::router_module_and_flag;
 use crate::writers::easycrypt::lower::inline_oracle_ec;
 use crate::writers::easycrypt::names::{NameKind, Names};
@@ -298,6 +298,27 @@ pub(crate) fn side_setup<'t>(
     if inst.game().invariants.is_empty() {
         setup.oracles.clear();
     }
+    Ok(setup)
+}
+
+/// What the reduction proof job of `red` needs (story 103): the setup of the hop's two game
+/// instances, whose oracles are the reduction's oracle lemmas, each with its procedure. The job
+/// reads only the oracles: a reduction's lemma is walked blind, with no listing to align.
+pub(crate) fn reduction_setup<'t>(
+    theorem_ec: &'t Theorem<'_>,
+    red: &ReductionReport,
+) -> Result<EquivalenceSetup<'t>, CheckError> {
+    let inst = |name: &str| {
+        theorem_ec
+            .find_game_instance(name)
+            .expect("an exported reduction names game instances of its theorem")
+    };
+    let mut setup = setup_of(inst(&red.left_name), inst(&red.right_name))?;
+    setup.oracles = red
+        .oracle_lemmas
+        .iter()
+        .map(|o| (o.oracle.clone(), o.proc_name.clone()))
+        .collect();
     Ok(setup)
 }
 
