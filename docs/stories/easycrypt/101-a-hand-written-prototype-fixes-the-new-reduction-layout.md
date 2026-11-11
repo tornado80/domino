@@ -68,9 +68,9 @@ Record in `docs/research/reduction-proof-script.md` (a new section that replaces
 
 ## 4. Tests first
 
-- [ ] Each prototype directory compiles with `easycrypt compile`, with no `admit` (by hand; the
+- [x] Each prototype directory compiles with `easycrypt compile`, with no `admit` (by hand; the
       compile tests of story 102 take over).
-- [ ] The note lists each lemma kind with its script.
+- [x] The note lists each lemma kind with its script.
 
 ## 5. Rejected alternatives
 
@@ -79,5 +79,5 @@ Record in `docs/research/reduction-proof-script.md` (a new section that replaces
 
 ## 6. Acceptance criteria
 
-- [ ] The three cases of §3 compile.
-- [ ] The note answers the leaf question and lists every difference from the walk.
+- [x] The three cases of §3 compile.
+- [x] The note answers the leaf question and lists every difference from the walk.

@@ -1,5 +1,10 @@
 # The proof script of a reduction (story 97)
 
+> **ADR 0023 changes the layout.** Sections 3 to 5 describe the layout of ADR 0022 (`B` with
+> `setup`, `RedExp`, the ladder). For the layout of ADR 0023 (router file, one file for each
+> oracle, run lemma, adversaries in the proposition file, the blind walk) read section 8, which
+> replaces them. Sections 6 and 7 stay true for what they say about the map.
+
 **Status:** found by hand on two reductions, both compile with EasyCrypt r2026.09 with no
 `admit`:
 
@@ -329,3 +334,234 @@ The oracle-lemma script is identical. The differences:
   to try.
 - The hand-written files keep EasyCrypt's own warnings about uninitialized locals of the
   cloned packages (`DEM.d_ENC -> [c_]`); they come from the packages, not the reduction file.
+
+## 8. The layout without an experiment (story 101, ADR 0023)
+
+**Status:** hand-written on three fixtures. Each file compiles on its own with EasyCrypt r2026.09
+and has no `admit`:
+
+| Case | Directory under `testdata/easycrypt/reduction-prototype/layout/` | What it shows |
+|---|---|---|
+| kem-dem-cca-ssp, first reduction | `kem-dem/` | one adversary, empty suffix, merged `equiv`, oracle lemmas with samplings |
+| hello-world | `hello-world/` | two compositions: `run_.._L`/`_R`, `equiv_.._L`/`_R` with literals |
+| reduction-consts | `reduction-consts/` | a path that fixes `b`: `B_.._b_false` and `B_.._b_true`, each with its merged `equiv` |
+
+`compile.sh` in that directory exports the fixture with `domino`, replaces the exported `Red_*`
+and `Prop_*` files with the prototype, and compiles every prototype file in dependency order.
+**Compile each file, not only the last one:** `require` does not check the proofs of a required
+file again. A broken oracle file compiled fine when only `Prop_*.ec` was compiled.
+
+None of the fixtures has a proposition, except kem-dem's `Main` (three reductions). Each
+prototype therefore has its own small proposition file. Its header says which path it stands for.
+
+### 8.1 The files
+
+| File | Holds |
+|---|---|
+| `Red_<H>_Router.ec` | the clones, the import adapters, `Red_<H>(O)`, `inv_<H>` (or `inv_<H>_L`/`_R`) |
+| `Red_<H>_<O>.ec` | the oracle lemma `Red_<H>_<O>`, or `Red_<H>_<O>_L` and `_R` when the sides use different compositions (both in the one file) |
+| `Red_<H>.ec` | the section with `declare module A`, `run_<H>` (or `run_<H>_L`/`_R`) |
+| `Prop_<Name>.ec` | `B_<H><s>`, `equiv_<H><s>` (or `_L`/`_R`), `bound_<H><s>`, the proposition lemma |
+
+`<H>` is `<L>_<R>`. The router file starts as the old reduction file: `require import AllCore
+Distr FMap Int IntDiv Types.` and `require Interfaces <reduction packages' Pkg_*> Comp_<G..>
+Comp_<Assm..>.`. The other `Red_*` files `require Interfaces Comp_..` and `require import
+Red_<H>_Router.` (and `Red_<H>.ec` also `require import` of each oracle file), so the router's
+names are unqualified there. The proposition file only `require`s (no `import`) and qualifies
+every name, because the `Cloned_Pkg_*` names of two reductions collide.
+
+### 8.2 The invariant (router file)
+
+As section 4.1 without C3:
+
+```
+op inv_<H>[_L|_R] (game_abort red_abort assm_abort : bool)
+  (x0_l : glob Comp_<G>.Cloned_Pkg_<Inst>.<P>) (x0_r : glob <right module>) ... : bool =
+     game_abort = red_abort
+  /\ (assm_abort => red_abort)
+  /\ x0_l = x0_r ... .
+```
+
+The constants that the reduction packages read are in the packages' states (`init` stores them),
+so the C4 pairs relate them. Nothing outside the router file names the operator except the
+oracle files and `Red_<H>.ec`.
+
+### 8.3 The oracle lemma (one file per oracle; story 103 generates the proof)
+
+```
+lemma Red_<H>_<O>[_L|_R] : equiv[Comp_<G>.Game_<G>.d_<O> ~ Red_<H>(Comp_<Assm>.Game_<Assm>).d_<O> :
+      ={arg} /\ inv_<H> <the applied arguments, as in section 4.1 without C3>
+      ==> ={res} /\ inv_<H> <the same>].
+proof.
+proc; inline *.
+<the blind walk>
+qed.
+```
+
+`inline *` inlines everything, the mapped packages included. Story 97 had to keep them (the
+ladder used `call` with `MEQ`); the walk does not, because the invariant's C4 conjuncts carry the
+mapped packages' states and the leaves see their code.
+
+The walk, as `blind_walk.py` wrote it (section 7.4 of `docs/proving-algorithm.md`). On each goal:
+quick close `auto => /#.`; `sp k l.` with `k`, `l` the leading assignments of each side; for a
+side at an `if`, side 1 first, `rcondt{i} ^if; 1: auto => /#.` then `rcondf`; both at an `if`:
+`if.`, the condition closed by `auto => /#.`, then both arms; both at a sampling:
+`seq 1 1 : (#pre /\ x{1} = y{2}); 1: auto => /#.`. A step that opens several goals writes one
+bullet `+` for each. Examples:
+
+- reduction-consts, `Query` (no sampling): `proc; inline *.` then `auto => /#.`. The quick close
+  at the root closes the whole lemma.
+- kem-dem, `PKDEC` and hello-world, `UselessOracle`: the same, one line.
+- kem-dem, `PKGEN` (one sampling): 15 lines. The sampling needs no `seq`: the quick close
+  `auto => /#.` in the arm that holds it closes it with `rnd`.
+
+  ```
+  sp 1 1.
+  if.
+  + auto => /#.
+  + sp 1 1.
+    if.
+    + auto => /#.
+    + sp 1 1.
+      rcondt{2} ^if; 1: auto => /#.
+      sp 0 1.
+      if.
+      + auto => /#.
+      + auto => /#.
+      + auto => /#.
+    + auto => /#.
+  + auto => /#.
+  ```
+
+- kem-dem, `PKENC` (one sampling followed by `if`s whose conditions differ between the sides):
+  the only proof that needs `seq 1 1 : (#pre /\ r6{1} = r6{2}); 1: auto => /#.`, then
+  `rcondt{1}`, `rcondt{2}`, `if.` (34 lines).
+- hello-world, `UsefulOracle` `_L` and `_R`: `sp 1 1. if. + auto => /#. + sp 4 2.
+  rcondt{2} ^if; 1: auto => /#. auto => /#. + auto => /#.` (`sp 3 2` on `_R`).
+
+The `rcondt{2}` that every walk needs is the assumption game's guard
+`if (!Game_<Assm>.abort_flag)`: C2 and `!red_abort` decide it.
+
+### 8.4 The run lemma (`Red_<H>.ec`; story 102 generates it)
+
+```
+section.
+declare module A <: Interfaces.Adv_<G> { -<every Game_ and Cloned_Pkg_ module of the game and
+  assumption compositions>, -Red_<H>, -<every Cloned_Pkg_ of the router> }.
+
+lemma run_<H>[_L|_R] : equiv[A(Comp_<G>.Game_<G>).run ~ A(Red_<H>(Comp_<Assm>.Game_<Assm>)).run :
+      ={glob A} /\ inv_<H> <args> ==> ={res} /\ inv_<H> <args>].
+proof.
+proc (inv_<H> <args>) => //.
+(* d_<O> *)
++ by conseq Red_<H>_<O>[_L|_R] => /#.
+...
+qed.
+end section.
+```
+
+`proc (I)` leaves one goal for each oracle of the adversary's interface, in the interface's order.
+With one oracle the bullet can go (reduction-consts has none); with several, each needs one.
+There is no `B` to exclude any more.
+
+### 8.5 The proposition file (story 102 generates it)
+
+```
+require import AllCore Distr FMap Int IntDiv Types.
+require Interfaces Red_<H> Red_<H>_Router Comp_<..>.
+
+module B_<H><s> (A : Interfaces.Adv_<G>) (O : Interfaces.Iface_<Assm>) = {
+  proc run() : bool = {
+    var b' : bool;
+    Red_<H>_Router.Red_<H>(O).init(<literal values>);
+    b' <@ A(Red_<H>_Router.Red_<H>(O)).run();
+    return b';
+  }
+}.
+
+section.
+declare module A <: Interfaces.Adv_<G> { -Comp_<..>.<..>, -Red_<H>_Router.Red_<H>,
+  -Red_<H>_Router.Cloned_Pkg_<..> }.
+```
+
+- `O` has the router's import type, `Iface_<Assm L>`. In hello-world the same `B` runs against
+  both `Exp_MediumComposition` and `Exp_SmallComposition`, as the old `B` did.
+- The restrictions name the router's modules with the prefix of the **router file**,
+  `Red_<H>_Router.`, not `Red_<H>.`. No `-B_..` is needed.
+
+**Merged equivalence** (kem-dem, reduction-consts):
+
+```
+lemma equiv_<H><s> &m (<binder> : bool) :
+  Pr[Comp_<G>.Exp_<G>(A).run(<game args with the binder>) @ &m : res]
+  = Pr[Comp_<Assm>.Exp_<Assm>(B_<H><s>(A)).run(<assumption args with the binder>) @ &m : res].
+proof.
+byequiv (: ={glob A} /\ arg{1} = (<game args>) /\ arg{2} = <assumption args> ==> ={res}) => //.
+proc; inline *; wp.
+call (Red_<H>.run_<H> A).
+by auto => /#.
+qed.
+
+lemma bound_<H><s> &m : `|Pr[<game, left values>] - Pr[<game, right values>]|
+                      = `|Pr[<assumption, left values>] - Pr[<assumption, right values>]|.
+proof.
+by rewrite !(equiv_<H><s> &m).
+qed.
+```
+
+`arg{2} = <x>` for a one-argument `run` (no tuple), `arg{2} = (x, y)` otherwise. The binder is
+named after the game's `run` parameter at the differing position (`key_idealization` in kem-dem,
+`ideal` in reduction-consts). `rewrite !(equiv &m)` rewrites both probabilities: the binder is
+instantiated by unification.
+
+**`_L`/`_R` equivalences** (hello-world): the same proof with literals and `run_<H>_L` (`_R`),
+`byequiv (: ={glob A} ==> ={res})` when `run` takes no argument, and the bound lemma
+`by rewrite (equiv_<H><s>_L &m) (equiv_<H><s>_R &m).`
+
+**The proposition lemma:** one `have hN := bound_<H><s> &m.` for each reduction step, then
+`smt().`, as in story 100. In reduction-consts the path
+`mod_real[b:=false] ~ mod_ideal[b:=false] ~ mod_ideal[b:=true] ~ mod_real[b:=true]` uses the hop
+twice (the second time in reverse) with an open hop in the middle. Its lemma
+`FlipBound` is closed by the two bound lemmas and `smt()`, with each reduction term in its hop's
+direction.
+
+### 8.6 The leaf question
+
+**`auto => /#` is enough. No step unfolds `inv_<H>`.** Every quick close, every side goal
+(`rcondt`/`rcondf` side goals and `if` conditions) and every leaf of the three prototypes closes
+with `auto => /#`. `smt` sees the operator's definition. The same holds for the `by auto => /#`
+after `call (run_<H> A)` in the equivalences, where the invariant must hold after the two
+`init`s. Largest case: kem-dem, 6 package pairs; the three oracle files compile in about 25 s in
+total.
+
+### 8.7 Where a hand-written step differs from the walk
+
+1. **The quick close makes the proofs short.** The probe of the grilling, and a first hand-written
+   proof of reduction-consts' `Query`, walked every `if` down to the leaves (16 lines). The walk
+   tries `auto => /#` on every goal first, and that closes `Query`, `PKDEC` and `UselessOracle` at
+   the root and most arms of the others. A hand-written proof without the quick close is valid
+   but is not what the walk writes.
+2. **`sp k l` must stop at the first `if`.** A hand-written `sp 2 0` with one leading assignment
+   went through the next `if` (EasyCrypt accepts it) and the following `rcondt{1} ^if` failed
+   with `invalid split index`. The walk's counts are the leading assignments, read from the goal.
+3. **Samplings rarely need `seq`.** The quick close handles a sampling when the rest of the arm
+   needs no case split (`PKGEN`). `seq 1 1` was needed once (`PKENC`), where `if`s with different
+   conditions follow the sampling. Its side goal closed with `auto => /#`.
+4. **No `if{1}`/`if{2}`** and no `seq 1 0`/`seq 0 1` was needed. Every one-sided `if` was decided
+   by `rcondt`/`rcondf`.
+5. **No step of the walk failed to close a goal.** No admit, no `program-mismatch`. The refused
+   trials are only the walk's ordinary misses (`rcondt{1}` on an undecided `if`, and so on): 22
+   in `PKGEN`, 51 in `PKENC`.
+
+### 8.8 Two differing assumption arguments
+
+No small fixture has one. Every assumption of the example projects and of `testdata/` differs in
+one argument only (`b`, `ideal`, `is_ideal`, ...), or in none (hello-world, yao). 4WHS too
+(`prf`, `nonces`, `collres`, `mac`: only `b`). The merge with two binders is therefore not
+prototyped. Section 8.5's proof does not depend on the number of binders.
+
+### 8.9 Not exercised
+
+- A free theorem constant that is an integer (suffix `neg<n>`): no fixture.
+- A negated Boolean in the run arguments: out of scope (ADR 0023).
+- `while` loops in reduction code: the walk stops (`program-mismatch`), as section 7 says.
