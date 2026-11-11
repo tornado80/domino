@@ -485,7 +485,9 @@ declare module A <: Interfaces.Adv_<G> { -Comp_<..>.<..>, -Red_<H>_Router.Red_<H
 ```
 
 - `O` has the router's import type, `Iface_<Assm L>`. In hello-world the same `B` runs against
-  both `Exp_MediumComposition` and `Exp_SmallComposition`, as the old `B` did.
+  both `Exp_MediumComposition` and `Exp_SmallComposition`, as the old `B` did. This needs the
+  adversary type of each assumption game to accept `B(A)`; it does here because both games export
+  the oracles the router imports.
 - The restrictions name the router's modules with the prefix of the **router file**,
   `Red_<H>_Router.`, not `Red_<H>.`. No `-B_..` is needed.
 
@@ -514,7 +516,7 @@ named after the game's `run` parameter at the differing position (`key_idealizat
 `ideal` in reduction-consts). `rewrite !(equiv &m)` rewrites both probabilities: the binder is
 instantiated by unification.
 
-**`_L`/`_R` equivalences** (hello-world): the same proof with literals and `run_<H>_L` (`_R`),
+**`_L`/`_R` equivalences** (hello-world; the side suffix comes after `<s>`, the bound lemma has no side suffix): the same proof with literals and `run_<H>_L` (`_R`),
 `byequiv (: ={glob A} ==> ={res})` when `run` takes no argument, and the bound lemma
 `by rewrite (equiv_<H><s>_L &m) (equiv_<H><s>_R &m).`
 
@@ -543,7 +545,8 @@ total.
    but is not what the walk writes.
 2. **`sp k l` must stop at the first `if`.** A hand-written `sp 2 0` with one leading assignment
    went through the next `if` (EasyCrypt accepts it) and the following `rcondt{1} ^if` failed
-   with `invalid split index`. The walk's counts are the leading assignments, read from the goal.
+   with `invalid split index`. The walk's counts are the leading assignments, read from the goal,
+   so the walk's own `sp k l` never went past an `if`.
 3. **Samplings rarely need `seq`.** The quick close handles a sampling when the rest of the arm
    needs no case split (`PKGEN`). `seq 1 1` was needed once (`PKENC`), where `if`s with different
    conditions follow the sampling. Its side goal closed with `auto => /#`.

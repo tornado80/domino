@@ -98,6 +98,8 @@ def walk(cur, budget=200):
             return lines, r
         if r is not None:  # did not close: undo
             r = send(f"undo {cur['state']}.")
+            if r["status"] != "ok":
+                sys.exit(f"undo failed: {r.get('error')}")
         L, R = c["left"]["stmt"], c["right"]["stmt"]
         k, l = lead_asgn(L), lead_asgn(R)
         if k or l:
