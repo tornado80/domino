@@ -20,6 +20,7 @@ pub mod pkginv;
 pub mod progress;
 pub mod proof;
 pub mod proposition;
+pub mod prop_reduction;
 pub mod reduction;
 pub mod reduction_lemmas;
 pub mod render;

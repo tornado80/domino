@@ -41,7 +41,7 @@ use super::pkginv::{build_pkg_inv_files, PkgInvFiles};
 use super::progress::{ExportEvent, ExportObserver, ExportPhase, NopExportObserver, PhaseScope};
 use super::proof::{compute_equivalence_files_observed, state_files, EquivalenceFiles};
 use super::proposition::{compute_proposition_files, PropositionOutcome};
-pub use super::proposition::{OpenHop, SkippedProposition};
+pub use super::proposition::{OpenHop, ReductionStep, SkippedProposition};
 use super::reduction::compute_reduction_files;
 use super::render::render_file;
 use super::sideinv::{build_side_inv_files, SideInvFiles};
@@ -118,7 +118,8 @@ pub struct PkgInvReport {
     pub start_file: Option<String>,
 }
 
-/// One translated reduction hop (story 98): `Red_<L>_<R>.ec`.
+/// One translated reduction hop (story 98, story 102): its router file, its oracle files and the
+/// joining file `Red_<L>_<R>.ec` with the run lemma(s).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReductionReport {
     /// Index of the hop in `theorem.game_hops`.
@@ -126,15 +127,16 @@ pub struct ReductionReport {
     pub left_name: String,
     pub right_name: String,
     pub assumption_name: String,
+    /// The joining file, `Red_<L>_<R>.ec`.
     pub file: String,
-    /// The two reduction equivalences, `<hop>_equiv_L` and `<hop>_equiv_R` (story 99).
-    pub equiv_lemmas: [String; 2],
-    /// The bound lemma `<hop>_bound` (story 99): `` `|Pr[Exp_<GL>(A).run(..)] -
-    /// Pr[Exp_<GR>(A).run(..)]| = `|Pr[RedExp_L(A).run(..)] - Pr[RedExp_R(A).run(..)]| ``.
-    pub bound_lemma: String,
-    /// The theorem constants that the three lemmas take after `&m`, in theorem order (their
-    /// binders are the constants' mangled names).
-    pub lemma_consts: Vec<String>,
+    /// `Red_<L>_<R>_Router.ec`.
+    pub router_file: String,
+    /// `(oracle, Red_<L>_<R>_<O>.ec)` for each exported oracle, in the export order.
+    pub oracle_files: Vec<(String, String)>,
+    /// `run_<L>_<R>`, or `run_<L>_<R>_L` and `run_<L>_<R>_R`.
+    pub run_lemmas: Vec<String>,
+    /// The number of `admit`s in the reduction's files.
+    pub admit_count: usize,
 }
 
 /// One proposition's lemma file (story 100): `Prop_<Name>.ec`.
@@ -144,9 +146,12 @@ pub struct PropositionReport {
     pub file: String,
     /// The number of reduction terms on the right side of the proposition lemma.
     pub reduction_terms: usize,
-    /// The open hops (conjectures, equivalences without a file), each with its own term, in
-    /// path order.
+    /// The open hops (conjectures, equivalences without a file, reductions that leave a
+    /// constant of their packages free), each with its own term, in path order.
     pub open_hops: Vec<OpenHop>,
+    /// For each reduction step that is not an open hop, in path order: the adversary, its
+    /// values, the equivalence lemma(s) and the bound lemma (story 102).
+    pub reduction_steps: Vec<ReductionStep>,
 }
 
 /// A game hop this exporter does not translate, named with its kind and the
@@ -379,16 +384,35 @@ pub fn export_theorem_observed(
     let reduction_files = compute_reduction_files(&theorem, &interfaces_output)?;
     let mut reductions = Vec::with_capacity(reduction_files.len());
     for rf in &reduction_files {
-        files.insert(PathBuf::from(rf.file_name.clone()), render_file(&rf.file));
+        let joined = render_file(&rf.file);
+        let router = render_file(&rf.router_file);
+        let admit_count = rf
+            .oracle_files
+            .iter()
+            .map(|o| render_file(&o.file))
+            .chain([joined.clone(), router.clone()])
+            .map(|t| t.matches("admit").count())
+            .sum();
+        files.insert(PathBuf::from(rf.file_name.clone()), joined);
+        files.insert(PathBuf::from(rf.router_file_name.clone()), router);
         reductions.push(ReductionReport {
             proofstep: rf.proofstep,
             left_name: rf.left_name.clone(),
             right_name: rf.right_name.clone(),
             assumption_name: rf.assumption_name.clone(),
             file: rf.file_name.clone(),
-            equiv_lemmas: rf.lemmas.equivs.clone(),
-            bound_lemma: rf.lemmas.bound.clone(),
-            lemma_consts: rf.lemmas.consts.clone(),
+            router_file: rf.router_file_name.clone(),
+            oracle_files: rf
+                .oracle_files
+                .iter()
+                .map(|o| (o.oracle.clone(), o.file_name.clone()))
+                .collect(),
+            run_lemmas: {
+                let mut names = rf.run_lemmas.to_vec();
+                names.dedup();
+                names
+            },
+            admit_count,
         });
     }
 
@@ -408,6 +432,7 @@ pub fn export_theorem_observed(
                     file: pf.file_name,
                     reduction_terms: pf.reduction_terms,
                     open_hops: pf.open_hops,
+                    reduction_steps: pf.reduction_steps,
                 });
             }
             PropositionOutcome::Skipped(skip) => skipped_propositions.push(skip),
@@ -454,7 +479,12 @@ pub fn export_theorem_observed(
     // after every other file: a lemma file may collide with any of them
     insert_lemma_files(
         &mut files,
-        &lemma_files(&equivalence_files, &side_files, &pkg_files),
+        &lemma_files(
+            &equivalence_files,
+            &reduction_files,
+            &side_files,
+            &pkg_files,
+        ),
     )?;
 
     if let Some(file) = files
@@ -568,11 +598,12 @@ struct LemmaFile<'a> {
     file: &'a EcFile,
 }
 
-/// Every lemma file of the export, in order: the oracle lemmas of each equivalence, then the
-/// side-invariant lemmas of each composition and the file that joins them, then the package
+/// Every lemma file of the export, in order: the oracle lemmas of each equivalence, then those of
+/// each reduction (story 102), then the side-invariant lemmas of each composition and the file that joins them, then the package
 /// lemmas of each package variant and the file that joins them.
 fn lemma_files<'a>(
     equivalence_files: &'a [EquivalenceFiles],
+    reduction_files: &'a [super::reduction::ReductionFile],
     side_files: &'a [SideInvFiles],
     pkg_files: &'a [PkgInvFiles],
 ) -> Vec<LemmaFile<'a>> {
@@ -583,6 +614,16 @@ fn lemma_files<'a>(
             out.push(LemmaFile {
                 name: &o.file_name,
                 owner: format!("oracle `{}` of `{equivalence}`", o.oracle),
+                file: &o.file,
+            });
+        }
+    }
+    for rf in reduction_files {
+        let reduction = rf.file_name.trim_end_matches(".ec");
+        for o in &rf.oracle_files {
+            out.push(LemmaFile {
+                name: &o.file_name,
+                owner: format!("oracle `{}` of `{reduction}`", o.oracle),
                 file: &o.file,
             });
         }
@@ -771,10 +812,17 @@ mod tests {
             }
             compile(&base, &format!("{base}/{}", eq.proof_file));
         }
+        // each file on its own: `require` does not check a required file's proofs again
         for red in &exported.reductions {
-            let text = &exported.files[Path::new(&red.file)];
-            assert!(!text.contains("admit"), "{}: {text}", red.file);
-            compile(&base, &format!("{base}/{}", red.file));
+            let oracles = red.oracle_files.iter().map(|(_, f)| f);
+            for file in std::iter::once(&red.router_file)
+                .chain(oracles)
+                .chain([&red.file])
+            {
+                let text = &exported.files[Path::new(file)];
+                assert!(!text.contains("admit"), "{file}: {text}");
+                compile(&base, &format!("{base}/{file}"));
+            }
         }
         for prop in &exported.propositions {
             let text = &exported.files[Path::new(&prop.file)];
@@ -877,15 +925,17 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["Red_Hybrid2_Hybrid3.ec"]
         );
-        // story 98: the reduction adversary stores the theorem constant `b`
+        // story 102: the router, the oracle files and the run lemma; no experiment, no `setup`
         let red = &exported.files[Path::new("Red_Hybrid2_Hybrid3.ec")];
-        assert!(red.contains("proc setup(b0 : bool)"), "{red}");
-        // story 99: the lemmas, with no `admit` (translation only; not compiled here)
-        assert!(red.contains("lemma Hybrid2_Hybrid3_bound &m"), "{red}");
+        assert!(red.contains("lemma run_Hybrid2_Hybrid3"), "{red}");
         assert!(!red.contains("admit"), "{red}");
+        for file in exported.files.keys() {
+            let text = &exported.files[file];
+            assert!(!text.contains("RedExp_"), "{}", file.display());
+        }
         assert_eq!(
-            exported.reductions[0].bound_lemma,
-            "Hybrid2_Hybrid3_bound".to_string()
+            exported.reductions[0].router_file,
+            "Red_Hybrid2_Hybrid3_Router.ec".to_string()
         );
         // story 100: the proposition lemma (translation only)
         let prop = &exported.files[Path::new("Prop_KXSecurity.ec")];
@@ -1387,38 +1437,55 @@ mod tests {
         assert_tree_compiles(&exported, "kemdem");
     }
 
-    /// Story 97: the hand-written reduction prototypes compile against freshly
-    /// exported trees, with no `admit`. Only the files a reduction file requires
-    /// are compiled first (`Types`, `Interfaces`, `Pkg_*`, `Comp_*`); the
-    /// equivalence files may keep their admits. Skips without `easycrypt`.
+    /// Story 101/102: the hand-written prototypes of the new reduction layout compile against
+    /// freshly exported trees, with no `admit`. The prototype's `Red_*` and `Prop_*` files
+    /// replace the exported ones, and each of them is compiled on its own (`require` does not
+    /// check a required file's proofs again). Skips without `easycrypt`.
     #[test]
     fn reduction_prototypes_compile() {
+        const LAYOUT: &str = "testdata/easycrypt/reduction-prototype/layout";
         let prototypes = [
-            (
-                "example-projects/hello-world",
-                "Proof",
-                "testdata/easycrypt/reduction-prototype/hello-world/\
-                 Red_big_composition_medium_composition_more_oracles.ec",
-            ),
+            ("example-projects/hello-world", "Proof", "hello-world"),
             (
                 "example-projects/kem-dem/kem-dem-cca-ssp",
                 "kem_dem_cca_ssp",
-                "testdata/easycrypt/reduction-prototype/kem-dem/\
-                 Red_Game_MOD_CCA_PKE_Real_KEM_Real_DEM_Game_MOD_CCA_PKE_Ideal_KEM_Real_DEM.ec",
+                "kem-dem",
+            ),
+            (
+                "testdata/easycrypt/reduction-consts",
+                "RedConsts",
+                "reduction-consts",
             ),
         ];
-        for (project, theorem, prototype) in prototypes {
-            let source = std::fs::read_to_string(prototype).unwrap();
-            assert!(!source.contains("admit"), "{prototype} must not admit");
+        for (project, theorem, case) in prototypes {
+            let dir = Path::new(LAYOUT).join(case);
+            let mut proto: Vec<PathBuf> = std::fs::read_dir(&dir)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .filter(|p| p.extension().is_some_and(|e| e == "ec"))
+                .collect();
+            proto.sort();
             let exported = export(project, theorem).unwrap();
             let tmp = std::env::temp_dir().join(format!(
-                "domino-easycrypt-reduction-prototype-{theorem}-{}",
+                "domino-easycrypt-reduction-prototype-{case}-{}",
                 std::process::id()
             ));
             let _ = std::fs::remove_dir_all(&tmp);
-            write_files(&tmp, &exported.files).unwrap();
-            let file_name = Path::new(prototype).file_name().unwrap();
-            std::fs::write(tmp.join(file_name), &source).unwrap();
+            let files: BTreeMap<PathBuf, String> = exported
+                .files
+                .iter()
+                .filter(|(p, _)| {
+                    let name = p.to_str().unwrap();
+                    !name.starts_with("Red_") && !name.starts_with("Prop_")
+                })
+                .map(|(p, t)| (p.clone(), t.clone()))
+                .collect();
+            write_files(&tmp, &files).unwrap();
+            for p in &proto {
+                let source = std::fs::read_to_string(p).unwrap();
+                assert!(!source.contains("admit."), "{} must not admit", p.display());
+                std::fs::write(tmp.join(p.file_name().unwrap()), source).unwrap();
+            }
             let base = tmp.to_str().unwrap().to_string();
             let compile = super::super::test_support::assert_compiles;
             compile(&base, &format!("{base}/Types.ec"));
@@ -1429,9 +1496,93 @@ mod tests {
             for name in &exported.game_names {
                 compile(&base, &format!("{base}/Comp_{name}.ec"));
             }
-            compile(&base, &format!("{base}/{}", file_name.to_str().unwrap()));
+            // the router, the oracle files, the joining file, the proposition file
+            let name = |p: &PathBuf| p.file_name().unwrap().to_str().unwrap().to_string();
+            let names: Vec<String> = proto.iter().map(name).collect();
+            let router = names.iter().find(|n| n.ends_with("_Router.ec")).unwrap();
+            let join = format!("{}.ec", router.trim_end_matches("_Router.ec"));
+            let oracles = names
+                .iter()
+                .filter(|n| n.starts_with("Red_") && *n != router && **n != join);
+            let props = names.iter().filter(|n| n.starts_with("Prop_"));
+            for file in std::iter::once(router)
+                .chain(oracles)
+                .chain([&join])
+                .chain(props)
+            {
+                compile(&base, &format!("{base}/{file}"));
+            }
             std::fs::remove_dir_all(&tmp).unwrap();
         }
+    }
+
+    /// Story 102: `hello-world` with a proposition on its reduction (two compositions: `_L`
+    /// and `_R` lemmas).
+    #[test]
+    fn hello_world_with_a_proposition_full_tree_compiles() {
+        let dir = super::super::proposition::tests::hello_world_with_proposition();
+        let exported = export(dir.path().to_str().unwrap(), "Proof").unwrap();
+        assert_eq!(exported.propositions[0].file, "Prop_BigToMedium.ec");
+        assert_tree_compiles(&exported, "hello-world-proposition");
+    }
+
+    #[test]
+    fn the_name_rule_rejects_a_reduction_oracle_called_router() {
+        let dir = hello_world_with_oracle("Router");
+        let err = export(dir.path().to_str().unwrap(), "Proof").unwrap_err();
+        let file = "Red_big_composition_medium_composition_more_oracles_Router.ec";
+        assert!(
+            matches!(&err, EcExportError::LemmaFileCollision { file: f, .. } if f == file),
+            "{err}"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains(&format!("the file `{file}` of the export")),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn the_reports_name_the_reduction_files_and_the_proposition_steps() {
+        let exported = export("testdata/easycrypt/reduction-consts", "RedConsts").unwrap();
+        let hop = "mod_real_mod_ideal";
+        assert_eq!(
+            exported.reductions[0],
+            ReductionReport {
+                proofstep: 0,
+                left_name: "mod_real".to_string(),
+                right_name: "mod_ideal".to_string(),
+                assumption_name: "KeyAssumption".to_string(),
+                file: format!("Red_{hop}.ec"),
+                router_file: format!("Red_{hop}_Router.ec"),
+                oracle_files: vec![("Query".to_string(), format!("Red_{hop}_Query.ec"))],
+                run_lemmas: vec![format!("run_{hop}")],
+                admit_count: 0,
+            }
+        );
+        for file in [
+            format!("Red_{hop}.ec"),
+            format!("Red_{hop}_Router.ec"),
+            format!("Red_{hop}_Query.ec"),
+        ] {
+            assert!(exported.files.contains_key(Path::new(&file)), "{file}");
+        }
+        let flip = exported
+            .propositions
+            .iter()
+            .find(|p| p.name == "FlipBound")
+            .unwrap();
+        assert_eq!(
+            flip.reduction_steps[1],
+            ReductionStep {
+                left: "mod_real".to_string(),
+                right: "mod_ideal".to_string(),
+                adversary: format!("B_{hop}_b_true"),
+                values: vec![("b".to_string(), "true".to_string())],
+                equiv_lemmas: vec![format!("equiv_{hop}_b_true")],
+                bound_lemma: format!("bound_{hop}_b_true"),
+            }
+        );
     }
 
     // `Full4WHS` is a much larger project than `Simple4WHS`/`kem-dem-cca-ssp`

@@ -1032,6 +1032,7 @@ fn expr_references_var(e: &EcExpr, name: &str) -> bool {
         EcExpr::OracleHoare { pre, post, .. } => {
             expr_references_var(pre, name) || expr_references_var(post, name)
         }
+        EcExpr::RunEquiv { inv, .. } => expr_references_var(inv, name),
     }
 }
 

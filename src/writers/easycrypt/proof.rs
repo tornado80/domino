@@ -383,7 +383,8 @@ pub(super) fn side_inv_app(
 /// up — a *composition's* own const binding rather than a *package
 /// instance's* param binding — so it is re-derived rather than shared (same
 /// rationale as [`build_side_record_lit`]).
-pub(super) enum RunArgValue {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunArgValue {
     Literal(String),
     TheoremConst(String),
 }

@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Building `Red_<L>_<R>.ec` for each reduction hop (story 98, ADR 0022 decisions 1–3 and 8):
-//! the **reduction router** `Red_<hop>(O)`, the **reduction adversary** `B_<hop>(A)(O)` and
-//! the **reduction experiment(s)** `RedExp_<hop>(A)` (or `RedExp_<hop>_L`/`_R` when the two
-//! assumption games are different compositions). Story 99 adds the lemmas to the same file
-//! (`reduction_lemmas`).
+//! Building the files of each reduction hop (story 98, story 102, ADR 0023 decisions 2 and 6):
+//! `Red_<L>_<R>_Router.ec` with the **reduction router** `Red_<hop>(O)` and the invariant,
+//! `Red_<L>_<R>_<O>.ec` with the oracle lemmas, and `Red_<L>_<R>.ec` with the **run lemma**
+//! (`reduction_lemmas`). The reduction adversaries are in the proposition files (story 102).
 //!
 //! The router is built from the **left** game instance's reduction packages, with their
 //! instance names (story 97). A call that reaches a mapped package goes to `O`, under the name
 //! of the assumption game's export that reaches the same oracle of the paired assumption
-//! package. The experiment calls `B_<hop>(A, Game_<Assm>).setup(..)`: EasyCrypt needs every
-//! functor argument to call a procedure (story 97's deviation from ADR 0022).
+//! package.
 
 use std::collections::HashMap;
 
@@ -33,35 +31,56 @@ use super::game::{
 use super::interfaces::{composition_span, InterfacesOutput};
 use super::names::{NameKind, Names};
 use super::package::{param_needs_var, pkg_needs_init};
-use super::reduction_lemmas::{reduction_lemmas, LemmaInput, ReductionLemmas};
-use super::proof::{literal_text_to_expr, side_run_args, RunArgValue};
+use super::proof::{side_run_args, RunArgValue};
+use super::reduction_lemmas::{reduction_lemmas, LemmaInput};
+pub use super::reduction_lemmas::ReductionOracleFile;
 use super::types::{translate_expr, translate_type};
 use super::EcExportError;
 
-/// One reduction hop's file, `Red_<L>_<R>.ec`.
+/// One reduction hop's files: `Red_<L>_<R>_Router.ec`, one `Red_<L>_<R>_<O>.ec` for each
+/// oracle, and `Red_<L>_<R>.ec`, which joins them in the run lemma (ADR 0023 decision 6).
 pub struct ReductionFile {
     /// Index of the hop in `theorem.game_hops`.
     pub proofstep: usize,
     pub left_name: String,
     pub right_name: String,
     pub assumption_name: String,
+    /// The joining file, `Red_<L>_<R>.ec`, with the run lemma(s).
     pub file_name: String,
     pub file: EcFile,
+    /// `Red_<L>_<R>_Router.ec`: the clones, the router and the invariant(s).
+    pub router_file_name: String,
+    pub router_file: EcFile,
+    /// One file for each exported oracle, in the export order.
+    pub oracle_files: Vec<ReductionOracleFile>,
     /// The reduction packages, `(left instance, right instance)`, as the parser pairs them.
     pub package_pairs: Vec<(String, String)>,
     /// The hop's left side, then its right side.
     pub sides: [ReductionSide; 2],
-    /// The names of the two reduction equivalences and the bound lemma (story 99).
-    pub lemmas: ReductionLemmas,
+    /// The run lemma of each side: the same name twice when the sides share it.
+    pub run_lemmas: [String; 2],
+    /// What a proposition needs to write a reduction adversary (story 102).
+    pub router: RouterUse,
 }
 
-/// What the lemmas of one side of a reduction hop need (story 99).
+/// The router as a reduction adversary uses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouterUse {
+    /// `Red_<L>_<R>`, a module of `Red_<L>_<R>_Router.ec`.
+    pub module: String,
+    /// `Interfaces.Adv_<G>`.
+    pub adv: String,
+    /// `Interfaces.Iface_<Assm>`.
+    pub assm_iface: String,
+    /// The value of each argument of the router's `init`, as the left game instance binds it.
+    pub init_values: Vec<RunArgValue>,
+}
+
+/// One side of a reduction hop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReductionSide {
     /// The assumption game instance that the map of this side names.
     pub assumption_game: String,
-    /// The reduction experiment of this side, `RedExp_<hop>` or `RedExp_<hop>_<L|R>`.
-    pub experiment: String,
     /// The values of the assumption experiment's `run` arguments for this side: a literal, or
     /// the name of a theorem constant.
     pub assumption_args: Vec<String>,
@@ -323,185 +342,23 @@ fn router_module(
     })
 }
 
-/// A constant `B_<hop>` stores, one for each theorem constant that a router `init` argument
-/// reads, first-use order.
-pub(super) struct StoredConst {
-    /// The variable of `B_<hop>`, also the name of `RedExp`'s `run` argument.
-    pub var: String,
-    /// The argument of `setup`.
-    pub arg: String,
-    pub ty: EcType,
-    /// The theorem constant.
-    pub theorem_const: String,
-}
-
-/// The adversary's stored constants and the arguments of its router `init` call.
-fn adversary_init(
-    theorem: &Theorem<'_>,
-    ctx: &RouterCtx<'_>,
-    left: &GameInstance,
-    span: SourceSpan,
-) -> Result<(Vec<StoredConst>, Vec<EcExpr>), EcExportError> {
-    let mut stored: Vec<StoredConst> = Vec::new();
-    let mut args = Vec::new();
-    let mut names = Names::new();
-    for (c, _) in router_init_consts(ctx) {
-        let assigned = left
-            .consts
-            .iter()
-            .find(|(id, _)| id.name == c)
-            .map(|(_, e)| e)
-            .expect("a game instance binds every one of its composition's consts");
-        match super::proof::resolve_run_arg(assigned) {
-            Some(RunArgValue::Literal(text)) => args.push(literal_text_to_expr(&text)),
-            Some(RunArgValue::TheoremConst(t)) => {
-                let var = names.mangle(NameKind::Var, &t)?;
-                if !stored.iter().any(|s| s.var == var) {
-                    let ty = theorem
-                        .consts
-                        .iter()
-                        .find(|(n, _)| n == &t)
-                        .map(|(_, ty)| ty)
-                        .expect("the parser resolved every theorem constant");
-                    stored.push(StoredConst {
-                        var: var.clone(),
-                        arg: format!("{var}0"),
-                        ty: translate_type(ty, span)?,
-                        theorem_const: t.clone(),
-                    });
-                }
-                args.push(EcExpr::Var(var));
-            }
-            None => unreachable!(
-                "a game instance's composition-const binding is a literal or a theorem constant"
-            ),
-        }
-    }
-    Ok((stored, args))
-}
-
-fn b_module(
-    name: &str,
-    router: &str,
-    adv: &str,
-    assm_iface: &str,
-    stored: &[StoredConst],
-    init_args: Vec<EcExpr>,
-) -> EcModule {
-    let setup = EcProc {
-        name: "setup".to_string(),
-        args: stored
-            .iter()
-            .map(|s| (s.arg.clone(), s.ty.clone()))
-            .collect(),
-        ret: EcType::Unit,
-        locals: vec![],
-        body: EcBlock(
-            stored
-                .iter()
-                .map(|s| EcStmt::Assign {
-                    lhs: EcLvalue::Var(s.var.clone()),
-                    rhs: EcExpr::Var(s.arg.clone()),
-                })
-                .collect(),
-        ),
-        ret_expr: None,
-    };
-    let run = EcProc {
-        name: "run".to_string(),
-        args: vec![],
-        ret: EcType::Bool,
-        locals: vec![("b'".to_string(), EcType::Bool, None)],
-        body: EcBlock(vec![
-            EcStmt::Call {
-                lhs: None,
-                module: format!("{router}(O)"),
-                proc: "init".to_string(),
-                args: init_args,
-            },
-            EcStmt::Call {
-                lhs: Some(EcLvalue::Var("b'".to_string())),
-                module: format!("A({router}(O))"),
-                proc: "run".to_string(),
-                args: vec![],
-            },
-        ]),
-        ret_expr: Some(EcExpr::Var("b'".to_string())),
-    };
-    EcModule {
-        name: name.to_string(),
-        params: vec![
-            ("A".to_string(), format!("Interfaces.{adv}")),
-            ("O".to_string(), assm_iface.to_string()),
-        ],
-        implements: None,
-        vars: stored
-            .iter()
-            .map(|s| (s.var.clone(), s.ty.clone()))
-            .collect(),
-        procs: vec![setup, run],
-    }
-}
-
-/// `RedExp_<hop>[_<L|R>] (A : Adv_<G>)`, whose `run` takes `B`'s constants, then the `run`
-/// arguments of the assumption composition `assm`'s experiment.
-fn red_exp_module(
-    name: &str,
-    b: &str,
-    adv: &str,
-    stored: &[StoredConst],
-    assm: &Composition,
-    assm_mangled: &str,
-    span: SourceSpan,
-) -> Result<EcModule, EcExportError> {
-    let mut args: Vec<(String, EcType)> = stored
+/// The value of each argument of the router's `init`, as the left game instance binds it: a
+/// literal, or a theorem constant that a proposition step fixes (story 102).
+fn router_init_values(ctx: &RouterCtx<'_>, left: &GameInstance) -> Vec<RunArgValue> {
+    router_init_consts(ctx)
         .iter()
-        .map(|s| (s.var.clone(), s.ty.clone()))
-        .collect();
-    let mut exp_args = Vec::new();
-    for (c, ty) in &assm.consts {
-        if !composition_const_needs_arg(assm, c, ty) {
-            continue;
-        }
-        let mut arg = Names::new().mangle(NameKind::Var, c)?;
-        while args.iter().any(|(a, _)| a == &arg) {
-            arg.push_str("_a");
-        }
-        args.push((arg.clone(), translate_type(ty, span)?));
-        exp_args.push(EcExpr::Var(arg));
-    }
-    let game = format!("Comp_{assm_mangled}.Game_{assm_mangled}");
-    let run = EcProc {
-        name: "run".to_string(),
-        args,
-        ret: EcType::Bool,
-        locals: vec![("b'".to_string(), EcType::Bool, None)],
-        body: EcBlock(vec![
-            EcStmt::Call {
-                lhs: None,
-                module: format!("{b}(A, {game})"),
-                proc: "setup".to_string(),
-                args: stored
-                    .iter()
-                    .map(|s| EcExpr::Var(s.var.clone()))
-                    .collect(),
-            },
-            EcStmt::Call {
-                lhs: Some(EcLvalue::Var("b'".to_string())),
-                module: format!("Comp_{assm_mangled}.Exp_{assm_mangled}({b}(A))"),
-                proc: "run".to_string(),
-                args: exp_args,
-            },
-        ]),
-        ret_expr: Some(EcExpr::Var("b'".to_string())),
-    };
-    Ok(EcModule {
-        name: name.to_string(),
-        params: vec![("A".to_string(), format!("Interfaces.{adv}"))],
-        implements: None,
-        vars: vec![],
-        procs: vec![run],
-    })
+        .map(|(c, _)| {
+            let assigned = left
+                .consts
+                .iter()
+                .find(|(id, _)| &id.name == c)
+                .map(|(_, e)| e)
+                .expect("a game instance binds every one of its composition's consts");
+            super::proof::resolve_run_arg(assigned).expect(
+                "a game instance's composition-const binding is a literal or a theorem constant",
+            )
+        })
+        .collect()
 }
 
 fn render_run_arg(v: &RunArgValue) -> String {
@@ -514,6 +371,21 @@ pub(super) fn push_unique(list: &mut Vec<String>, item: String) {
     if !list.contains(&item) {
         list.push(item);
     }
+}
+
+fn std_requires(plain: Vec<String>) -> Vec<Require> {
+    vec![
+        Require {
+            import: true,
+            names: ["AllCore", "Distr", "FMap", "Int", "IntDiv", "Types"]
+                .map(String::from)
+                .to_vec(),
+        },
+        Require {
+            import: false,
+            names: plain,
+        },
+    ]
 }
 
 fn build_reduction_file(
@@ -537,57 +409,37 @@ fn build_reduction_file(
     let adv = &interfaces.adv_name[&ctx.comp.name];
 
     let router_name = format!("Red_{stem}");
-    let b_name = format!("B_{stem}");
-    let mut items = reduction_package_items(&ctx)?;
-    items.push(EcItem::Module(router_module(
+    let mut router_items = reduction_package_items(&ctx)?;
+    router_items.push(EcItem::Module(router_module(
         &ctx,
         &router_name,
         iface,
         span,
     )?));
-    let (stored, init_args) = adversary_init(theorem, &ctx, left, span)?;
-    items.push(EcItem::Module(b_module(
-        &b_name,
-        &router_name,
-        adv,
-        &ctx.assm_iface,
-        &stored,
-        init_args,
-    )));
 
     let assm_insts = [red.left(), red.right()]
         .map(|m| instance(theorem, m.assumption_game_instance_name().as_str()));
-    let same = assm_insts[0].game().name == assm_insts[1].game().name;
-    let mut experiments = Vec::new();
-    for (inst, suffix) in assm_insts.iter().zip(["_L", "_R"]) {
-        let name = if same {
-            format!("RedExp_{stem}")
-        } else {
-            format!("RedExp_{stem}{suffix}")
-        };
-        if !experiments.contains(&name) {
-            let assm = inst.game();
-            let module = red_exp_module(
-                &name,
-                &b_name,
-                adv,
-                &stored,
-                assm,
-                &interfaces.comp_mangled[&assm.name],
-                span,
-            )?;
-            items.push(EcItem::Module(module));
-        }
-        experiments.push(name);
-    }
     let sides = [0, 1].map(|i| ReductionSide {
         assumption_game: assm_insts[i].name().to_string(),
-        experiment: experiments[i].clone(),
         assumption_args: side_run_args(assm_insts[i].game(), assm_insts[i])
             .iter()
             .map(render_run_arg)
             .collect(),
     });
+
+    let mut comps = vec!["Interfaces".to_string()];
+    for comp in [
+        left.game(),
+        right.game(),
+        assm_insts[0].game(),
+        assm_insts[1].game(),
+    ] {
+        push_unique(
+            &mut comps,
+            format!("Comp_{}", interfaces.comp_mangled[&comp.name]),
+        );
+    }
+    let lemma_requires = std_requires(comps.clone());
 
     let reduction_order = ctx.reduction_order();
     let lemmas = reduction_lemmas(
@@ -597,46 +449,39 @@ fn build_reduction_file(
         &LemmaInput {
             stem: &stem,
             router: &router_name,
-            adversary: &b_name,
             adv,
             router_comp: ctx.comp,
             router_wiring: &ctx.wiring,
             reduction_order: &reduction_order,
-            stored: &stored,
-            experiments: [&sides[0].experiment, &sides[1].experiment],
+            theorem: &theorem.name,
+            requires: &lemma_requires,
         },
-        &mut items,
+        &mut router_items,
     )?;
 
     let mut plain = vec!["Interfaces".to_string()];
     for idx in ctx.reduction_order() {
         push_unique(&mut plain, format!("Pkg_{}", ctx.wiring[idx].variant));
     }
-    for comp in [
-        left.game(),
-        right.game(),
-        assm_insts[0].game(),
-        assm_insts[1].game(),
-    ] {
-        push_unique(
-            &mut plain,
-            format!("Comp_{}", interfaces.comp_mangled[&comp.name]),
-        );
+    for c in &comps[1..] {
+        push_unique(&mut plain, c.clone());
     }
 
-    let mut header = vec![format!(
-        "Red_{stem}.ec for theorem `{}`, the reduction `{} ~ {}` to assumption `{}` — \
-         generated by `domino easycrypt`.",
-        theorem.name,
+    let what = format!(
+        "the reduction `{} ~ {}` to assumption `{}`",
         left.name(),
         right.name(),
         red.assumption_name()
+    );
+    let mut router_header = vec![format!(
+        "Red_{stem}_Router.ec for theorem `{}`, {what}: the router and the invariant — \
+         generated by `domino easycrypt`.",
+        theorem.name,
     )];
     for (side, label) in sides.iter().zip(["Left", "Right"]) {
-        header.push(format!(
-            "{label} side: assumption game `{}`, `{}.run` with the assumption arguments ({}).",
+        router_header.push(format!(
+            "{label} side: assumption game `{}`, with the assumption arguments ({}).",
             side.assumption_game,
-            side.experiment,
             side.assumption_args.join(", ")
         ));
     }
@@ -645,7 +490,7 @@ fn build_reduction_file(
         .iter()
         .map(|(l, r)| format!("{l} ~ {r}"))
         .collect();
-    header.push(format!(
+    router_header.push(format!(
         "Reduction packages (left ~ right): {}. The router uses the left names.",
         if pairs.is_empty() {
             "none".to_string()
@@ -654,6 +499,20 @@ fn build_reduction_file(
         }
     ));
 
+    let mut join_requires = lemma_requires;
+    join_requires.push(Require {
+        import: true,
+        names: vec![format!("Red_{stem}_Router")],
+    });
+    join_requires.push(Require {
+        import: true,
+        names: lemmas
+            .oracle_files
+            .iter()
+            .map(|o| o.file_name.trim_end_matches(".ec").to_string())
+            .collect(),
+    });
+
     Ok(ReductionFile {
         proofstep,
         left_name: left.name().to_string(),
@@ -661,24 +520,30 @@ fn build_reduction_file(
         assumption_name: red.assumption_name().to_string(),
         file_name: format!("Red_{stem}.ec"),
         file: EcFile {
-            header,
-            requires: vec![
-                Require {
-                    import: true,
-                    names: ["AllCore", "Distr", "FMap", "Int", "IntDiv", "Types"]
-                        .map(String::from)
-                        .to_vec(),
-                },
-                Require {
-                    import: false,
-                    names: plain,
-                },
-            ],
-            items,
+            header: vec![format!(
+                "Red_{stem}.ec for theorem `{}`, {what}: the run lemma — generated by \
+                 `domino easycrypt`.",
+                theorem.name,
+            )],
+            requires: join_requires,
+            items: vec![EcItem::Section(lemmas.section)],
         },
+        router_file_name: format!("Red_{stem}_Router.ec"),
+        router_file: EcFile {
+            header: router_header,
+            requires: std_requires(plain),
+            items: router_items,
+        },
+        oracle_files: lemmas.oracle_files,
         package_pairs: red.package_pairs().to_vec(),
         sides,
-        lemmas,
+        run_lemmas: lemmas.run_lemmas,
+        router: RouterUse {
+            module: router_name,
+            adv: format!("Interfaces.{adv}"),
+            assm_iface: ctx.assm_iface.clone(),
+            init_values: router_init_values(&ctx, left),
+        },
     })
 }
 
@@ -706,179 +571,56 @@ mod tests {
         compute_reduction_files(&theorem, &interfaces).unwrap()
     }
 
-    fn module<'f>(f: &'f ReductionFile, name: &str) -> &'f EcModule {
-        f.file
-            .items
+    const LAYOUT: &str = "testdata/easycrypt/reduction-prototype/layout";
+    const KEM_DEM: &str = "example-projects/kem-dem/kem-dem-cca-ssp";
+
+    fn module<'f>(f: &'f EcFile, name: &str) -> &'f EcModule {
+        f.items
             .iter()
             .find_map(|i| match i {
                 EcItem::Module(m) if m.name == name => Some(m),
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("no module {name} in {}", render_file(&f.file)))
+            .unwrap_or_else(|| panic!("no module {name} in {}", render_file(f)))
     }
 
     fn proc<'m>(m: &'m EcModule, name: &str) -> &'m EcProc {
         m.procs.iter().find(|p| p.name == name).unwrap()
     }
 
-    #[test]
-    fn hello_world_reduction_has_two_experiments_and_uses_the_left_names() {
-        let files = load("example-projects/hello-world", "Proof");
-        assert_eq!(files.len(), 1);
-        let f = &files[0];
-        assert_eq!(
-            f.file_name,
-            "Red_big_composition_medium_composition_more_oracles.ec"
-        );
-        assert_eq!(
-            f.package_pairs,
-            vec![("fwd2".to_string(), "fwd".to_string())]
-        );
-        let text = render_file(&f.file);
-        assert!(text.contains("clone Pkg_Fwd as Cloned_Pkg_Fwd2."), "{text}");
-        assert!(
-            text.contains(
-                "module Pkg_Inst_Fwd2 (O : Interfaces.Iface_SmallComposition) = \
-                 Cloned_Pkg_Fwd2.Fwd(Pkg_Imports_Fwd2(O))."
-            ),
-            "{text}"
-        );
-        let stem = "big_composition_medium_composition_more_oracles";
-        let router = module(f, &format!("Red_{stem}"));
-        assert_eq!(
-            router.implements.as_deref(),
-            Some("Interfaces.Iface_MediumCompositionMoreOracles")
-        );
-        let adapter = module(f, "Pkg_Imports_Fwd2");
-        let EcStmt::Call {
-            module: m, proc: p, ..
-        } = &adapter.procs[0].body.0[0]
-        else {
-            panic!()
-        };
-        assert_eq!((m.as_str(), p.as_str()), ("O", "d_UsefulOracle"));
-        let l = module(f, &format!("RedExp_{stem}_L"));
-        let r = module(f, &format!("RedExp_{stem}_R"));
-        let callee = |m: &EcModule| match &proc(m, "run").body.0[1] {
-            EcStmt::Call { module, .. } => module.clone(),
-            _ => panic!(),
-        };
-        assert_eq!(
-            callee(l),
-            format!("Comp_MediumComposition.Exp_MediumComposition(B_{stem}(A))")
-        );
-        assert_eq!(
-            callee(r),
-            format!("Comp_SmallComposition.Exp_SmallComposition(B_{stem}(A))")
-        );
-    }
-
-    #[test]
-    fn kem_dem_exports_three_reductions_with_one_experiment_each() {
-        let files = load(
-            "example-projects/kem-dem/kem-dem-cca-ssp",
-            "kem_dem_cca_ssp",
-        );
-        assert_eq!(files.len(), 3);
-        for f in &files {
-            let stem = f
-                .file_name
-                .trim_start_matches("Red_")
-                .trim_end_matches(".ec");
-            let exps: Vec<&str> = f
-                .file
-                .items
+    /// Every file of a reduction, rendered: `(file name, text)`.
+    fn texts(f: &ReductionFile) -> Vec<(String, String)> {
+        let mut out = vec![
+            (f.router_file_name.clone(), render_file(&f.router_file)),
+            (f.file_name.clone(), render_file(&f.file)),
+        ];
+        out.extend(
+            f.oracle_files
                 .iter()
-                .filter_map(|i| match i {
-                    EcItem::Module(m) if m.name.starts_with("RedExp_") => Some(m.name.as_str()),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(exps, vec![format!("RedExp_{stem}")]);
-        }
-        let first = &files[0];
-        let stem = "Game_MOD_CCA_PKE_Real_KEM_Real_DEM_Game_MOD_CCA_PKE_Ideal_KEM_Real_DEM";
-        let adapter = module(first, "Pkg_Imports_DEM");
-        let get = proc(adapter, "d_GET");
-        let EcStmt::Call {
-            module: m, proc: p, ..
-        } = &get.body.0[0]
-        else {
-            panic!()
-        };
-        assert_eq!((m.as_str(), p.as_str()), ("O", "d_GET"));
-        let b = module(first, &format!("B_{stem}"));
-        assert!(b.vars.is_empty());
-        let EcStmt::Call { args, .. } = &proc(b, "run").body.0[0] else {
-            panic!()
-        };
-        assert_eq!(args, &vec![EcExpr::Bool(false)]);
+                .map(|o| (o.file_name.clone(), render_file(&o.file))),
+        );
+        out
     }
 
-    #[test]
-    fn the_third_kem_dem_reduction_takes_the_assumption_arguments_of_its_own_sides() {
-        let files = load(
-            "example-projects/kem-dem/kem-dem-cca-ssp",
-            "kem_dem_cca_ssp",
-        );
-        let third = &files[2];
-        assert_eq!(third.sides[0].assumption_game, "Game_CCA_KEM_Ideal");
-        assert_eq!(third.sides[0].assumption_args, vec!["true".to_string()]);
-        assert_eq!(third.sides[1].assumption_game, "Game_CCA_KEM_Real");
-        assert_eq!(third.sides[1].assumption_args, vec!["false".to_string()]);
-        assert_eq!(third.sides[0].experiment, third.sides[1].experiment);
-    }
-
-    #[test]
-    fn reduction_consts_adversary_stores_the_theorem_constant() {
-        let files = load("testdata/easycrypt/reduction-consts", "RedConsts");
-        assert_eq!(files.len(), 1);
-        let f = &files[0];
-        let b = module(f, "B_mod_real_mod_ideal");
-        assert_eq!(b.vars, vec![("b".to_string(), EcType::Bool)]);
-        assert_eq!(
-            proc(b, "setup").args,
-            vec![("b0".to_string(), EcType::Bool)]
-        );
-        let exp = module(f, "RedExp_mod_real_mod_ideal");
-        let run = proc(exp, "run");
-        assert_eq!(
-            run.args,
-            vec![
-                ("b".to_string(), EcType::Bool),
-                ("ideal".to_string(), EcType::Bool)
-            ]
-        );
-        let router = module(f, "Red_mod_real_mod_ideal");
-        assert_eq!(
-            proc(router, "init").args,
-            vec![("flip".to_string(), EcType::Bool)]
-        );
-    }
-
-    /// The text of lemma `name` from `lemma` to its `proof.`, with whitespace normalized.
-    fn statement(text: &str, name: &str) -> String {
+    /// The text from `<keyword> <name> ` to the next `proof.` or `.\n`, whitespace normalized.
+    fn statement(text: &str, keyword: &str, name: &str) -> String {
         let start = text
-            .find(&format!("lemma {name} "))
-            .unwrap_or_else(|| panic!("no lemma {name} in {text}"));
-        let end = start + text[start..].find("\nproof.").unwrap();
-        text[start..end].split_whitespace().collect::<Vec<_>>().join(" ")
+            .find(&format!("{keyword} {name} "))
+            .unwrap_or_else(|| panic!("no {keyword} {name} in {text}"));
+        let rest = &text[start..];
+        let end = rest
+            .find("\nproof.")
+            .or_else(|| rest.find(".\n\n"))
+            .unwrap_or(rest.len());
+        rest[..end].split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    fn lemma_names(f: &ReductionFile) -> Vec<String> {
-        f.file
-            .items
-            .iter()
-            .find_map(|i| match i {
-                EcItem::Section(s) => Some(s.lemmas.iter().map(|l| l.name.clone()).collect()),
-                _ => None,
-            })
-            .expect("a reduction file has a section")
+    fn prototype(case: &str, file: &str) -> String {
+        std::fs::read_to_string(format!("{LAYOUT}/{case}/{file}")).unwrap()
     }
 
-    fn op_names(f: &ReductionFile) -> Vec<String> {
-        f.file
-            .items
+    fn op_names(f: &EcFile) -> Vec<String> {
+        f.items
             .iter()
             .filter_map(|i| match i {
                 EcItem::OpDef { name, .. } => Some(name.clone()),
@@ -888,100 +630,140 @@ mod tests {
     }
 
     #[test]
-    fn hello_world_lemma_statements_are_the_prototypes() {
-        let files = load("example-projects/hello-world", "Proof");
-        let f = &files[0];
-        let text = render_file(&f.file);
-        assert!(!text.contains("admit"), "{text}");
-        let stem = "big_composition_medium_composition_more_oracles";
-        let proto = std::fs::read_to_string(format!(
-            "testdata/easycrypt/reduction-prototype/hello-world/Red_{stem}.ec"
-        ))
-        .unwrap();
-        let names = [
-            format!("{stem}_equiv_L"),
-            format!("{stem}_equiv_R"),
-            format!("{stem}_bound"),
-        ];
-        for name in &names {
-            assert_eq!(statement(&text, name), statement(&proto, name));
+    fn kem_dem_writes_a_router_an_oracle_file_for_each_oracle_and_a_joining_file() {
+        let files = load(KEM_DEM, "kem_dem_cca_ssp");
+        assert_eq!(files.len(), 3);
+        for f in &files {
+            let stem = f.file_name.trim_end_matches(".ec");
+            assert_eq!(f.router_file_name, format!("{stem}_Router.ec"));
+            let oracles: Vec<&str> = f.oracle_files.iter().map(|o| o.file_name.as_str()).collect();
+            assert_eq!(
+                oracles,
+                ["PKGEN", "PKENC", "PKDEC"].map(|o| format!("{stem}_{o}.ec"))
+            );
+            for (name, text) in texts(f) {
+                assert!(!text.contains("RedExp"), "{name}: {text}");
+                assert!(!text.contains("setup"), "{name}: {text}");
+                assert!(!text.contains("admit"), "{name}: {text}");
+            }
         }
-        assert_eq!(f.lemmas.equivs, [names[0].clone(), names[1].clone()]);
-        assert_eq!(f.lemmas.bound, names[2]);
-        assert!(f.lemmas.consts.is_empty());
     }
 
     #[test]
-    fn hello_world_has_an_invariant_for_each_side() {
-        let files = load("example-projects/hello-world", "Proof");
-        let stem = "big_composition_medium_composition_more_oracles";
+    fn the_first_kem_dem_reduction_matches_the_prototype() {
+        let files = load(KEM_DEM, "kem_dem_cca_ssp");
+        let f = &files[0];
+        let stem = "Game_MOD_CCA_PKE_Real_KEM_Real_DEM_Game_MOD_CCA_PKE_Ideal_KEM_Real_DEM";
+        assert_eq!(f.run_lemmas, [format!("run_{stem}"), format!("run_{stem}")]);
+        let join = render_file(&f.file);
+        let proto = prototype("kem-dem", &format!("Red_{stem}.ec"));
+        let run = format!("run_{stem}");
+        assert_eq!(statement(&join, "lemma", &run), statement(&proto, "lemma", &run));
+        assert!(
+            join.contains(&format!("+ by conseq Red_{stem}_PKDEC => /#.")),
+            "{join}"
+        );
+        let router = render_file(&f.router_file);
+        let proto = prototype("kem-dem", &format!("Red_{stem}_Router.ec"));
+        let inv = format!("inv_{stem}");
+        assert_eq!(statement(&router, "op", &inv), statement(&proto, "op", &inv));
+        let oracle = render_file(&f.oracle_files[2].file);
+        let proto = prototype("kem-dem", &format!("Red_{stem}_PKDEC.ec"));
+        let lemma = format!("Red_{stem}_PKDEC");
         assert_eq!(
-            op_names(&files[0]),
+            statement(&oracle, "lemma", &lemma),
+            statement(&proto, "lemma", &lemma)
+        );
+        let adapter = module(&f.router_file, "Pkg_Imports_DEM");
+        let EcStmt::Call {
+            module: m, proc: p, ..
+        } = &proc(adapter, "d_GET").body.0[0]
+        else {
+            panic!()
+        };
+        assert_eq!((m.as_str(), p.as_str()), ("O", "d_GET"));
+        assert_eq!(
+            f.router.init_values,
+            vec![RunArgValue::Literal("false".to_string())]
+        );
+    }
+
+    #[test]
+    fn the_third_kem_dem_reduction_takes_the_assumption_arguments_of_its_own_sides() {
+        let files = load(KEM_DEM, "kem_dem_cca_ssp");
+        let third = &files[2];
+        assert_eq!(third.sides[0].assumption_game, "Game_CCA_KEM_Ideal");
+        assert_eq!(third.sides[0].assumption_args, vec!["true".to_string()]);
+        assert_eq!(third.sides[1].assumption_game, "Game_CCA_KEM_Real");
+        assert_eq!(third.sides[1].assumption_args, vec!["false".to_string()]);
+    }
+
+    #[test]
+    fn hello_world_has_a_run_lemma_and_an_invariant_for_each_side() {
+        let files = load("example-projects/hello-world", "Proof");
+        assert_eq!(files.len(), 1);
+        let f = &files[0];
+        let stem = "big_composition_medium_composition_more_oracles";
+        assert_eq!(f.package_pairs, vec![("fwd2".to_string(), "fwd".to_string())]);
+        assert_eq!(
+            f.run_lemmas,
+            [format!("run_{stem}_L"), format!("run_{stem}_R")]
+        );
+        assert_eq!(
+            op_names(&f.router_file),
             vec![format!("inv_{stem}_L"), format!("inv_{stem}_R")]
         );
-    }
-
-    #[test]
-    fn the_first_kem_dem_reduction_shares_its_oracle_lemmas() {
-        let files = load(
-            "example-projects/kem-dem/kem-dem-cca-ssp",
-            "kem_dem_cca_ssp",
-        );
-        let first = &files[0];
-        let stem = "Game_MOD_CCA_PKE_Real_KEM_Real_DEM_Game_MOD_CCA_PKE_Ideal_KEM_Real_DEM";
-        assert_eq!(op_names(first), vec![format!("inv_{stem}")]);
+        let router = render_file(&f.router_file);
+        assert!(router.contains("clone Pkg_Fwd as Cloned_Pkg_Fwd2."), "{router}");
         assert_eq!(
-            lemma_names(first),
-            vec![
-                format!("{stem}_d_PKGEN"),
-                format!("{stem}_d_PKENC"),
-                format!("{stem}_d_PKDEC"),
-                format!("{stem}_equiv_L"),
-                format!("{stem}_equiv_R"),
-                format!("{stem}_bound"),
-            ]
+            module(&f.router_file, &format!("Red_{stem}"))
+                .implements
+                .as_deref(),
+            Some("Interfaces.Iface_MediumCompositionMoreOracles")
         );
-    }
-
-    #[test]
-    fn reduction_consts_quantifies_the_constant_and_relates_the_stored_copy() {
-        let files = load("testdata/easycrypt/reduction-consts", "RedConsts");
-        let f = &files[0];
-        let text = render_file(&f.file);
-        let stem = "mod_real_mod_ideal";
-        for name in [
-            format!("{stem}_equiv_L"),
-            format!("{stem}_equiv_R"),
-            format!("{stem}_bound"),
-        ] {
-            assert!(
-                statement(&text, &name).starts_with(&format!("lemma {name} &m (b : bool) :")),
-                "{text}"
-            );
+        let join = render_file(&f.file);
+        let proto = prototype("hello-world", &format!("Red_{stem}.ec"));
+        for run in &f.run_lemmas {
+            assert_eq!(statement(&join, "lemma", run), statement(&proto, "lemma", run));
         }
-        assert!(
-            text.contains(&format!(
-                "Comp_ModGame.Cloned_Pkg_Mod.Mod.flip{{1}} B_{stem}.b{{2}}"
-            )),
-            "{text}"
+        // each oracle file holds the lemmas of both sides
+        let oracle = render_file(&f.oracle_files[0].file);
+        assert_eq!(
+            f.oracle_files[0].file_name,
+            format!("Red_{stem}_UsefulOracle.ec")
         );
-        assert_eq!(f.lemmas.consts, vec!["b".to_string()]);
+        assert!(oracle.contains(&format!("lemma Red_{stem}_UsefulOracle_L :")), "{oracle}");
+        assert!(oracle.contains(&format!("lemma Red_{stem}_UsefulOracle_R :")), "{oracle}");
+        for (name, text) in texts(f) {
+            assert!(!text.contains("RedExp") && !text.contains("setup"), "{name}");
+        }
     }
 
     #[test]
-    fn the_third_kem_dem_bound_lemma_follows_the_hop_direction() {
-        let files = load(
-            "example-projects/kem-dem/kem-dem-cca-ssp",
-            "kem_dem_cca_ssp",
+    fn reduction_consts_invariant_relates_no_stored_constant() {
+        let files = load("testdata/easycrypt/reduction-consts", "RedConsts");
+        assert_eq!(files.len(), 1);
+        let f = &files[0];
+        let router = render_file(&f.router_file);
+        let proto = prototype("reduction-consts", "Red_mod_real_mod_ideal_Router.ec");
+        let inv = "inv_mod_real_mod_ideal";
+        assert_eq!(statement(&router, "op", inv), statement(&proto, "op", inv));
+        assert!(!router.contains("flip{1}"), "{router}");
+        assert!(!router.contains("B_"), "{router}");
+        assert_eq!(
+            proc(module(&f.router_file, "Red_mod_real_mod_ideal"), "init").args,
+            vec![("flip".to_string(), EcType::Bool)]
         );
-        let third = &files[2];
-        let text = render_file(&third.file);
-        let stmt = statement(&text, &third.lemmas.bound);
-        let rhs = stmt.split(" = ").nth(1).unwrap();
-        let exp = &third.sides[0].experiment;
-        assert!(
-            rhs.starts_with(&format!("`|Pr[{exp}(A).run(true) @ &m : res] - Pr[{exp}(A).run(false)")),
-            "{stmt}"
+        assert_eq!(
+            f.router.init_values,
+            vec![RunArgValue::TheoremConst("b".to_string())]
+        );
+        let oracle = render_file(&f.oracle_files[0].file);
+        let proto = prototype("reduction-consts", "Red_mod_real_mod_ideal_Query.ec");
+        let lemma = "Red_mod_real_mod_ideal_Query";
+        assert_eq!(
+            statement(&oracle, "lemma", lemma),
+            statement(&proto, "lemma", lemma)
         );
     }
 

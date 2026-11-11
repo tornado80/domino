@@ -290,6 +290,13 @@ pub enum EcExpr {
         inv: Box<EcExpr>,
         assumed: Vec<EcExpr>,
     },
+    /// `equiv[left ~ right : ={glob A} /\ inv ==> ={res} /\ inv]`: the statement of a reduction's
+    /// run lemma (story 102, ADR 0023). Renders over several lines, as [`EcExpr::OracleEquiv`].
+    RunEquiv {
+        left: String,
+        right: String,
+        inv: Box<EcExpr>,
+    },
     /// `hoare[proc : pre ==> post]`: the statement of a side-invariant lemma (story 69, `pre`
     /// and `post` the same invariant) or of a package lemma (story 76). `proc` is the
     /// procedure's qualified path. Renders over several lines, `pre` and `post` laid out as in
@@ -343,7 +350,7 @@ impl EcExpr {
             | EcExpr::Glob(_)
             | EcExpr::GlobAt { .. }
             | EcExpr::GlobEq(_) => Vec::new(),
-            EcExpr::Abs(e) => vec![e],
+            EcExpr::Abs(e) | EcExpr::RunEquiv { inv: e, .. } => vec![e],
             EcExpr::Tuple(items) | EcExpr::App { args: items, .. } => items.iter().collect(),
             EcExpr::Proj { expr, .. }
             | EcExpr::Field { expr, .. }

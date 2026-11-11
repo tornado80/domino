@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The lemmas of `Red_<L>_<R>.ec` (story 99, ADR 0022 decisions 4–6): the invariant of each
-//! reduction equivalence, one oracle lemma for each exported oracle, the two reduction
-//! equivalences and the bound lemma, each with the proof script of story 97
-//! (`docs/research/reduction-proof-script.md`).
+//! The lemmas of a reduction (story 99, story 102, ADR 0023 decisions 2 and 6): the invariant
+//! of each side (in `Red_<L>_<R>_Router.ec`), one oracle lemma file `Red_<L>_<R>_<O>.ec` for each
+//! exported oracle, and the **run lemma** of each side in `Red_<L>_<R>.ec`. The oracle proof is
+//! still the ladder of story 97 (`docs/research/reduction-proof-script.md`); story 103 replaces it.
 //!
 //! The oracle-lemma proof is the same text for every oracle of every reduction. Only the
 //! exclusion list of its `inline` (the mapped instances, each by both of its names) and `MEQ`
 //! (the equal states of the mapped packages) change, and both come from the map. The two sides
 //! share the invariant and the oracle lemmas when everything the lemmas name is the same on
 //! both sides (ADR 0022, decision 5).
-
-use std::collections::HashMap;
 
 use crate::gamehops::reduction::Reduction;
 use crate::package::Composition;
@@ -20,27 +18,31 @@ use crate::parser::reduction::ReductionMapping;
 use crate::theorem::{GameInstance, Theorem};
 
 use super::ast::{
-    DeclareModule, EcBinop, EcExpr, EcItem, EcLemma, EcSection, EcType, LemmaBinder, ProofLine,
+    DeclareModule, EcBinop, EcExpr, EcFile, EcItem, EcLemma, EcSection, EcType, ProofLine,
+    Require,
 };
-use super::game::{instance_wirings, param_assignment, references_game_const, InstanceWiring};
+use super::game::{instance_wirings, InstanceWiring};
 use super::interfaces::InterfacesOutput;
 use super::names::{NameKind, Names};
-use super::package::{module_vars, param_needs_var};
-use super::proof::{literal_text_to_expr, resolve_run_arg, side_run_args, RunArgValue};
-use super::reduction::StoredConst;
 use super::render::render_expr;
-use super::types::translate_type;
 use super::EcExportError;
 
-/// The names of the lemmas a reduction exports, for the report (story 100 uses them).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReductionLemmas {
-    /// `<hop>_equiv_L`, `<hop>_equiv_R`.
-    pub equivs: [String; 2],
-    /// `<hop>_bound`.
-    pub bound: String,
-    /// The theorem constants that the three lemmas take after `&m`, in theorem order.
-    pub consts: Vec<String>,
+/// One oracle's lemma file of a reduction, `Red_<L>_<R>_<O>.ec`: the oracle lemma of each side
+/// (one lemma when the sides share it).
+pub struct ReductionOracleFile {
+    /// The exported oracle's name, the `<O>` of the file name.
+    pub oracle: String,
+    pub file_name: String,
+    pub file: EcFile,
+}
+
+/// What [`reduction_lemmas`] writes, apart from the invariant ops.
+pub(super) struct ReductionLemmas {
+    /// `run_<hop>` for both sides, or `run_<hop>_L` and `run_<hop>_R`.
+    pub run_lemmas: [String; 2],
+    pub oracle_files: Vec<ReductionOracleFile>,
+    /// The section of `Red_<L>_<R>.ec`, with the run lemmas.
+    pub section: EcSection,
 }
 
 /// Number of `alias`/`seq` rungs in the oracle-lemma walk: one is needed for each mapped call
@@ -52,17 +54,16 @@ const LADDER_RUNGS: usize = 8;
 pub(super) struct LemmaInput<'a> {
     pub stem: &'a str,
     pub router: &'a str,
-    /// The reduction adversary module, `B_<hop>`.
-    pub adversary: &'a str,
     pub adv: &'a str,
     /// The left game's composition, whose instances the router clones.
     pub router_comp: &'a Composition,
     pub router_wiring: &'a [InstanceWiring],
     /// Indices into `router_comp.pkgs` of the reduction packages, the router's order.
     pub reduction_order: &'a [usize],
-    pub stored: &'a [StoredConst],
-    /// The reduction experiment of each side.
-    pub experiments: [&'a str; 2],
+    /// The theorem's name, for the file headers.
+    pub theorem: &'a str,
+    /// The `require` lines of an oracle file and of the joining file.
+    pub requires: &'a [Require],
 }
 
 /// The modules of one composition as the lemmas name them.
@@ -168,38 +169,7 @@ fn instance<'t>(theorem: &'t Theorem<'_>, name: &str) -> &'t GameInstance {
         .expect("the parser resolved every game instance a reduction names")
 }
 
-/// The module variable of package instance `idx` of `game`'s composition that stores theorem
-/// constant `t`: the first parameter with a variable whose composition constant `game` binds
-/// to `t`.
-fn param_var_storing(
-    game: &GameInstance,
-    idx: usize,
-    t: &str,
-) -> Result<Option<String>, EcExportError> {
-    let comp = game.game();
-    let inst = &comp.pkgs[idx];
-    let vars = module_vars(&inst.pkg)?;
-    let param_vars = &vars[inst.pkg.state.len()..];
-    let needing = inst
-        .pkg
-        .params
-        .iter()
-        .filter(|(p, ty, _)| param_needs_var(&inst.pkg, p, ty));
-    for ((p, _, _), (var, _)) in needing.zip(param_vars) {
-        let assigned = param_assignment(inst, p);
-        let stores = game.consts.iter().any(|(id, value)| {
-            references_game_const(assigned, &id.name)
-                && matches!(resolve_run_arg(value), Some(RunArgValue::TheoremConst(c)) if c == t)
-        });
-        if stores {
-            return Ok(Some(var.clone()));
-        }
-    }
-    Ok(None)
-}
-
-struct SideCtx<'a> {
-    game: &'a GameInstance,
+struct SideCtx {
     names: CompNames,
     assm: CompNames,
     /// `(index in the game, index in the router's composition)` of each reduction package.
@@ -208,13 +178,13 @@ struct SideCtx<'a> {
     mapped: Vec<(usize, usize)>,
 }
 
-fn side_ctx<'a>(
-    theorem: &'a Theorem<'_>,
+fn side_ctx(
+    theorem: &Theorem<'_>,
     interfaces: &InterfacesOutput,
     input: &LemmaInput<'_>,
     red: &Reduction<'_>,
     side: usize,
-) -> Result<SideCtx<'a>, EcExportError> {
+) -> Result<SideCtx, EcExportError> {
     let mapping: &ReductionMapping<'_> = if side == 0 { red.left() } else { red.right() };
     let game = instance(theorem, mapping.construction_game_instance_name().as_str());
     let assm = instance(theorem, mapping.assumption_game_instance_name().as_str());
@@ -247,7 +217,6 @@ fn side_ctx<'a>(
         })
         .collect();
     Ok(SideCtx {
-        game,
         names: CompNames::new(theorem, interfaces, game.game())?,
         assm: CompNames::new(theorem, interfaces, assm.game())?,
         reduction,
@@ -255,7 +224,7 @@ fn side_ctx<'a>(
     })
 }
 
-fn side_spec(input: &LemmaInput<'_>, ctx: &SideCtx<'_>) -> Result<SideSpec, EcExportError> {
+fn side_spec(input: &LemmaInput<'_>, ctx: &SideCtx) -> Result<SideSpec, EcExportError> {
     let game = ctx.names.game();
     let assm_game = ctx.assm.game();
     let mut args = vec![
@@ -283,25 +252,6 @@ fn side_spec(input: &LemmaInput<'_>, ctx: &SideCtx<'_>) -> Result<SideSpec, EcEx
         args.push((rn.clone(), ty_r, r));
         eqs.push((ln, rn));
     };
-    // C3: each constant `B_<hop>` stores equals the package parameter that stores it.
-    for s in input.stored {
-        let found = ctx
-            .reduction
-            .iter()
-            .map(|&(g, _)| param_var_storing(ctx.game, g, &s.theorem_const).map(|v| (g, v)))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .find_map(|(g, v)| v.map(|v| (g, v)));
-        // `B` stores a constant only because a reduction package's parameter reads it.
-        let (g, var) = found.expect("a reduction package stores every constant that B stores");
-        push_pair(
-            &mut args,
-            s.ty.clone(),
-            s.ty.clone(),
-            qualified(&ctx.names.clone_module(g), &var, 1),
-            qualified(input.adversary, &s.var, 2),
-        );
-    }
     // C4: each reduction package with its router clone, each mapped package with its partner.
     for &(g, r) in &ctx.reduction {
         let w = &input.router_wiring[r];
@@ -349,11 +299,11 @@ fn router_clone(w: &InstanceWiring) -> String {
     format!("Cloned_Pkg_{}.{}", w.mangled, w.variant)
 }
 
-/// The modules `A` may not touch: every game and package of the four compositions, the router,
-/// `B` and the router's clones.
-fn adversary_restrictions(input: &LemmaInput<'_>, ctxs: &[SideCtx<'_>; 2]) -> Vec<String> {
+/// The modules `A` may not touch: every game and package of the four compositions, the router
+/// and the router's clones.
+fn adversary_restrictions(input: &LemmaInput<'_>, ctxs: &[SideCtx; 2]) -> Vec<String> {
     let mut restrictions = Vec::new();
-    let extra = [input.router.to_string(), input.adversary.to_string()];
+    let extra = [input.router.to_string()];
     let clones = input
         .reduction_order
         .iter()
@@ -482,43 +432,29 @@ fn oracle_proof(spec: &SideSpec) -> Vec<ProofLine> {
     vec![tactic(inline), tactic(walk)]
 }
 
-/// The `run` arguments of a side, as expressions over the lemma binders.
-fn run_args(values: &[RunArgValue], binders: &HashMap<String, String>) -> Vec<EcExpr> {
-    values
-        .iter()
-        .map(|v| match v {
-            RunArgValue::Literal(text) => literal_text_to_expr(text),
-            RunArgValue::TheoremConst(t) => EcExpr::Var(binders[t].clone()),
-        })
-        .collect()
-}
-
-fn arg_conjunct(args: &[EcExpr], mem: u8) -> Option<String> {
-    let value = match args.len() {
-        0 => return None,
-        1 => render_expr(&args[0]),
-        _ => render_expr(&EcExpr::Tuple(args.to_vec())),
-    };
-    Some(format!("arg{{{mem}}} = {value}"))
-}
-
-fn pr(module: String, args: Vec<EcExpr>) -> EcExpr {
-    EcExpr::Pr {
-        module,
-        proc: "run".to_string(),
-        args,
-        memory: "m".to_string(),
-        event: Box::new(EcExpr::Var("res".to_string())),
+/// One `+ by conseq <lemma> => /#.` for each oracle; no bullet when there is one oracle.
+fn conseq_lines(procs: &[String], lemmas: &[String]) -> Vec<ProofLine> {
+    let mut out = Vec::new();
+    for (p, l) in procs.iter().zip(lemmas) {
+        out.push(tactic(format!("(* {p} *)")));
+        let text = format!("by conseq {l} => /#.");
+        out.push(if procs.len() == 1 {
+            tactic(text)
+        } else {
+            bullet(text)
+        });
     }
+    out
 }
 
-/// Adds the lemmas of the reduction to `items`, after the modules.
+/// Adds the invariant ops of the reduction to `router_items`, and returns its oracle lemma
+/// files and the section of its joining file with the run lemmas.
 pub(super) fn reduction_lemmas(
     theorem: &Theorem<'_>,
     interfaces: &InterfacesOutput,
     red: &Reduction<'_>,
     input: &LemmaInput<'_>,
-    items: &mut Vec<EcItem>,
+    router_items: &mut Vec<EcItem>,
 ) -> Result<ReductionLemmas, EcExportError> {
     let ctxs = [
         side_ctx(theorem, interfaces, input, red, 0)?,
@@ -532,159 +468,95 @@ pub(super) fn reduction_lemmas(
         (false, _) => "_R",
     };
     let stem = input.stem;
-    let span = super::interfaces::composition_span(input.router_comp);
+    let sides: &[usize] = if shared { &[0] } else { &[0, 1] };
 
-    // The lemma binders: every theorem constant a `run` argument reads, theorem order.
-    let game_args = ctxs.each_ref().map(|c| side_run_args(c.game.game(), c.game));
-    let assm_args = [red.left(), red.right()].map(|m| {
-        let a = instance(theorem, m.assumption_game_instance_name().as_str());
-        side_run_args(a.game(), a)
-    });
-    let mut read: Vec<&str> = input
-        .stored
-        .iter()
-        .map(|s| s.theorem_const.as_str())
-        .collect();
-    for v in game_args.iter().chain(assm_args.iter()).flatten() {
-        if let RunArgValue::TheoremConst(t) = v {
-            read.push(t);
-        }
+    let inv_names = [0, 1].map(|i| format!("inv_{stem}{}", suffix(i)));
+    for &i in sides {
+        router_items.push(inv_op(&inv_names[i], &specs[i]));
     }
-    let mut binders = vec![LemmaBinder::Memory("m".to_string())];
-    let mut binder_names = HashMap::new();
-    let mut consts = Vec::new();
-    let mut names = Names::new();
-    for (t, ty) in &theorem.consts {
-        if !read.contains(&t.as_str()) {
-            continue;
-        }
-        let name = names.mangle(NameKind::Var, t)?;
-        binders.push(LemmaBinder::Typed {
-            name: name.clone(),
-            ty: translate_type(ty, span)?,
-        });
-        binder_names.insert(t.clone(), name);
-        consts.push(t.clone());
-    }
-    let binder_args: String = consts
-        .iter()
-        .map(|t| format!(" {}", binder_names[t]))
-        .collect();
-
-    // The invariant ops, before the section.
-    let mut inv_names = Vec::new();
-    for (i, spec) in specs.iter().enumerate() {
-        let name = format!("inv_{stem}{}", suffix(i));
-        if !inv_names.contains(&name) {
-            items.push(inv_op(&name, spec));
-        }
-        inv_names.push(name);
-    }
-
-    let restrictions = adversary_restrictions(input, &ctxs);
 
     let mut procs = Vec::new();
+    let mut oracle_files = Vec::new();
+    let mut oracle_lemmas: [Vec<String>; 2] = [vec![], vec![]];
+    let mut lemma_names = Names::new();
     for export in &input.router_comp.exports {
-        procs.push(Names::new().mangle(NameKind::Proc, export.name())?);
+        let p = Names::new().mangle(NameKind::Proc, export.name())?;
+        let oracle_stem = format!("Red_{stem}_{}", export.name());
+        let mut lemmas = Vec::new();
+        for &i in sides {
+            let name =
+                lemma_names.mangle(NameKind::Lemma, &format!("{oracle_stem}{}", suffix(i)))?;
+            lemmas.push(EcItem::Lemma(EcLemma {
+                name: name.clone(),
+                binders: vec![],
+                statement: EcExpr::OracleEquiv {
+                    left: format!("{}.{p}", specs[i].game),
+                    right: format!("{}({}).{p}", input.router, specs[i].assm_game),
+                    inv: Box::new(inv_applied(&inv_names[i], &specs[i])),
+                    assumed: vec![],
+                },
+                proof: oracle_proof(&specs[i]),
+            }));
+            oracle_lemmas[i].push(name);
+        }
+        if shared {
+            oracle_lemmas[1] = oracle_lemmas[0].clone();
+        }
+        let mut requires = input.requires.to_vec();
+        requires.push(Require {
+            import: true,
+            names: vec![format!("Red_{stem}_Router")],
+        });
+        oracle_files.push(ReductionOracleFile {
+            oracle: export.name().to_string(),
+            file_name: format!("{oracle_stem}.ec"),
+            file: EcFile {
+                header: vec![format!(
+                    "{oracle_stem}.ec for theorem `{}`: the oracle lemma of `{}` in the \
+                     reduction `{}` — generated by `domino easycrypt`.",
+                    input.theorem,
+                    export.name(),
+                    stem
+                )],
+                requires,
+                items: lemmas,
+            },
+        });
+        procs.push(p);
     }
 
     let mut lemmas = Vec::new();
-    let mut oracle_names: [Vec<String>; 2] = [vec![], vec![]];
-    for (i, spec) in specs.iter().enumerate() {
-        for p in &procs {
-            let name = format!("{stem}{}_{p}", suffix(i));
-            oracle_names[i].push(name.clone());
-            if shared && i == 1 {
-                continue;
-            }
-            lemmas.push(EcLemma {
-                name,
-                binders: vec![],
-                statement: EcExpr::OracleEquiv {
-                    left: format!("{}.{p}", spec.game),
-                    right: format!("{}({}).{p}", input.router, spec.assm_game),
-                    inv: Box::new(inv_applied(&inv_names[i], spec)),
-                    assumed: vec![],
-                },
-                proof: oracle_proof(spec),
-            });
-        }
+    let mut run_lemmas = [0, 1].map(|i| format!("run_{stem}{}", suffix(i)));
+    if shared {
+        run_lemmas[1] = run_lemmas[0].clone();
     }
-
-    let mut equivs = Vec::new();
-    let mut prs = Vec::new();
-    for (i, spec) in specs.iter().enumerate() {
-        let game_run = run_args(&game_args[i], &binder_names);
-        let mut red_run: Vec<EcExpr> = input
-            .stored
-            .iter()
-            .map(|s| EcExpr::Var(binder_names[&s.theorem_const].clone()))
-            .collect();
-        red_run.extend(run_args(&assm_args[i], &binder_names));
-        let left_pr = pr(
-            format!("{}.Exp_{}(A)", ctxs[i].names.theory, ctxs[i].names.mangled),
-            game_run.clone(),
-        );
-        let right_pr = pr(format!("{}(A)", input.experiments[i]), red_run.clone());
-        let mut pre = vec!["={glob A}".to_string()];
-        pre.extend(arg_conjunct(&game_run, 1));
-        pre.extend(arg_conjunct(&red_run, 2));
-        let mut proof = vec![
-            tactic(format!(
-                "byequiv (: {} ==> ={{res}}) => //.",
-                pre.join(" /\\ ")
-            )),
-            tactic("proc; inline *; wp."),
-            tactic(format!(
-                "call (: {}).",
-                render_expr(&inv_applied(&inv_names[i], spec))
-            )),
-        ];
-        for o in &oracle_names[i] {
-            proof.push(bullet(format!("by conseq {o} => /#.")));
-        }
-        proof.push(tactic("by auto => /#."));
-        let name = format!("{stem}_equiv{}", ["_L", "_R"][i]);
+    for &i in sides {
+        let inv = inv_applied(&inv_names[i], &specs[i]);
+        let mut proof = vec![tactic(format!("proc ({}) => //.", render_expr(&inv)))];
+        proof.extend(conseq_lines(&procs, &oracle_lemmas[i]));
         lemmas.push(EcLemma {
-            name: name.clone(),
-            binders: binders.clone(),
-            statement: eq(left_pr.clone(), right_pr.clone()),
+            name: run_lemmas[i].clone(),
+            binders: vec![],
+            statement: EcExpr::RunEquiv {
+                left: format!("A({}).run", specs[i].game),
+                right: format!("A({}({})).run", input.router, specs[i].assm_game),
+                inv: Box::new(inv),
+            },
             proof,
         });
-        equivs.push(name);
-        prs.push((left_pr, right_pr));
     }
-    let sub = |a: &EcExpr, b: &EcExpr| {
-        EcExpr::Abs(Box::new(EcExpr::Binop {
-            op: EcBinop::Sub,
-            lhs: Box::new(a.clone()),
-            rhs: Box::new(b.clone()),
-        }))
-    };
-    let bound = format!("{stem}_bound");
-    lemmas.push(EcLemma {
-        name: bound.clone(),
-        binders,
-        statement: eq(sub(&prs[0].0, &prs[1].0), sub(&prs[0].1, &prs[1].1)),
-        proof: vec![tactic(format!(
-            "by rewrite ({} &m{binder_args}) ({} &m{binder_args}).",
-            equivs[0], equivs[1]
-        ))],
-    });
-
-    items.push(EcItem::Section(EcSection {
-        declares: vec![DeclareModule {
-            name: "A".to_string(),
-            module_type: format!("Interfaces.{}", input.adv),
-            restrictions,
-        }],
-        assumptions: vec![],
-        items: vec![],
-        lemmas,
-    }));
     Ok(ReductionLemmas {
-        equivs: [equivs[0].clone(), equivs[1].clone()],
-        bound,
-        consts,
+        run_lemmas,
+        oracle_files,
+        section: EcSection {
+            declares: vec![DeclareModule {
+                name: "A".to_string(),
+                module_type: format!("Interfaces.{}", input.adv),
+                restrictions: adversary_restrictions(input, &ctxs),
+            }],
+            assumptions: vec![],
+            items: vec![],
+            lemmas,
+        },
     })
 }

@@ -228,37 +228,31 @@ datastrucutres and display the user the verified and pruned paths as we do now b
 We do not translate randomness mappings at the moment.
 
 ## Translating reductions
-Each reduction hop `reduction L R` gets one file, `Red_<L>_<R>.ec`, with three kinds of module
-(ADR 0022, `docs/adr/0022-a-reduction-is-a-router-an-adversary-and-an-experiment.md`):
+Each reduction hop `reduction L R` gets the files of the equivalence layout (ADR 0013), story 102
+and ADR 0023 (`docs/adr/0023-a-proposition-owns-its-reduction-adversaries.md`). They hold only
+what is generic, true for all values of the reduction parameters:
 
-- the **reduction router** `Red_<L>_<R> (O : Iface_<Assm>)`: clones of the reduction packages of
-  the left game, with their instance names, and its own abort flag. A call that reaches a mapped
-  package goes to `O`, the assumption game;
-- the **reduction adversary** `B_<L>_<R> (A) (O)`: `setup` stores the theorem constants that a
-  reduction package reads, and `run` initializes the router and runs `A` against it;
-- the **reduction experiment** `RedExp_<L>_<R> (A)`: its `run` calls `B.setup` and then runs the
-  assumption game's own experiment against `B`. It calls `B_<L>_<R>(A, Game_<Assm>).setup(..)`,
-  because EasyCrypt needs every functor argument to call a procedure. When the two assumption games are different
-  compositions, there are two: `RedExp_<L>_<R>_L` and `RedExp_<L>_<R>_R`.
+- `Red_<L>_<R>_Router.ec`: the clones of the reduction packages of the left game (with their
+  instance names), their import adapters, the **reduction router** `Red_<L>_<R> (O : Iface_<Assm>)`
+  with its own abort flag, and the **invariant** `inv_<L>_<R>` (or `_L`/`_R`, one for each side
+  when the two sides differ). A call that reaches a mapped package goes to `O`, the assumption game.
+  The invariant says: the two abort flags agree, the assumption game's abort flag implies the
+  router's, and each package state equals its partner's (reduction packages with their router
+  clones, mapped packages with the assumption game's). It relates the parameters only through
+  these states, because `init` stores them in the package state.
+- `Red_<L>_<R>_<O>.ec`, one for each exported oracle: the **oracle lemma**
+  `Red_<L>_<R>_<O>`, `Game_<G>.<o> ~ Red_<L>_<R>(Game_<Assm>).<o>`, or `_L` and `_R` in the same
+  file when the sides differ. Until story 103, the proof is the generated ladder of story 97
+  (`docs/research/reduction-proof-script.md`); it has no `admit`.
+- `Red_<L>_<R>.ec`: the **run lemma** `run_<L>_<R>` (or `run_<L>_<R>_L` and `_R` when the sides
+  use different compositions),
+  `equiv[A(Game_<G>).run ~ A(Red_<L>_<R>(Game_<Assm>)).run : ={glob A} /\ inv ==> ={res} /\ inv]`,
+  proved by `proc (inv ..) => //.` and one `by conseq <oracle lemma> => /#.` for each oracle. This
+  is the only lemma of a reduction that a proposition names.
 
-The same file proves, with no `admit` (story 99, ADR 0022 decisions 4–6):
-
-- the **invariant** `inv_<L>_<R>` (or `_L`/`_R`, one for each side when the two sides differ): the
-  two abort flags agree, the assumption game's abort flag implies the router's, each constant that
-  `B` stores equals the package parameter that stores it, and each package state equals its
-  partner's (reduction packages with their router clones, mapped packages with the assumption
-  game's);
-- one **oracle lemma** for each exported oracle, `Game_<G>.<o> ~ Red_<L>_<R>(Game_<Assm>).<o>`.
-  The two sides share these lemmas when everything they name is the same. The proof inlines
-  everything except the mapped packages and walks both programs forward in lockstep
-  (`docs/research/reduction-proof-script.md`); a mapped call is closed by `sim`, or by walking its
-  body when `sim` fails;
-- the two **reduction equivalences** `<L>_<R>_equiv_L` and `_equiv_R`,
-  `Pr[Exp_<G>(A).run(..)] = Pr[RedExp(A).run(..)]`, by `byequiv` and `call` of the invariant;
-- the **bound lemma** `<L>_<R>_bound`, an equality of absolute differences:
-  `` `|Pr[Exp_<GL>(A)] - Pr[Exp_<GR>(A)]| = `|Pr[RedExp_L(A)] - Pr[RedExp_R(A)]| ``, the right
-  side in the hop's direction. The three lemmas take `&m` and the theorem constants that a `run`
-  reads, in theorem order. The `domino easycrypt export` report names the bound lemma.
+The name rule of ADR 0013 also covers the oracle files: an oracle called `Router` is rejected.
+The `domino easycrypt export` report names, for each reduction, the joining file, the run lemma(s),
+the number of oracle files and the number of `admit`s.
 
 Translation runs no EasyCrypt; a proof EasyCrypt does not accept is a translation bug.
 
@@ -275,12 +269,29 @@ lemma <Name> &m (<theorem constants that the path does not fix>) :
   <= <term 1> + <term 2> + ...   (or 0%r with no term)
 ```
 
-- A **reduction** step gives the right side of its bound lemma at the step's arguments, in the
-  hop's direction, also when the path uses the hop in reverse.
+- A **reduction** step fixes values for the theorem constants that the reduction packages read.
+  The proposition file defines the concrete part of the step (story 102, ADR 0023):
+  - the **reduction adversary** `B_<L>_<R><s> (A) (O)`, whose `run` calls the router's `init` with
+    these values and runs `A` against the router. There is one adversary for each different
+    (hop, values) pair of the path. The suffix `<s>` is `_<const>_<value>` for each such constant,
+    in theorem order (`neg<n>` for a negative integer), and empty when there is no such constant;
+  - the **equivalence lemma** `equiv_<L>_<R><s> &m (<binders>)`,
+    `Pr[Exp_<G>(A).run(..)] = Pr[Exp_<Assm>(B(A)).run(..)]`, proved by `byequiv`, `inline`,
+    `call` of the run lemma and `auto`. The **merge rule** gives one binder for each pair of values
+    that differ between the two sides; a game position and an assumption position with the same
+    pair share it. The sides merge when they use the same game and the same assumption
+    composition and the game's set of differing pairs equals the assumption's. Otherwise there are
+    two lemmas, `_L` and `_R`, with literals;
+  - the **bound lemma** `bound_<L>_<R><s> &m`, an equality of absolute differences, proved by
+    `rewrite` with the equivalence lemma(s). The step's term is its right side, in the hop's
+    direction, also when the path uses the hop in reverse.
+
+  A step that leaves one of these constants free is an **open hop** (kind `reduction`).
 - An **equivalence** step gives no term. Its lemma is used at the step's arguments (one hop can be
   used more than once, with different constants: kem-dem-cca-ssp uses its equivalence with
   `b = false` and `b = true`).
-- An **open hop**, a conjecture or an equivalence without a translated file, gives its own term:
+- An **open hop**, a conjecture, an equivalence without a translated file, or a reduction step that
+  leaves a constant of the reduction packages free, gives its own term:
   the adversary's advantage between the two neighbouring game instances of the path.
 - A proposition whose path has a **hybrid hop** gets no file. The report lists it as skipped.
 

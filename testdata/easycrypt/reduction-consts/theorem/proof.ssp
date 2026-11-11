@@ -27,6 +27,34 @@ theorem RedConsts {
         }
     }
 
+    instance mod_real_false = ModGame {
+        params {
+            ideal: false,
+            flip: false,
+        }
+    }
+
+    instance mod_ideal_false = ModGame {
+        params {
+            ideal: true,
+            flip: false,
+        }
+    }
+
+    instance mod_ideal_true = ModGame {
+        params {
+            ideal: true,
+            flip: true,
+        }
+    }
+
+    instance mod_real_true = ModGame {
+        params {
+            ideal: false,
+            flip: true,
+        }
+    }
+
     assumptions {
         KeyAssumption: key_real ~ key_ideal
     }
@@ -43,5 +71,11 @@ theorem RedConsts {
                 key: key
             }
         }
+        conjecture mod_ideal_false mod_ideal_true
+    }
+
+    propositions {
+        FlipBound: mod_real_false ~ mod_real_true
+        Free: mod_real ~ mod_ideal
     }
 }

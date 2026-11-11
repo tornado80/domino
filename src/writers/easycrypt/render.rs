@@ -555,6 +555,19 @@ fn render_oracle_equiv(left: &str, right: &str, inv: &EcExpr, assumed: &[EcExpr]
     )
 }
 
+/// The statement of a reduction's run lemma (story 102): as [`render_oracle_equiv`], with
+/// `={glob A}` in place of `={arg}`.
+fn render_run_equiv(left: &str, right: &str, inv: &EcExpr) -> String {
+    const PAD: &str = "      ";
+    const PRE: &str = "={glob A} /\\ ";
+    const POST: &str = "==> ={res} /\\ ";
+    format!(
+        "equiv[{left} ~ {right} :\n{PAD}{PRE}{}\n{PAD}{POST}{}]",
+        render_invariant_block(inv, PAD.len() + PRE.len()),
+        render_invariant_block(inv, PAD.len() + POST.len()),
+    )
+}
+
 /// The statement of a side-invariant lemma (story 69): the pre- and the postcondition each
 /// start a line of their own, and `inv` is laid out as in the `call`.
 ///
@@ -774,7 +787,8 @@ fn prec(e: &EcExpr) -> i8 {
         | EcExpr::GlobAt { .. }
         | EcExpr::Abs(_)
         | EcExpr::OracleEquiv { .. }
-        | EcExpr::OracleHoare { .. } => ATOM_PREC,
+        | EcExpr::OracleHoare { .. }
+        | EcExpr::RunEquiv { .. } => ATOM_PREC,
         EcExpr::App { args, .. } if args.is_empty() => ATOM_PREC,
         EcExpr::App { .. } | EcExpr::Some_(_) | EcExpr::Oget(_) | EcExpr::MapRem { .. } => APP_PREC,
         EcExpr::Unop { .. } => UNOP_PREC,
@@ -981,5 +995,6 @@ fn render_expr_inner(e: &EcExpr) -> String {
             assumed,
         } => render_oracle_equiv(left, right, inv, assumed),
         EcExpr::OracleHoare { proc, pre, post } => render_oracle_hoare(proc, pre, post),
+        EcExpr::RunEquiv { left, right, inv } => render_run_equiv(left, right, inv),
     }
 }

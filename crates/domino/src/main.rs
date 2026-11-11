@@ -936,8 +936,13 @@ fn print_easycrypt_report(theorem_name: &str, exported: &ExportedTheorem, wrote_
     }
     for red in &exported.reductions {
         println!(
-            "  {:<12}{} (assumption {}, bound lemma {})",
-            "reduction", red.file, red.assumption_name, red.bound_lemma
+            "  {:<12}{} (assumption {}, run lemma {}, {} oracle files, {} admits)",
+            "reduction",
+            red.file,
+            red.assumption_name,
+            red.run_lemmas.join(" and "),
+            red.oracle_files.len(),
+            red.admit_count
         );
     }
     for line in proposition_lines(exported) {
