@@ -92,19 +92,19 @@ assumption game's interface. It has its own abort flag, because a reduction pack
 while the assumption game does not.
 
 **Reduction adversary** — the EasyCrypt adversary against the assumption game that starts the
-reduction router and runs the original adversary against it. Its advantage against the assumption
-is the reduction's bound. _Avoid_: B, reduction (for the adversary).
+reduction router with fixed values and runs the original adversary against it. A reduction has one
+for each combination of values that a proposition's path gives to the theorem constants its
+reduction packages read. Its advantage against the assumption is the reduction's bound.
+_Avoid_: reduction (for the adversary), reduction experiment, RedExp.
 
-**Reduction experiment** — the EasyCrypt experiment that takes the theorem constants a reduction
-needs as arguments, gives them to the reduction adversary, and then runs the assumption game's own
-experiment against it, unchanged. It is how a reduction's lemmas quantify over theorem constants
-without a hypothesis on the start memory. Every reduction has one; a reduction whose two assumption
-games are different compositions has one for each side.
-_Avoid_: wrapper, Init module.
+**Bound lemma** — the EasyCrypt lemma of one reduction adversary that says the original adversary's
+advantage between the hop's two game instances *equals* the reduction adversary's advantage between
+the two assumption games. Equal, not at most: a perfect reduction loses nothing.
 
-**Bound lemma** — the EasyCrypt lemma of one reduction that says the original adversary's advantage
-between the hop's two game instances *equals* the reduction adversary's advantage between the two
-assumption games. Equal, not at most: a perfect reduction loses nothing.
+**Run lemma** — the EasyCrypt lemma of a reduction that says the original adversary behaves the same
+against the game and against the reduction router on the assumption game. It holds for all values
+of the theorem constants, so all reduction adversaries of the reduction use it. It is the only
+lemma of a reduction that a proposition names.
 
 **Proposition lemma** — the EasyCrypt lemma of one proposition: the original adversary's advantage
 between its two game instances is at most the sum of the right sides of the bound lemmas, one term
@@ -448,8 +448,11 @@ _Avoid_: conjunct (a part can hold several conjuncts), subgoal.
 taking one leaf apart; when it runs out, the leaf's remaining parts are admitted. Without one, a
 leaf takes as long as its sentences do, each still bounded by the per-sentence timeout.
 
-**Quick close** — the one cheap closing attempt every program goal of a tactics run gets first,
-before any structural tactic: `auto => /#` under a short timeout.
+**Quick close** — the cheap closing attempt `auto => /#` that a tactics run makes on a goal before
+anything else. A program goal gets it before its structural tactic, under a short timeout, unless
+`--no-quick-close` is given; a terminal pair does not get it, and goes straight to its leaf
+procedure. A side goal gets it before its fallback sequence, under the per-sentence timeout,
+whatever the flag.
 _Avoid_: rung 0.
 
 **Fallback sequence** — the fixed, ordered list of closing tactics a tactics run tries on a side
@@ -489,15 +492,16 @@ nothing had arrived; it is **unanswered** when no answer to the sentence comes b
 An interrupt that lands after the sentence has finished, or between two sentences, changes nothing
 and is not answered: every sentence has exactly one answer.
 
-**Respawn** — replacing, in the middle of a proof job, an EasyCrypt that left an interrupt
-unanswered with a fresh one opened at the same proof. The oracle in flight is sealed; oracles
-already finished are admitted in the fresh EasyCrypt, not proved again; the job carries on with the
-next oracle. _Avoid_: restart (a resume mode, which re-proves an oracle in a *later* proof job).
+**Respawn** — a proof job carrying on after an EasyCrypt left an interrupt unanswered. That
+oracle is sealed and its EasyCrypt given up; the job's next oracle opens its own fresh EasyCrypt,
+as every oracle does, so no finished oracle is admitted or proved again.
+_Avoid_: restart (a resume mode, which re-proves an oracle in a *later* proof job).
 
 **Ended early** — a proof job that stopped before its last oracle for a reason other than a
-Ctrl-C: its respawns ran out, or a respawn failed. It leaves its file and record as a Ctrl-C would
-(the oracle in flight sealed, the rest `pending`), but the cause is shown as its own, and the run
-goes on with the next proof job. _Avoid_: interrupted (that is a Ctrl-C).
+Ctrl-C: its respawns ran out. It starts no other oracle, and those already running finish. The
+oracle whose interrupt went unanswered is sealed and those not started stay `pending`, as after a
+Ctrl-C, but the cause is shown as its own, and the run goes on with the next proof job.
+_Avoid_: interrupted (that is a Ctrl-C).
 
 **Front goal** — the first open goal: the one the next tactic works on. EasyCrypt's answer to a
 sentence always gives the **goal kind** of every open goal: *program* (a judgement over two
