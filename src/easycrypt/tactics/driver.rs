@@ -34,7 +34,7 @@ use super::ResumeMode;
 use crate::easycrypt::job::{AdmitRecord, ClosedNode};
 use crate::writers::easycrypt::invariant::{state_relation_op_name, InvariantOp, SideConjuncts};
 
-type R<T> = Result<T, SessionError>;
+pub(super) type R<T> = Result<T, SessionError>;
 
 /// Why an `admit` is there (story 27 §3.7). The slugs are what the report counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

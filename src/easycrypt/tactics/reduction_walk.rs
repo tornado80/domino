@@ -14,12 +14,10 @@
 //! expect (`reduction-mismatch`) or a side goal nothing closed (`reduction-ec-failed`).
 
 use crate::easycrypt::json::Instr;
-use crate::easycrypt::session::{SessionError, Want};
+use crate::easycrypt::session::Want;
 
-use super::driver::{exit_decisions, AdmitReason, DominoView, Part, Prover};
+use super::driver::{exit_decisions, AdmitReason, DominoView, Part, Prover, R};
 use super::goals::{self, synchronized_sampling, SyncSampling};
-
-type R<T> = Result<T, SessionError>;
 
 /// What the reduction walk keeps in the prover: the assumption theory `<A>` and the arm path of
 /// the goal in front (`R`, `R.t`, `R.t.e`), which is the id of its admits.

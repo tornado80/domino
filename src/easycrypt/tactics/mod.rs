@@ -1718,7 +1718,6 @@ impl WalkedTree {
     }
 }
 
-/// The invariant operator of `oracle`'s lemma in reduction `red`: `inv_<L>_<R>`, or `_L`/`_R`.
 /// The assumption theory `Comp_<A>` of a reduction's oracle lemma, which the reduction walk
 /// reads the assumption game's guards by (story 106); empty for any other job.
 fn assumption_theory(kind: JobKind<'_>, oracle: &str) -> String {
@@ -1731,6 +1730,7 @@ fn assumption_theory(kind: JobKind<'_>, oracle: &str) -> String {
         .map_or_else(String::new, |o| o.assumption.clone())
 }
 
+/// The invariant operator of `oracle`'s lemma in reduction `red`: `inv_<L>_<R>`, or `_L`/`_R`.
 fn reduction_invariant_op(red: &ReductionReport, oracle: &str) -> InvariantOp {
     let name = red
         .oracle_lemmas

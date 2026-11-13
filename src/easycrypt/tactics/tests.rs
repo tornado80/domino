@@ -6751,12 +6751,9 @@ mod reduction_jobs {
         };
         assert_eq!(admit.reason, AdmitReason::ReductionMismatch, "{proof}");
         assert_eq!(admit.claim, "left-only-if", "{proof}");
-        // the admit is in one arm of a split; the other arm closed
-        assert!(
-            admit.id.ends_with(".t") || admit.id.ends_with(".e"),
-            "{}",
-            admit.id
-        );
+        // the admit is in the *then* arm of the router split; the *else* arm `R.e` closed
+        assert_eq!(admit.id, "R.t", "{proof}");
+        assert_eq!(proof.matches("admit.").count(), 1, "{proof}");
     }
 
     /// Story 106 §4: after `export` of `reduction-consts`, the report entry of `prove` says
