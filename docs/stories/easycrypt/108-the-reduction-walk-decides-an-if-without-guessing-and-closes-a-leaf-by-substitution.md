@@ -127,30 +127,30 @@ does not depend on the load.
 
 ## 4. Tests first
 
-- [ ] Unit test: the sentence order of a decision on side 1 is `rcondf/>`, `rcondt/>`, `rcondf/#`,
+- [x] Unit test: the sentence order of a decision on side 1 is `rcondf/>`, `rcondt/>`, `rcondf/#`,
       `rcondt/#` (a pure function that gives the order, no EasyCrypt).
-- [ ] Unit test: with side 1 decided `rcondt`, side 2's order starts with `rcondt{2} … />` and
+- [x] Unit test: with side 1 decided `rcondt`, side 2's order starts with `rcondt{2} … />` and
       `rcondt{2} … /#`.
-- [ ] Unit test: `classify` with leading assignments on both sides gives the same shape as with the
+- [x] Unit test: `classify` with leading assignments on both sides gives the same shape as with the
       assignments removed (exit guards, assumption guard, tail branch, samplings).
-- [ ] Unit test: the leaf of an `Equiv` judgement sends no `move: hpre => />.` (the leaf's sentences,
+- [x] Unit test: the leaf of an `Equiv` judgement sends no `move: hpre => />.` (the leaf's sentences,
       from a goal handed to the function, no EasyCrypt).
-- [ ] Live test, `reduction-two-calls` (under `systemd-run --user --scope -p MemoryMax=6G`): 0 admits,
+- [x] Live test, `reduction-two-calls` (under `systemd-run --user --scope -p MemoryMax=6G`): 0 admits,
       the transcript has no `sp` directly before an `rcond`, no failed `rcond… /#.`, and the leaf has
       `move: hpre => />.`.
-- [ ] Live test, `reduction-consts`: 0 admits. The mismatch test of story 106 still gives exactly one
+- [x] Live test, `reduction-consts`: 0 admits. The mismatch test of story 106 still gives exactly one
       `left-only-if` admit.
-- [ ] The equivalence tests of the leaf procedure and of lockstep execution are unchanged and green
+- [x] The equivalence tests of the leaf procedure and of lockstep execution are unchanged and green
       (filtered runs).
 
 ## 5. Acceptance criteria
 
-- [ ] All tests of §4 green, with filtered test runs only. `cargo clippy` clean.
+- [x] All tests of §4 green, with filtered test runs only. `cargo clippy` clean.
 - [ ] Complexity: every touched function within budget (`.sdlc-workspace/crap-coverage.sh <filter>`).
-- [ ] Hop 12 of Full4WHS, `--oracle Send2` and `--oracle Send4` only, one at a time, after a re-export
+- [x] Hop 12 of Full4WHS, `--oracle Send2` and `--oracle Send4` only, one at a time, after a re-export
       of Full4WHS: no admit, and EasyCrypt time below half of story 107's (`Send2` 1132 s, `Send4`
       1900 s). The report gives the table of §2 again for these two oracles.
-- [ ] `docs/proving-algorithm.md` §10.1 and §6 describe the walk as built.
+- [x] `docs/proving-algorithm.md` §10.1 and §6 describe the walk as built.
 
 ## 6. Rejected alternatives
 
