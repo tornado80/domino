@@ -175,7 +175,7 @@ pub(crate) struct EcProve {
     #[clap(long)]
     pub(crate) theorem: String,
     /// Only this game hop (as printed by `domino gamehops`): an equivalence, or a reduction,
-    /// whose oracle lemmas `Red_<L>_<R>_<O>.ec` are walked blind (no lockstep execution, no
+    /// whose oracle lemmas `Red_<L>_<R>_<O>.ec` are proved by the reduction walk (no lockstep execution, no
     /// side-invariant files; records and pages under `session/Red_<L>_<R>/` and
     /// `progress/Red_<L>_<R>/`). Without it the game hops run
     /// one after another in this process; to run them at once start one process each. Its
