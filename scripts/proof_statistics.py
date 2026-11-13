@@ -12,7 +12,9 @@
   <job>_<O>.ec                    the key case splits (`case (…) => [->|?].`) of each oracle
   Comp_<C>.ec                     the number of game invariants of composition C (`op GameInv_…`)
 
-A job is an equivalence `Eq_<L>_<R>` (a hop) or a side-invariant job `SideInv_<C>`.
+A job is an equivalence `Eq_<L>_<R>` (a hop), a reduction `Red_<L>_<R>` (a reduction hop) or a
+side-invariant job `SideInv_<C>`. A reduction's oracle lemmas are proved by a blind walk from
+`proc; inline *.`: there is no joint tree, so it has no lockstep time.
 
 With `--before REF` the same files are also read at the git commit REF of the repository that holds
 the directory, and the tables show the old numbers beside the new ones ("now (before)").
@@ -32,6 +34,7 @@ from datetime import datetime, timezone
 
 ROLES = ["quick close", "structure", "exit path", "reduce", "split", "part fallback",
          "side-goal fallback", "admit"]
+KINDS = ["hop", "reduction", "side"]
 GOAL_TYPES = ["equal-output", "invariant conjunct", "branch-condition", "side-goal", "unreachable",
               "pruned-combination", "other"]
 GLOSSARY = """\
@@ -52,6 +55,10 @@ not close it within the timeout (`smt: timeout` in the `.ec` comment when the la
 | invariant conjunct | another conjunct of a leaf's postcondition: the state relation (a hop) or game invariant (a side invariant) unfolded and split | that conjunct on the new states. Named `invariant/<predicate>` after the predicate it came from; `(case …)` marks one case of a key case split |
 | `stuck/<reason>`, `not-explored` (in other) | lockstep could not continue below a node, or did not explore a child | — : Domino itself has no verdict there |
 """
+REDUCTIONS = """\
+A reduction hop `Red_<L>_<R>` proves one oracle lemma per oracle: the left game is equivalent to the
+reduction package composed with the assumption's game. Its oracles are proved by a blind walk from
+`proc; inline *.` (no joint tree), so there is no lockstep time and Work is EasyCrypt time alone."""
 # `[->|?]` before story 90, `[->>|?]` on a binder, `[hc|hc]` on a term index
 CASE_SENTENCE = re.compile(r"^(\s*)(\+ )?case \(.*\) => \[(?:->>?\|\?|(\w+)\|\3)\]\.\s*$")
 
@@ -100,7 +107,8 @@ def seconds(text):
     return sum(float(v) * unit[u] for v, u in re.findall(r"([\d.]+)\s*([hms])", text))
 
 
-ORACLE_HEAD = re.compile(r"^  (\w+): lockstep (\d+) joint paths, (\d+) nodes, (\d+) stuck points \(([^)]*)\)")
+ORACLE_HEAD = re.compile(r"^  (\w+): (?:lockstep (\d+) joint paths, (\d+) nodes, (\d+) stuck points \(([^)]*)\)"
+                         r"|(blind walk), no joint tree)")
 GOALS = re.compile(r"goals closed: (\d+), (?:no admit|(\d+) admits(?: \(([^)]*)\))?)"
                    r"(?:; (\d+) parts closed by a named split)?(?:; (\d+) parts retried with \d+ s, (\d+) closed)?, "
                    r"fallbacks: (\d+), EasyCrypt time ([^ ]+) \((\d+) attempts undone\)")
@@ -118,7 +126,8 @@ def parse_report(text):
     for line in text.splitlines():
         m = ORACLE_HEAD.match(line)
         if m:
-            cur = {"lockstep": seconds(m.group(5)), "roles": {}, "ec": 0.0, "goals": 0}
+            cur = {"lockstep": seconds(m.group(5) or ""), "blind": bool(m.group(6)), "roles": {},
+                   "ec": 0.0, "goals": 0}
             oracles[m.group(1)] = cur
             continue
         if cur is None:
@@ -129,7 +138,9 @@ def parse_report(text):
             cur["ec"] = seconds(m.group(8))
         elif m := ROLE.match(line):
             cur["roles"][m.group(1)] = (int(m.group(2)), seconds(m.group(3)), int(m.group(4)))
-    for name, block in re.findall(r"^  (\w+): lockstep.*?\n(.*?)(?=^  \w+: lockstep|\Z)", text, re.M | re.S):
+    head = r"^  \w+: (?:lockstep|blind walk)"
+    for name, block in re.findall(r"^  (\w+): (?:lockstep|blind walk).*?\n(.*?)(?=" + head + r"|\Z)", text,
+                                  re.M | re.S):
         if m := EC.search(block):
             g = m.groups()
             oracles[name].update(tactic=seconds(g[0]), smt=seconds(g[1]), translate=seconds(g[2]),
@@ -208,14 +219,15 @@ def load(tree):
     """All jobs of the tree: {job: Job dict}, hops ordered by proofstep, then side invariants."""
     jobs = {}
     for rel in sorted(tree.files):
-        m = re.fullmatch(r"progress/((?:Eq|SideInv)_\w+)/report\.txt", rel)
+        m = re.fullmatch(r"progress/((?:Eq|Red|SideInv)_\w+)/report\.txt", rel)
         if not m:
             continue
         job, text = m.group(1), tree.read(rel)
         head = HEADER.search(text)
         oracles, wall = parse_report(text)
         side = job.startswith("SideInv_")
-        info = {"name": job, "side": side, "oracles": oracles, "wall": wall,
+        kind = "side" if side else "reduction" if job.startswith("Red_") else "hop"
+        info = {"name": job, "kind": kind, "side": side, "oracles": oracles, "wall": wall,
                 "proofstep": int(head.group(2)) if head and head.group(2) else None,
                 "title": (head.group(4) if side else head.group(3)) if head else job,
                 "updated": None, "admits": {}}
@@ -230,7 +242,8 @@ def load(tree):
             comp = tree.read(f"Comp_{info['title']}.ec") or ""
             info["game_invariants"] = len(re.findall(r"^op GameInv_", comp, re.M))
         jobs[job] = info
-    order = sorted(jobs.values(), key=lambda j: (j["side"], j["proofstep"] if j["proofstep"] is not None else 1e9, j["name"]))
+    order = sorted(jobs.values(), key=lambda j: (KINDS.index(j["kind"]),
+                                                 j["proofstep"] if j["proofstep"] is not None else 1e9, j["name"]))
     return {j["name"]: j for j in order}
 
 
@@ -310,13 +323,17 @@ def blank0(x):
 # Report
 # ---------------------------------------------------------------------------------------------
 
-def section(jobs, before, side):
-    """All tables of the hops (side False) or of the side invariants (side True)."""
-    sel = [j for j in jobs.values() if j["side"] == side]
+LABELS = {"hop": "Hop", "reduction": "Reduction", "side": "Composition"}
+
+
+def section(jobs, before, kind):
+    """All tables of the jobs of one kind: hops, reductions or side invariants."""
+    sel = [j for j in jobs.values() if j["kind"] == kind]
     if not sel:
         return []
+    side = kind == "side"
     old = lambda j: before.get(j["name"]) if before else None
-    label = "Composition" if side else "Hop"
+    label = LABELS[kind]
     out = []
 
     # Summary
@@ -458,7 +475,8 @@ def section(jobs, before, side):
     rows = []
     for j in sel:
         calls = [sum(o.get("calls", (0, 0, 0))[i] for o in j["oracles"].values()) for i in range(3)]
-        rows.append([j["title"], dur(j["wall"]), dur(work(j)), dur(total(j, "lockstep")),
+        blind = j["oracles"] and all(o["blind"] for o in j["oracles"].values())
+        rows.append([j["title"], dur(j["wall"]), dur(work(j)), "— (blind walk)" if blind else dur(total(j, "lockstep")),
                      dur(total(j, "ec")), dur(total(j, "tactic")),
                      " / ".join(dur(total(j, k)) for k in ("translate", "prepare", "prover")),
                      dur(total(j, "serialize")), dur(total(j, "parse"), short=True),
@@ -489,7 +507,9 @@ def report(directory, before_ref):
     before = load(Tree(directory, before_ref)) if before_ref else None
     theorem = os.path.basename(os.path.normpath(directory))
     updated = max(filter(None, (j["updated"] for j in jobs.values())), default="—")
-    out = [f"# {theorem}: proof statistics per hop and side invariant", "",
+    kinds = {j["kind"] for j in jobs.values()}
+    per = "hop, reduction and side invariant" if "reduction" in kinds else "hop and side invariant"
+    out = [f"# {theorem}: proof statistics per {per}", "",
            f"Generated by `scripts/proof_statistics.py` on "
            f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC from `session/*/*.record.json`, "
            f"`progress/*/report.txt` and the `.ec` files of `{directory}`. The latest session record is "
@@ -497,9 +517,11 @@ def report(directory, before_ref):
            "Updated (session record) per job: " +
            ", ".join(f"{j['title']} {(j['updated'] or '—')[:10]}" for j in jobs.values()) + ".", "",
            GLOSSARY]
-    hops, sides = section(jobs, before, False), section(jobs, before, True)
+    hops, reds, sides = (section(jobs, before, k) for k in KINDS)
     if hops:
         out += ["## Hops", ""] + hops
+    if reds:
+        out += ["## Reductions", "", REDUCTIONS, ""] + reds
     if sides:
         out += ["## Side invariants", ""] + sides
     return "\n".join(out).rstrip() + "\n"
