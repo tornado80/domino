@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::easycrypt::json::{Form, Goal, GoalKind, Instr, Side};
+use crate::easycrypt::json::{Form, Goal, GoalKind, Instr, LValue, Side};
 use crate::writers::easycrypt::invariant::{SideConjunct, SideConjuncts};
 
 /// A program goal: `equiv[ S1 ~ S2 : pre ==> post ]`, or `hoare[ S : pre ==> post ]` in a
@@ -60,6 +60,62 @@ pub(super) fn sides(goal: &Goal) -> Option<(&Side, &Side)> {
 /// Both programs are empty (`<skip> ~ <skip>`).
 pub(super) fn is_skip_pair(goal: &Goal) -> bool {
     sides(goal).is_some_and(|(l, r)| l.stmt.is_empty() && r.stmt.is_empty())
+}
+
+/// One program of an `equivS` goal: the left (`&1`) or the right (`&2`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProgramSide {
+    Left,
+    Right,
+}
+
+/// Whether the precondition of the goal mentions a variable of `lvalue` in the memory of `side`
+/// (story 104): a `pvar` with the same name or path, or, for a module variable `M.x`, a
+/// `glob` of `M` or of a module that contains `M`. A sampling into such a variable writes
+/// over a value `#pre` speaks about, so `seq 1 1 : (#pre /\ …)` cannot hold. False for a goal
+/// that is not an `equivS` or has no precondition. A stub hides what is below it.
+pub(crate) fn sampled_in_pre(goal: &Goal, side: ProgramSide, lvalue: &LValue) -> bool {
+    let (Some(pre), Some((left, right))) = (goal.concl.pre.as_deref(), sides(goal)) else {
+        return false;
+    };
+    let mem = match side {
+        ProgramSide::Left => &left.mem,
+        ProgramSide::Right => &right.mem,
+    };
+    lvalue.vars.iter().any(|var| mentions_var(pre, var, mem))
+}
+
+fn mentions_var(form: &Form, var: &Form, mem: &str) -> bool {
+    names_var(form, var, mem) || form.children().any(|c| mentions_var(c, var, mem))
+}
+
+/// Whether `form` is the program variable `var` in `mem`, or a `glob` in `mem` that holds it.
+fn names_var(form: &Form, var: &Form, mem: &str) -> bool {
+    if form.mem.as_deref() != Some(mem) {
+        return false;
+    }
+    match form.kind.as_str() {
+        "pvar" => form.scope == var.scope && form.name == var.name && form.path == var.path,
+        "glob" => form
+            .module
+            .as_deref()
+            .zip(var_module(var))
+            .is_some_and(|(glob, module)| {
+                let glob = glob.strip_prefix("Top.").unwrap_or(glob);
+                module == glob || module.starts_with(&format!("{glob}."))
+            }),
+        _ => false,
+    }
+}
+
+/// The module of a global `pvar` (`Pkg_MAC.MAC` for the path `Top.Pkg_MAC.MAC./k`).
+fn var_module(var: &Form) -> Option<&str> {
+    if var.scope.as_deref() != Some("global") {
+        return None;
+    }
+    let path = var.path.as_deref()?;
+    let (module, _) = path.rsplit_once("./")?;
+    Some(module.strip_prefix("Top.").unwrap_or(module))
 }
 
 /// The number of assignments at the start of a statement list: what `sp k l` consumes.
@@ -633,7 +689,7 @@ impl Selection {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::easycrypt::json::parse_response;
 
@@ -1161,5 +1217,124 @@ mod tests {
         assert_eq!(stub.children().count(), 0);
         assert!(key_pairs(&stub, &binders(&["ctr1"])).is_empty());
         assert!(may_mention_op(&stub, "inv"));
+    }
+
+    // story 104: a sampled variable that `#pre` mentions
+
+    fn local_pvar(name: &str, mem: &str) -> String {
+        format!(r#"{{"kind":"pvar","scope":"local","name":"{name}","mem":"{mem}"}}"#)
+    }
+
+    fn rnd(pp: &str, var: &str) -> String {
+        format!(
+            r#"{{"kind":"rnd","pp":"{pp} <$ d;","lvalue":{{"kind":"var","pp":"{pp}","vars":[{var}]}}}}"#
+        )
+    }
+
+    /// `equiv[ left ~ right : pre ==> true ]`.
+    pub(crate) fn sampling_goal(pre: &str, left: &str, right: &str) -> Goal {
+        goal_of(&format!(
+            r#"{{"kind":"equivS","left":{{"mem":"&1","stmt":[{left}]}},"right":{{"mem":"&2","stmt":[{right}]}},"pre":{pre},"post":{}}}"#,
+            atom("true")
+        ))
+    }
+
+    pub(crate) fn key_goal() -> Goal {
+        let key = r#"{"kind":"pvar","scope":"local","name":"key"}"#;
+        let pre = app(
+            "Top.Pervasive.=",
+            &[local_pvar("key", "&2"), local_pvar("kmac", "&2")],
+        );
+        sampling_goal(&pre, &rnd("key", key), &rnd("key", key))
+    }
+
+    fn head_lvalue(goal: &Goal, side: ProgramSide) -> &LValue {
+        let (l, r) = sides(goal).unwrap();
+        let s = if side == ProgramSide::Left { l } else { r };
+        s.stmt[0].lvalue.as_ref().unwrap()
+    }
+
+    #[test]
+    fn a_local_in_the_precondition_of_memory_2_is_sampled_in_pre_on_side_2_only() {
+        let goal = key_goal();
+        let lv = head_lvalue(&goal, ProgramSide::Right);
+        assert!(sampled_in_pre(&goal, ProgramSide::Right, lv));
+        assert!(!sampled_in_pre(&goal, ProgramSide::Left, lv));
+    }
+
+    #[test]
+    fn a_glob_of_the_module_in_the_precondition_holds_its_state_field() {
+        let k = r#"{"kind":"pvar","scope":"global","path":"Top.Pkg_MAC.MAC./k"}"#;
+        let glob = |m: &str| format!(r#"{{"kind":"glob","module":"{m}","mem":"&2"}}"#);
+        for module in ["Pkg_MAC.MAC", "Pkg_MAC"] {
+            let pre = app("Top.Comp.inv", &[glob(module)]);
+            let goal = sampling_goal(
+                &pre,
+                &rnd("x", &local_pvar("x", "")),
+                &rnd("Pkg_MAC.MAC.k", k),
+            );
+            let lv = head_lvalue(&goal, ProgramSide::Right);
+            assert!(
+                sampled_in_pre(&goal, ProgramSide::Right, lv),
+                "glob {module}"
+            );
+        }
+        // a module with a longer name is not a container
+        let pre = app("Top.Comp.inv", &[glob("Pkg_MA")]);
+        let goal = sampling_goal(
+            &pre,
+            &rnd("x", &local_pvar("x", "")),
+            &rnd("Pkg_MAC.MAC.k", k),
+        );
+        assert!(!sampled_in_pre(
+            &goal,
+            ProgramSide::Right,
+            head_lvalue(&goal, ProgramSide::Right)
+        ));
+    }
+
+    #[test]
+    fn a_global_pvar_in_the_precondition_is_sampled_in_pre() {
+        let k = r#"{"kind":"pvar","scope":"global","path":"Top.Pkg_MAC.MAC./k"}"#;
+        let pre = app(
+            "Top.Pervasive.=",
+            &[
+                r#"{"kind":"pvar","scope":"global","path":"Top.Pkg_MAC.MAC./k","mem":"&1"}"#.into(),
+                local("c"),
+            ],
+        );
+        let goal = sampling_goal(&pre, &rnd("Pkg_MAC.MAC.k", k), &rnd("Pkg_MAC.MAC.k", k));
+        assert!(sampled_in_pre(
+            &goal,
+            ProgramSide::Left,
+            head_lvalue(&goal, ProgramSide::Left)
+        ));
+        assert!(!sampled_in_pre(
+            &goal,
+            ProgramSide::Right,
+            head_lvalue(&goal, ProgramSide::Right)
+        ));
+    }
+
+    #[test]
+    fn the_nonce_of_send2_is_not_in_pre() {
+        let ni1 = r#"{"kind":"pvar","scope":"local","name":"ni1"}"#;
+        let pre = app(
+            "Top.Pervasive.&&",
+            &[
+                app(
+                    "Top.Pervasive.=",
+                    &[local_pvar("key", "&1"), local_pvar("key", "&2")],
+                ),
+                app(
+                    "Top.Comp.inv",
+                    &[r#"{"kind":"glob","module":"Pkg_MAC.MAC","mem":"&2"}"#.into()],
+                ),
+            ],
+        );
+        let goal = sampling_goal(&pre, &rnd("ni1", ni1), &rnd("ni1", ni1));
+        for side in [ProgramSide::Left, ProgramSide::Right] {
+            assert!(!sampled_in_pre(&goal, side, head_lvalue(&goal, side)));
+        }
     }
 }

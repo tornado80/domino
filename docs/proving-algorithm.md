@@ -389,7 +389,7 @@ path), `S<n>` (stuck point), `N<n>` (node), or `router`.
 | `domino-inconclusive` | Domino could not decide, and EasyCrypt did not close it |
 | `domino-verified-ec-failed` | Domino decided it, and EasyCrypt did not close it |
 | `program-mismatch` | EasyCrypt's program did not match, and the blind walk found nothing |
-| `seq-post` | A synchronized sampling had assignments before it after `sp` |
+| `seq-post` | A synchronized sampling had assignments before it after `sp`, or `#pre` mentions the sampled variable (story 104) |
 | `router` | A goal of the router prelude |
 | `interrupted` | A goal still open when the oracle was sealed |
 
@@ -410,6 +410,7 @@ path), `S<n>` (stuck point), `N<n>` (node), or `router`.
 | `program-mismatch` | `proc; inline.` refused | `N0` | `proc; inline.` | n/a |
 | `program-mismatch` | Blind walk ran out of options | `N<n>` | `program` | Inconclusive |
 | `seq-post` | Synchronized sampling after `sp` | A pair below | `sampling` | Verified, fixed |
+| `seq-post` | Synchronized sampling into a variable `#pre` mentions (a `pvar` in that memory, or `glob` of a module holding it) | A pair below | `sampling: <x>{<side>} in #pre` | Verified, fixed |
 | `router` | Prelude side goal | `router` | `router-condition`, `both-aborted`, `already-aborted` | n/a |
 | `interrupted` | The seal | `N<n>` or `router` | `open-goal` | n/a |
 
@@ -417,9 +418,11 @@ path), `S<n>` (stuck point), `N<n>` (node), or `router`.
 means Domino decided that branch or combination under its assumptions, not that the solver
 checked the formula EasyCrypt showed.
 
-Two cases are defensive. `not-explored` needs a tree from a stopped or path-limited run, and a
-`prove` run sets no path limit and does not walk a stopped tree. `seq-post` needs EasyCrypt to
-leave an assignment at the head right after `sp`.
+One case is defensive. `not-explored` needs a tree from a stopped or path-limited run, and a
+`prove` run sets no path limit and does not walk a stopped tree. `seq-post` with the claim
+`sampling` needs EasyCrypt to leave an assignment at the head right after `sp`; `seq-post` with the
+claim `sampling: <x>{<side>} in #pre` occurs (an oracle that samples into its argument, a local it
+assigned before, or a state field under `glob`).
 
 ### 9.3 How the reason of an EasyCrypt failure is chosen
 

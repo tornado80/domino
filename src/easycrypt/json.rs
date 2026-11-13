@@ -288,9 +288,12 @@ pub struct Form {
     /// `pvar` of scope `global`: the variable's path (`Top.M./x`).
     #[serde(default)]
     pub path: Option<String>,
-    /// `pvar`: the memory (`&1`).
+    /// `pvar`, `glob`: the memory (`&1`).
     #[serde(default)]
     pub mem: Option<String>,
+    /// `glob`: the module as printed (`Pkg_MAC.MAC`; an abstract module `A`).
+    #[serde(default)]
+    pub module: Option<String>,
 }
 
 impl Form {
@@ -387,6 +390,9 @@ pub struct Instr {
 pub struct LValue {
     #[serde(default)]
     pub pp: String,
+    /// The program variables written, each a `pvar` without a memory.
+    #[serde(default)]
+    pub vars: Vec<Form>,
 }
 
 /// Parses one line of an EasyCrypt answer.

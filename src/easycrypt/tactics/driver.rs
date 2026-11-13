@@ -2025,35 +2025,34 @@ impl Prover<'_> {
         let [child] = node.children.as_slice() else {
             return Ok(false);
         };
-        let Some((left, right)) = self.front().and_then(goals::sides) else {
+        if self.front().and_then(goals::sides).is_none() {
             return Ok(false);
-        };
-        let (kl, hl) = goals::head_after_assignments(&left.stmt);
-        let (kr, hr) = goals::head_after_assignments(&right.stmt);
-        let rnd = |h: Option<&crate::easycrypt::json::Instr>| {
-            h.filter(|i| i.kind == "rnd")
-                .and_then(|i| i.lvalue.as_ref())
-                .map(|l| l.pp.clone())
-        };
-        let (x, y) = (rnd(hl), rnd(hr));
+        }
         let before = self.count();
         let sentences: Vec<String> = if synchronized {
-            let (Some(x), Some(y)) = (x, y) else {
+            // `#pre` in full: a stub would hide a sampled variable (story 104)
+            self.full_front()?;
+            let Some(plan) = self.front().and_then(synchronized_sampling) else {
                 return Ok(false);
             };
-            if kl + kr > 0 {
-                // `sp` left assignments before the sampling: `seq` would swallow them
-                return self.seq_post_admit(idx).map(|()| true);
-            }
-            let post = format!("(#pre /\\ {x}{{1}} = {y}{{2}})");
+            let post = match plan {
+                SyncSampling::Seq(post) => post,
+                SyncSampling::Admit(claim) => {
+                    return self.seq_post_admit(idx, &claim).map(|()| true);
+                }
+            };
             ["auto => />", "auto => /#", "auto"]
                 .iter()
                 .map(|close| format!("seq 1 1 : {post}; 1: {close}."))
                 .collect()
         } else {
-            let (n, m) = match (child.left.is_some(), child.right.is_some(), x, y) {
-                (true, false, Some(_), _) => (1, 0),
-                (false, true, _, Some(_)) => (0, 1),
+            let Some((left, right)) = self.front().and_then(goals::sides) else {
+                return Ok(false);
+            };
+            let rnd_at = |side: &crate::easycrypt::json::Side| sampled_head(&side.stmt).is_some();
+            let (n, m) = match (child.left.is_some(), child.right.is_some()) {
+                (true, false) if rnd_at(left) => (1, 0),
+                (false, true) if rnd_at(right) => (0, 1),
                 _ => return Ok(false),
             };
             ["auto => />", "auto => /#", "auto"]
@@ -2077,9 +2076,9 @@ impl Prover<'_> {
         Ok(true)
     }
 
-    fn seq_post_admit(&mut self, idx: usize) -> R<()> {
+    fn seq_post_admit(&mut self, idx: usize, claim: &str) -> R<()> {
         let id = self.id_below(idx, &Part::Whole, DominoView::Verified);
-        self.admit(AdmitReason::SeqPost, &id, "sampling", DominoView::Verified)
+        self.admit(AdmitReason::SeqPost, &id, claim, DominoView::Verified)
     }
 
     // ------------------------------------------------------------------
@@ -2797,4 +2796,51 @@ pub(super) fn leaf_deadline(
     now: std::time::Instant,
 ) -> Option<std::time::Instant> {
     budget.map(|b| now + b)
+}
+
+/// What the prover does at a synchronized sampling (story 104).
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum SyncSampling {
+    /// `seq 1 1` with this postcondition.
+    Seq(String),
+    /// A `seq-post` admit with this claim, and no `seq`.
+    Admit(String),
+}
+
+/// The `rnd` instruction after the leading assignments of a program, if its head is one.
+fn sampled_head(
+    stmts: &[crate::easycrypt::json::Instr],
+) -> Option<&crate::easycrypt::json::LValue> {
+    let (_, head) = goals::head_after_assignments(stmts);
+    head.filter(|i| i.kind == "rnd")?.lvalue.as_ref()
+}
+
+/// The step at a synchronized sampling `x <$ d ~ y <$ d'` of a program goal: `seq 1 1 :
+/// (#pre /\ x{1} = y{2})`, or an admit when that `seq` cannot hold. Assignments before the
+/// sampling would be swallowed by the `seq` (claim `sampling`); a sampled variable that
+/// `#pre` mentions is overwritten (claim `sampling: x{1} in #pre`, story 104). `None` when
+/// the heads are not both samplings.
+pub(super) fn synchronized_sampling(goal: &Goal) -> Option<SyncSampling> {
+    let (left, right) = goals::sides(goal)?;
+    let x = sampled_head(&left.stmt)?;
+    let y = sampled_head(&right.stmt)?;
+    let (kl, kr) = goals::sp_counts(goal)?;
+    if kl + kr > 0 {
+        return Some(SyncSampling::Admit("sampling".to_string()));
+    }
+    for (side, lvalue, n) in [
+        (goals::ProgramSide::Left, x, 1),
+        (goals::ProgramSide::Right, y, 2),
+    ] {
+        if goals::sampled_in_pre(goal, side, lvalue) {
+            return Some(SyncSampling::Admit(format!(
+                "sampling: {}{{{n}}} in #pre",
+                lvalue.pp
+            )));
+        }
+    }
+    Some(SyncSampling::Seq(format!(
+        "(#pre /\\ {}{{1}} = {}{{2}})",
+        x.pp, y.pp
+    )))
 }

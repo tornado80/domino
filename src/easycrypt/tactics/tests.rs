@@ -6662,3 +6662,31 @@ mod reduction_jobs {
         assert!(pkgen.contains("+ proc; inline. admit."), "{pkgen}");
     }
 }
+
+// story 104: a sampled variable that `#pre` mentions gets a `seq-post` admit
+
+#[test]
+fn a_sampling_into_a_variable_of_pre_is_admitted_seq_post_without_a_seq() {
+    use super::driver::{synchronized_sampling, SyncSampling};
+    let goal = super::goals::tests::key_goal();
+    assert_eq!(
+        synchronized_sampling(&goal),
+        Some(SyncSampling::Admit("sampling: key{2} in #pre".into()))
+    );
+    assert_eq!(AdmitReason::SeqPost.slug(), "seq-post");
+}
+
+#[test]
+fn a_sampling_into_a_fresh_variable_gets_seq_1_1() {
+    use super::driver::{synchronized_sampling, SyncSampling};
+    let ni1 = r#"{"kind":"pvar","scope":"local","name":"ni1"}"#;
+    let rnd = format!(
+        r#"{{"kind":"rnd","pp":"ni1 <$ dbits_n;","lvalue":{{"kind":"var","pp":"ni1","vars":[{ni1}]}}}}"#
+    );
+    let pre = r#"{"kind":"pvar","scope":"local","name":"key","mem":"&2"}"#;
+    let goal = super::goals::tests::sampling_goal(pre, &rnd, &rnd);
+    assert_eq!(
+        synchronized_sampling(&goal),
+        Some(SyncSampling::Seq("(#pre /\\ ni1{1} = ni1{2})".into()))
+    );
+}
