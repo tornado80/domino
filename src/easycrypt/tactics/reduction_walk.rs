@@ -76,7 +76,7 @@ pub(crate) fn classify(left: &[Instr], right: &[Instr], assumption: &str) -> Hea
     if lk == "while" || rk == "while" {
         return Head::Mismatch(Mismatch::Loop);
     }
-    classify_pair(l, r, lk, rk)
+    classify_pair(l, r)
 }
 
 fn kind_of(instr: Option<&Instr>) -> &str {
@@ -84,7 +84,8 @@ fn kind_of(instr: Option<&Instr>) -> &str {
 }
 
 /// Rules 6 to 12, for heads that are neither guards of the assumption nor loops.
-fn classify_pair(l: Option<&Instr>, r: Option<&Instr>, lk: &str, rk: &str) -> Head {
+fn classify_pair(l: Option<&Instr>, r: Option<&Instr>) -> Head {
+    let (lk, rk) = (kind_of(l), kind_of(r));
     match (l, r) {
         (Some(l), Some(r)) if lk == "if" && rk == "if" => {
             if is_exit_guard(l) && is_exit_guard(r) {
@@ -118,7 +119,7 @@ fn lvalue_pp(instr: &Instr) -> String {
 pub(crate) fn is_assumption_guard(instr: &Instr, assumption: &str) -> bool {
     if_condition(instr).is_some_and(|c| {
         c.strip_prefix('!')
-            .is_some_and(|flag| is_game_flag(flag.trim(), assumption))
+            .is_some_and(|flag| is_game_flag(strip_parens(flag.trim()), assumption))
     })
 }
 
@@ -130,7 +131,7 @@ pub(crate) fn is_tail_branch(instr: &Instr, assumption: &str) -> bool {
     };
     let tests_none = cond
         .split_once(" = ")
-        .is_some_and(|(x, rhs)| is_name(x.trim()) && rhs.trim().starts_with("None"));
+        .is_some_and(|(x, rhs)| is_name(x.trim()) && rhs.trim() == "None");
     let [then] = instr.then_block.as_slice() else {
         return false;
     };
@@ -186,7 +187,7 @@ fn drop_type_annotations(text: &str) -> String {
     while let Some(start) = rest.find("<:") {
         out.push_str(&rest[..start]);
         let mut depth = 0usize;
-        let mut end = rest.len();
+        let mut end = None;
         let mut prev = ' ';
         for (i, c) in rest[start..].char_indices() {
             let arrow = prev == '-';
@@ -196,13 +197,18 @@ fn drop_type_annotations(text: &str) -> String {
                 '>' if !arrow => {
                     depth -= 1;
                     if depth == 0 {
-                        end = start + i + 1;
+                        end = Some(start + i + 1);
                         break;
                     }
                 }
                 _ => {}
             }
         }
+        // an annotation that never closes: keep the text, so no name hides in it
+        let Some(end) = end else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
         rest = &rest[end..];
     }
     out.push_str(rest);
@@ -305,6 +311,9 @@ mod tests {
         let (l, r) = goal!("assumption-guard.json");
         assert!(is_assumption_guard(&r[0], A));
         assert!(!is_assumption_guard(&r[0], "Comp_H7"));
+        let mut parens = r[0].clone();
+        parens.cond.as_mut().unwrap().pp = "!(Comp_MAC.Game_MAC.abort_flag)".to_string();
+        assert!(is_assumption_guard(&parens, A));
         assert_eq!(classify(&l, &r, A), Head::AssumptionGuard);
     }
 
@@ -333,6 +342,9 @@ mod tests {
         let mut two = r[0].clone();
         two.then_block.push(two.then_block[0].clone());
         assert!(!is_tail_branch(&two, A));
+        let mut trailing = r[0].clone();
+        trailing.cond.as_mut().unwrap().pp = "ec_result4 = None<:unit> \\/ b".to_string();
+        assert!(!is_tail_branch(&trailing, A));
     }
 
     #[test]
@@ -429,5 +441,6 @@ mod tests {
         assert_eq!(strip_parens("(a) = (b)"), "(a) = (b)");
         assert!(is_game_flag("Top.Comp_MAC.Game_MAC.abort_flag", A));
         assert!(!is_game_flag("Comp_MAC.Game_MAC.X.abort_flag", A));
+        assert_eq!(drop_type_annotations("x = None<:int"), "x = None<:int");
     }
 }
