@@ -707,6 +707,52 @@ impl Selection {
     }
 }
 
+/// What the prover does at a synchronized sampling (story 104).
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum SyncSampling {
+    /// `seq 1 1` with this postcondition.
+    Seq(String),
+    /// A `seq-post` admit with this claim, and no `seq`.
+    Admit(String),
+}
+
+/// The `rnd` instruction after the leading assignments of a program, if its head is one.
+pub(super) fn sampled_head(stmts: &[Instr]) -> Option<&LValue> {
+    let (_, head) = head_after_assignments(stmts);
+    head.filter(|i| i.kind == "rnd")?.lvalue.as_ref()
+}
+
+/// The step at a synchronized sampling `x <$ d ~ y <$ d'` of a program goal: `seq 1 1 :
+/// (#pre /\ x{1} = y{2})`, or an admit when that `seq` cannot hold. Assignments before the
+/// sampling would be swallowed by the `seq` (claim `sampling`); a sampled variable that
+/// `#pre` mentions is overwritten (claim `sampling: x{1} in #pre`, story 104). `None` when
+/// the heads are not both samplings.
+pub(super) fn synchronized_sampling(goal: &Goal) -> Option<SyncSampling> {
+    let (left, right) = sides(goal)?;
+    let x = sampled_head(&left.stmt)?;
+    let y = sampled_head(&right.stmt)?;
+    let (kl, kr) = sp_counts(goal)?;
+    if kl + kr > 0 {
+        return Some(SyncSampling::Admit("sampling".to_string()));
+    }
+    for (side, lvalue, n) in [(ProgramSide::Left, x, 1), (ProgramSide::Right, y, 2)] {
+        if let Some(var) = sampled_var_in_pre(goal, side, lvalue) {
+            let name = if var.pp.is_empty() {
+                &lvalue.pp
+            } else {
+                &var.pp
+            };
+            return Some(SyncSampling::Admit(format!(
+                "sampling: {name}{{{n}}} in #pre"
+            )));
+        }
+    }
+    Some(SyncSampling::Seq(format!(
+        "(#pre /\\ {}{{1}} = {}{{2}})",
+        x.pp, y.pp
+    )))
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;

@@ -36,6 +36,8 @@ pub struct ReductionOracleFile {
     pub proc_name: String,
     /// The invariant operator its statement applies, `inv_<L>_<R>` (or `_L`/`_R`).
     pub invariant: String,
+    /// The theory of the assumption composition, `Comp_<A>` (story 106).
+    pub assumption: String,
     pub file_name: String,
     pub file: EcFile,
 }
@@ -109,6 +111,8 @@ impl CompNames {
 struct SideSpec {
     game: String,
     assm_game: String,
+    /// `Comp_<A>`, the theory of `assm_game`.
+    assm_theory: String,
     /// The value arguments of the invariant op: `(name, type, applied value)`.
     args: Vec<(String, EcType, EcExpr)>,
     /// The equality conjuncts after C1 and C2: `(left arg, right arg)` names.
@@ -271,6 +275,7 @@ fn side_spec(input: &LemmaInput<'_>, ctx: &SideCtx) -> Result<SideSpec, EcExport
     Ok(SideSpec {
         game,
         assm_game,
+        assm_theory: ctx.assm.theory.clone(),
         args,
         eqs,
     })
@@ -454,6 +459,7 @@ pub(super) fn reduction_lemmas(
                     oracle: format!("{}{}", export.name(), suffix(i)),
                     proc_name: p.clone(),
                     invariant: inv_names[i].clone(),
+                    assumption: specs[i].assm_theory.clone(),
                     file_name: format!("{file_stem}.ec"),
                     file: f,
                 }

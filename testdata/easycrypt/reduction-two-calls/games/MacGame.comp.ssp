@@ -1,0 +1,18 @@
+composition MacGame {
+    const ideal: Bool;
+    const n: Integer;
+
+    instance mac = Mac {
+        params {
+            ideal: ideal,
+            n: n,
+        }
+    }
+
+    compose {
+        adversary: {
+            Init: mac,
+            Mac: mac,
+        },
+    }
+}

@@ -27,7 +27,7 @@ use crate::easycrypt::session::{Session, SessionError, Want};
 use crate::easycrypt::time_by_role::TimeByRole;
 use crate::easycrypt::transcript::{Role, SentenceCtx};
 
-use super::goals;
+use super::goals::{self, sampled_head, synchronized_sampling, SyncSampling};
 use super::live::{Closing, LiveHandle};
 use super::script::{Mark, Script};
 use super::ResumeMode;
@@ -54,13 +54,17 @@ pub enum AdmitReason {
     SeqPost,
     /// A goal of the router prelude (the condition, or both sides already aborted).
     Router,
+    /// The reduction walk met code that does not have the shape of a reduction (story 106).
+    ReductionMismatch,
+    /// The reduction walk's step was right and EasyCrypt did not close its side goal or leaf.
+    ReductionEcFailed,
     /// A goal still open when the oracle was sealed (story 33): the walk had not got to it
     /// when the file was written.
     Interrupted,
 }
 
 impl AdmitReason {
-    pub const ALL: [AdmitReason; 8] = [
+    pub const ALL: [AdmitReason; 10] = [
         AdmitReason::Stuck,
         AdmitReason::DominoFails,
         AdmitReason::DominoInconclusive,
@@ -68,6 +72,8 @@ impl AdmitReason {
         AdmitReason::ProgramMismatch,
         AdmitReason::SeqPost,
         AdmitReason::Router,
+        AdmitReason::ReductionMismatch,
+        AdmitReason::ReductionEcFailed,
         AdmitReason::Interrupted,
     ];
 
@@ -81,6 +87,8 @@ impl AdmitReason {
             AdmitReason::SeqPost => "seq-post",
             AdmitReason::Router => "router",
             AdmitReason::Interrupted => "interrupted",
+            AdmitReason::ReductionMismatch => "reduction-mismatch",
+            AdmitReason::ReductionEcFailed => "reduction-ec-failed",
         }
     }
 
@@ -691,7 +699,7 @@ struct CaseTally {
 }
 
 /// A point to return to: the session's state and the script's.
-struct Snap {
+pub(super) struct Snap {
     state: u64,
     script: Mark,
     closed: usize,
@@ -780,6 +788,8 @@ pub(super) struct Prover<'a> {
     pub last_smt: Option<SmtOutcome>,
     /// The outcome of the last part fallback, for the next admit's comment; the admit takes it.
     pub admit_smt: Option<SmtOutcome>,
+    /// The reduction walk's assumption theory and arm path (story 106).
+    pub walk: super::reduction_walk::Walk,
 }
 
 impl Prover<'_> {
@@ -898,13 +908,13 @@ impl Prover<'_> {
         }
     }
 
-    fn front(&self) -> Option<&Goal> {
+    pub(super) fn front(&self) -> Option<&Goal> {
         self.session.front()
     }
 
     /// Makes [`Self::front`] the front goal in full: after sentences that asked for
     /// [`Want::Head`], it is cut at depth 4 ([`Session::ensure_front`]).
-    fn full_front(&mut self) -> R<()> {
+    pub(super) fn full_front(&mut self) -> R<()> {
         self.session
             .ensure_front(Want::Full)
             .map_err(|e| self.session_failed(e))
@@ -918,7 +928,7 @@ impl Prover<'_> {
         self.session.last().map_or(0, |r| r.state)
     }
 
-    fn snap(&self) -> Snap {
+    pub(super) fn snap(&self) -> Snap {
         Snap {
             state: self.state(),
             script: self.script.mark(),
@@ -929,7 +939,7 @@ impl Prover<'_> {
         }
     }
 
-    fn rollback(&mut self, snap: Snap) -> R<()> {
+    pub(super) fn rollback(&mut self, snap: Snap) -> R<()> {
         if self.state() != snap.state {
             if let Err(e) = self.session.undo_to(snap.state) {
                 return Err(self.session_failed(e));
@@ -995,7 +1005,7 @@ impl Prover<'_> {
 
     /// Sends the sentences in order, each asking for `want`, and keeps them if all are accepted
     /// and `holds` at the end; otherwise everything is undone.
-    fn attempt(
+    pub(super) fn attempt(
         &mut self,
         sentences: &[&str],
         want: Want,
@@ -1017,7 +1027,7 @@ impl Prover<'_> {
 
     /// An attempt that must close the front goal. Its answers carry no goal ([`Want::Status`]):
     /// it is read only from the count of open goals.
-    fn try_close(&mut self, sentences: &[&str]) -> R<bool> {
+    pub(super) fn try_close(&mut self, sentences: &[&str]) -> R<bool> {
         let before = self.count();
         self.attempt(sentences, Want::Status, |p| p.count() + 1 == before)
     }
@@ -1057,7 +1067,7 @@ impl Prover<'_> {
     }
 
     /// Runs `f` as the block of the next subgoal: its first sentence gets the bullet.
-    fn bullet<T>(&mut self, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+    pub(super) fn bullet<T>(&mut self, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
         self.script.enter_bullet(self.count());
         let result = f(self);
         self.script.leave_bullet();
@@ -1074,7 +1084,7 @@ impl Prover<'_> {
     }
 
     /// [`Self::admit`] of `part` of a leaf's claims (the whole claim is no part).
-    fn admit_of_part(
+    pub(super) fn admit_of_part(
         &mut self,
         part: &Part,
         reason: AdmitReason,
@@ -1157,6 +1167,9 @@ impl Prover<'_> {
     /// Admits after EasyCrypt failed on `part` of the subtree at `node`: the reason is what
     /// Domino itself concluded (§3.6).
     fn admit_ec_failed(&mut self, node: usize, part: &Part, claim: &str) -> R<()> {
+        if self.judgement == Judgement::Reduction {
+            return self.admit_reduction_part(part, AdmitReason::ReductionEcFailed, claim);
+        }
         let tree = self.tree;
         let view = if tree.subtree.get(node).is_none_or(|below| below.is_empty()) {
             DominoView::Inconclusive
@@ -1408,7 +1421,7 @@ impl Prover<'_> {
 
     /// The quick close of a program goal (§3.3), under its short timeout; `Ok(false)` without
     /// sending anything when it is off.
-    fn quick_close_program(&mut self) -> R<bool> {
+    pub(super) fn quick_close_program(&mut self) -> R<bool> {
         if !self.quick_close {
             return Ok(false);
         }
@@ -1420,7 +1433,8 @@ impl Prover<'_> {
     /// invariant of a side-invariant lemma.
     fn whole_claim(&self) -> &'static str {
         match self.judgement {
-            Judgement::Equiv | Judgement::Reduction => "equal-output+invariant",
+            Judgement::Equiv => "equal-output+invariant",
+            Judgement::Reduction => "leaf",
             Judgement::Hoare => "side-invariant",
             Judgement::Package => "package-invariant",
         }
@@ -1484,6 +1498,9 @@ impl Prover<'_> {
     pub(super) fn close_side_goal(&mut self, node: usize, claim: &str, router: bool) -> R<()> {
         if self.try_quick_close()? || self.fallbacks()? {
             return Ok(());
+        }
+        if self.judgement == Judgement::Reduction {
+            return self.admit_reduction(AdmitReason::ReductionEcFailed, claim);
         }
         if router {
             return self.admit(
@@ -1739,7 +1756,7 @@ impl Prover<'_> {
 
     /// `sp k l.` for the assignments at the head of the front goal's programs, `k`/`l` counted
     /// from EasyCrypt's JSON. `false` if the front goal is not a program goal or `sp` failed.
-    fn sp_front(&mut self) -> R<bool> {
+    pub(super) fn sp_front(&mut self) -> R<bool> {
         if self.judgement.one_program() {
             let Some(k) = self
                 .front()
@@ -2094,7 +2111,7 @@ impl Prover<'_> {
     /// The leaf procedure (story 64): decide the exit path, reduce the programs to a formula
     /// with `auto`, then open that formula into its leaf parts. A leaf whose programs do not
     /// reduce to a formula is admitted whole. The leaf budget runs from the formula on.
-    fn leaf_of(&mut self, node: usize, pair: Option<&PairRecord>) -> R<()> {
+    pub(super) fn leaf_of(&mut self, node: usize, pair: Option<&PairRecord>) -> R<()> {
         self.as_role(Role::ExitPath, |p| p.decide_exit_path(pair))?;
         let before = self.count();
         if !self.as_role(Role::Reduce, |p| p.reduce_leaf("hpre"))? {
@@ -2596,9 +2613,8 @@ impl Prover<'_> {
             )?;
             return Ok(());
         }
-        // a reduction's oracle: the blind walk from the root, as story 101 proved them by hand
         if self.judgement == Judgement::Reduction {
-            return self.prove_blind(0, BLIND_BUDGET);
+            return super::reduction_walk::prove_reduction(self);
         }
         self.mismatches = self.front().map(align).unwrap_or_default();
         match self.judgement {
@@ -2786,9 +2802,6 @@ impl Prover<'_> {
     }
 }
 
-/// The step budget of a blind walk from the root of a reduction's oracle (story 103).
-const BLIND_BUDGET: usize = 64;
-
 /// When a leaf that starts being split by meaning at `now` runs out of time: `None` when the
 /// user gave no leaf budget. A budget of zero is a deadline of `now`.
 pub(super) fn leaf_deadline(
@@ -2796,55 +2809,4 @@ pub(super) fn leaf_deadline(
     now: std::time::Instant,
 ) -> Option<std::time::Instant> {
     budget.map(|b| now + b)
-}
-
-/// What the prover does at a synchronized sampling (story 104).
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum SyncSampling {
-    /// `seq 1 1` with this postcondition.
-    Seq(String),
-    /// A `seq-post` admit with this claim, and no `seq`.
-    Admit(String),
-}
-
-/// The `rnd` instruction after the leading assignments of a program, if its head is one.
-fn sampled_head(
-    stmts: &[crate::easycrypt::json::Instr],
-) -> Option<&crate::easycrypt::json::LValue> {
-    let (_, head) = goals::head_after_assignments(stmts);
-    head.filter(|i| i.kind == "rnd")?.lvalue.as_ref()
-}
-
-/// The step at a synchronized sampling `x <$ d ~ y <$ d'` of a program goal: `seq 1 1 :
-/// (#pre /\ x{1} = y{2})`, or an admit when that `seq` cannot hold. Assignments before the
-/// sampling would be swallowed by the `seq` (claim `sampling`); a sampled variable that
-/// `#pre` mentions is overwritten (claim `sampling: x{1} in #pre`, story 104). `None` when
-/// the heads are not both samplings.
-pub(super) fn synchronized_sampling(goal: &Goal) -> Option<SyncSampling> {
-    let (left, right) = goals::sides(goal)?;
-    let x = sampled_head(&left.stmt)?;
-    let y = sampled_head(&right.stmt)?;
-    let (kl, kr) = goals::sp_counts(goal)?;
-    if kl + kr > 0 {
-        return Some(SyncSampling::Admit("sampling".to_string()));
-    }
-    for (side, lvalue, n) in [
-        (goals::ProgramSide::Left, x, 1),
-        (goals::ProgramSide::Right, y, 2),
-    ] {
-        if let Some(var) = goals::sampled_var_in_pre(goal, side, lvalue) {
-            let name = if var.pp.is_empty() {
-                &lvalue.pp
-            } else {
-                &var.pp
-            };
-            return Some(SyncSampling::Admit(format!(
-                "sampling: {name}{{{n}}} in #pre"
-            )));
-        }
-    }
-    Some(SyncSampling::Seq(format!(
-        "(#pre /\\ {}{{1}} = {}{{2}})",
-        x.pp, y.pp
-    )))
 }

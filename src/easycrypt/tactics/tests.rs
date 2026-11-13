@@ -1433,6 +1433,7 @@ mod live {
             binders: Vec::new(),
             last_smt: None,
             admit_smt: None,
+            walk: Default::default(),
         };
         // an alignment mismatch sends the whole oracle down the fallback
         prover
@@ -3466,6 +3467,7 @@ done
         binders: Vec::new(),
         last_smt: None,
         admit_smt: None,
+        walk: Default::default(),
     };
     prover.prove_node(0).unwrap();
     prover.prove_node(1).unwrap();
@@ -3725,6 +3727,7 @@ done
         binders: Vec::new(),
         last_smt: None,
         admit_smt: None,
+        walk: Default::default(),
     };
     act(&mut prover);
     let admits = prover.stats.admits.clone();
@@ -6661,13 +6664,127 @@ mod reduction_jobs {
         let pkgen = std::fs::read_to_string(out.path().join(format!("{FIRST}_PKGEN.ec"))).unwrap();
         assert!(pkgen.contains("+ proc; inline. admit."), "{pkgen}");
     }
+
+    /// The small reduction fixture `testdata/easycrypt/<name>` with theorem `theorem`, exported
+    /// into a fresh directory.
+    fn export_fixture(
+        name: &str,
+        theorem: &str,
+    ) -> (
+        &'static DirectoryProject<'static>,
+        ExportedTheorem,
+        tempfile::TempDir,
+    ) {
+        let dir = PathBuf::from("testdata/easycrypt").join(name);
+        let files = Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
+        let project = Box::leak(Box::new(DirectoryProject::load(dir, files).unwrap()));
+        let exported = export_theorem(project.get_theorem(theorem).unwrap(), project).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        crate::writers::easycrypt::export::write_files(out.path(), &exported.files).unwrap();
+        (project, exported, out)
+    }
+
+    /// Proves hop 0 of an exported fixture.
+    fn prove_hop0(
+        project: &'static DirectoryProject<'static>,
+        theorem: &str,
+        exported: &ExportedTheorem,
+        out: &Path,
+    ) -> TheoremTactics {
+        let theorem = project.get_theorem(theorem).unwrap();
+        run_tactics(theorem, project, exported, out, &backend(), &hop(0)).unwrap()
+    }
+
+    /// Story 106 §4: `prove --gamehop 0` on `reduction-two-calls` (two calls to the assumption
+    /// game in one oracle) leaves no admit; the proof decides both assumption guards by
+    /// `rcondt{2}` and couples the key by `seq 1 1`; the tree compiles.
+    #[test]
+    fn prove_closes_the_reduction_two_calls_oracle_lemma_and_the_tree_compiles() {
+        if !crate::easycrypt::session::json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let (project, exported, out) = export_fixture("reduction-two-calls", "RedTwoCalls");
+        let result = prove_hop0(project, "RedTwoCalls", &exported, out.path());
+        let red = &exported.reductions[0];
+        let (_, oracle_file) = &red.oracle_files[0];
+        let text = std::fs::read_to_string(out.path().join(oracle_file)).unwrap();
+        eprintln!("{}\n{text}", result.render());
+        assert_eq!(result.admit_count(), 0, "{}\n{text}", result.render());
+        assert!(result.render().contains("Query: reduction walk"));
+        assert!(text.matches("rcondt{2} ^if").count() >= 2, "{text}");
+        assert!(text.contains("seq 1 1"), "{text}");
+        for file in [&red.router_file, oracle_file, &red.file] {
+            let text = std::fs::read_to_string(out.path().join(file)).unwrap();
+            assert!(!text.contains("admit"), "{file}: {text}");
+            compiles(out.path(), file);
+        }
+    }
+
+    /// Story 106 §4: one `if (true) { }` added to the left game's oracle gives exactly one
+    /// `reduction-mismatch` admit with the claim `left-only-if`; the other arm of the split
+    /// before it has no admit.
+    #[test]
+    fn an_extra_if_on_the_left_is_one_left_only_if_mismatch() {
+        if !crate::easycrypt::session::json_binary_configured() {
+            eprintln!("DOMINO_EASYCRYPT not set, skipping");
+            return;
+        }
+        let (project, exported, out) = export_fixture("reduction-two-calls", "RedTwoCalls");
+        let comp = out.path().join("Comp_ModGame.ec");
+        let text = std::fs::read_to_string(&comp).unwrap();
+        let marker = "ec_result <@ Pkg_Inst_Mod.d_Query(m);";
+        assert_eq!(text.matches(marker).count(), 1, "{text}");
+        let text = text.replace(marker, &format!("if (true) {{ }}\n      {marker}"));
+        std::fs::write(&comp, text).unwrap();
+        let result = prove_hop0(project, "RedTwoCalls", &exported, out.path());
+        let admits: Vec<&Admit> = result.equivalences[0]
+            .oracles
+            .iter()
+            .flat_map(|o| &o.stats.admits)
+            .collect();
+        let (_, oracle_file) = &exported.reductions[0].oracle_files[0];
+        let proof = std::fs::read_to_string(out.path().join(oracle_file)).unwrap();
+        eprintln!("{}\n{proof}", result.render());
+        let [admit] = admits.as_slice() else {
+            panic!("one admit: {admits:?}\n{proof}");
+        };
+        assert_eq!(admit.reason, AdmitReason::ReductionMismatch, "{proof}");
+        assert_eq!(admit.claim, "left-only-if", "{proof}");
+        // the admit is in one arm of a split; the other arm closed
+        assert!(
+            admit.id.ends_with(".t") || admit.id.ends_with(".e"),
+            "{}",
+            admit.id
+        );
+    }
+
+    /// Story 106 §4: after `export` of `reduction-consts`, the report entry of `prove` says
+    /// `reduction walk`, and the oracle lemma knows its assumption theory.
+    #[test]
+    fn the_report_of_a_reduction_job_names_the_reduction_walk() {
+        let dir = PathBuf::from("testdata/easycrypt/reduction-consts");
+        let files = Box::leak(Box::new(DirectoryFiles::load(&dir).unwrap()));
+        let project = DirectoryProject::load(dir, files).unwrap();
+        let theorem = project.get_theorem("RedConsts").unwrap();
+        let exported = export_theorem(theorem, &project).unwrap();
+        let red = &exported.reductions[0];
+        assert_eq!(red.oracle_lemmas[0].assumption, "Comp_KeyGame");
+        let report = reduction_job_report(red);
+        let mut job = equivalence_with(vec![oracle_with(vec![])]);
+        job.proof_file = report.proof_file.clone();
+        job.oracles[0].oracle = "Query".into();
+        let text = job.render();
+        assert!(text.contains("  Query: reduction walk\n"), "{text}");
+        assert!(!text.contains("blind walk"), "{text}");
+    }
 }
 
 // story 104: a sampled variable that `#pre` mentions gets a `seq-post` admit
 
 #[test]
 fn a_sampling_into_a_variable_of_pre_is_admitted_seq_post_without_a_seq() {
-    use super::driver::{synchronized_sampling, SyncSampling};
+    use super::goals::{synchronized_sampling, SyncSampling};
     let goal = super::goals::tests::key_goal();
     assert_eq!(
         synchronized_sampling(&goal),
@@ -6678,7 +6795,7 @@ fn a_sampling_into_a_variable_of_pre_is_admitted_seq_post_without_a_seq() {
 
 #[test]
 fn a_sampling_into_a_fresh_variable_gets_seq_1_1() {
-    use super::driver::{synchronized_sampling, SyncSampling};
+    use super::goals::{synchronized_sampling, SyncSampling};
     let ni1 = r#"{"kind":"pvar","scope":"local","name":"ni1"}"#;
     let rnd = format!(
         r#"{{"kind":"rnd","pp":"ni1 <$ dbits_n;","lvalue":{{"kind":"var","pp":"ni1","vars":[{ni1}]}}}}"#
@@ -6689,4 +6806,97 @@ fn a_sampling_into_a_fresh_variable_gets_seq_1_1() {
         synchronized_sampling(&goal),
         Some(SyncSampling::Seq("(#pre /\\ ni1{1} = ni1{2})".into()))
     );
+}
+
+// story 106: the reduction walk
+
+#[test]
+fn the_reduction_walk_has_two_admit_reasons_that_state_their_view() {
+    for slug in ["reduction-mismatch", "reduction-ec-failed"] {
+        let reason = AdmitReason::from_slug(slug).expect("in ALL");
+        assert!(AdmitReason::ALL.contains(&reason));
+    }
+    let admit = Admit {
+        reason: AdmitReason::ReductionMismatch,
+        id: "R.t.e".into(),
+        claim: "left-only-if".into(),
+        domino: DominoView::NotApplicable,
+        goal: String::new(),
+        smt: None,
+        split: None,
+    };
+    assert_eq!(
+        format!("admit. {}", admit.label()),
+        "admit. (* domino: R.t.e left-only-if; reduction-mismatch *)"
+    );
+}
+
+#[test]
+fn on_a_reduction_a_side_goal_nothing_closes_is_admitted_reduction_ec_failed() {
+    let goals = [(
+        "side",
+        proof_of(&formula(r#"{"kind":"app","pp":"a","op":"Top.a"}"#), 1),
+    )];
+    let run = run_fake(
+        &goals,
+        "side",
+        "\n    admit.) g=none; ans;;",
+        vec![],
+        &[],
+        |p| {
+            p.judgement = super::driver::Judgement::Reduction;
+            p.walk.arm = "R.t".into();
+            p.close_side_goal(0, "assumption-guard", false).unwrap();
+        },
+    );
+    let [admit] = run.admits.as_slice() else {
+        panic!("one admit: {:?}", run.admits);
+    };
+    assert_eq!(admit.reason, AdmitReason::ReductionEcFailed);
+    assert_eq!(
+        admit.label(),
+        "(* domino: R.t assumption-guard; reduction-ec-failed *)"
+    );
+}
+
+/// Story 106: the walk on `if b ~ if c` (a real decision) against a fake EasyCrypt that refuses
+/// every closer: `if.`, its condition admitted `reduction-ec-failed`, the *then* arm (`if b ~
+/// skip`) a `left-only-if` mismatch, the *else* arm (`skip ~ skip`) a leaf admitted
+/// `reduction-ec-failed`. Each admit's id is its arm path.
+#[test]
+fn the_reduction_walk_splits_two_branches_and_admits_by_arm_path() {
+    let program = |l: &[&str], r: &[&str], open: usize| {
+        let front = program_with_ifs(l, r).replace('\n', " ");
+        let kinds = vec![r#""program""#; open].join(",");
+        format!(r#"{{"front":{front},"kinds":[{kinds}]}}"#)
+    };
+    let cond = formula(r#"{"kind":"app","pp":"b = c","op":"Top.eq"}"#);
+    let goals = [
+        ("start", program(&["b"], &["c"], 1)),
+        (
+            "split",
+            format!(r#"{{"front":{cond},"kinds":["formula","program","program"]}}"#),
+        ),
+        ("then", program(&["b"], &[], 2)),
+        ("else", program(&[], &[], 1)),
+    ];
+    let arms = r#"
+    "if.") g=split; ans;;
+    admit.) case $g in split) g=then;; then) g=else;; *) g=none;; esac; ans;;"#;
+    let run = run_fake(&goals, "start", arms, vec![], &[], |p| {
+        p.judgement = super::driver::Judgement::Reduction;
+        p.walk.assumption = "Comp_MAC".into();
+        super::reduction_walk::prove_reduction(p).unwrap();
+        assert_eq!(p.count(), 0);
+    });
+    let labels: Vec<String> = run.admits.iter().map(Admit::fields).collect();
+    assert_eq!(
+        labels,
+        [
+            "R if-conditions; reduction-ec-failed",
+            "R.t left-only-if; reduction-mismatch",
+            "R.e leaf; reduction-ec-failed",
+        ]
+    );
+    assert!(run.script.contains("if."), "{}", run.script);
 }

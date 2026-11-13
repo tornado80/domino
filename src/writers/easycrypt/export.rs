@@ -153,6 +153,9 @@ pub struct ReductionOracleLemma {
     pub proc_name: String,
     /// The invariant operator of the lemma, `inv_<L>_<R>` (or `_L`/`_R`).
     pub invariant: String,
+    /// The theory of the assumption composition on the lemma's right side, `Comp_<A>`: what the
+    /// reduction walk recognizes the assumption game's guards by (story 106).
+    pub assumption: String,
 }
 
 /// One proposition's lemma file (story 100): `Prop_<Name>.ec`.
@@ -430,6 +433,7 @@ pub fn export_theorem_observed(
                     oracle: o.oracle.clone(),
                     proc_name: o.proc_name.clone(),
                     invariant: o.invariant.clone(),
+                    assumption: o.assumption.clone(),
                 })
                 .collect(),
             run_lemmas: {
@@ -1589,6 +1593,7 @@ mod tests {
                     oracle: "Query".to_string(),
                     proc_name: "d_Query".to_string(),
                     invariant: format!("inv_{hop}"),
+                    assumption: "Comp_KeyGame".to_string(),
                 }],
                 run_lemmas: vec![format!("run_{hop}")],
                 admit_count: 1,

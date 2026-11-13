@@ -1,0 +1,29 @@
+composition ModGame {
+    const ideal: Bool;
+    const n: Integer;
+    const flip: Bool;
+
+    instance mac = Mac {
+        params {
+            ideal: ideal,
+            n: n,
+        }
+    }
+
+    instance mod = Mod {
+        params {
+            flip: flip,
+            n: n,
+        }
+    }
+
+    compose {
+        adversary: {
+            Query: mod,
+        },
+        mod: {
+            Init: mac,
+            Mac: mac,
+        },
+    }
+}

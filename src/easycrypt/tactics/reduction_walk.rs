@@ -8,11 +8,198 @@
 //! text in `pp`, so the recognizers read text, after dropping the type annotations `<:…>`.
 //!
 //! `assumption` is the assumption theory of the reduction, `Comp_MAC` for `Red_H7_1_H7_0`.
-
-// story 106 is the first caller
-#![allow(dead_code)]
+//!
+//! [`prove_reduction`] is the walk itself (story 106, `docs/proving-algorithm.md` §10): at each
+//! program head it sends the one step the shape calls for, and admits a shape it does not
+//! expect (`reduction-mismatch`) or a side goal nothing closed (`reduction-ec-failed`).
 
 use crate::easycrypt::json::Instr;
+use crate::easycrypt::session::{SessionError, Want};
+
+use super::driver::{exit_decisions, AdmitReason, DominoView, Part, Prover};
+use super::goals::{self, synchronized_sampling, SyncSampling};
+
+type R<T> = Result<T, SessionError>;
+
+/// What the reduction walk keeps in the prover: the assumption theory `<A>` and the arm path of
+/// the goal in front (`R`, `R.t`, `R.t.e`), which is the id of its admits.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Walk {
+    pub assumption: String,
+    pub arm: String,
+}
+
+/// The closers of a combined decision `d{i} ^if; 1: auto => <close>.`, in order.
+const CLOSERS: [&str; 2] = ["/>", "/#"];
+
+/// Proves a reduction's oracle lemma after `proc; inline *.` (§10.1), from the arm `R`.
+pub(super) fn prove_reduction(p: &mut Prover<'_>) -> R<()> {
+    walk(p, "R", true)
+}
+
+/// Proves the program goal in front, which is the arm `path`.
+fn walk(p: &mut Prover<'_>, path: &str, arm_start: bool) -> R<()> {
+    p.walk.arm = path.to_string();
+    if arm_start && p.quick_close_program()? {
+        return Ok(());
+    }
+    if !p.front().is_some_and(goals::is_program) || !p.sp_front()? {
+        return p.admit_reduction(AdmitReason::ReductionMismatch, "sp");
+    }
+    // the heads in full: a stub would hide a statement or a variable of `#pre` (story 104)
+    p.full_front()?;
+    let Some((left, right)) = p.front().and_then(goals::sides) else {
+        return p.admit_reduction(AdmitReason::ReductionMismatch, "not-a-program-pair");
+    };
+    let conds = [head_cond(&left.stmt), head_cond(&right.stmt)];
+    match classify(&left.stmt, &right.stmt, &p.walk.assumption) {
+        Head::Leaf => leaf(p, arm_start),
+        Head::AssumptionGuard => step(p, path, "rcondt{2} ^if.", "assumption-guard", None),
+        Head::TailBranch => tail_branch(p, path),
+        Head::ExitGuards => exit_guards(p, path, &conds),
+        Head::Branches => branches(p, path),
+        Head::Samplings { .. } => samplings(p, path),
+        Head::Mismatch(m) => p.admit_reduction(AdmitReason::ReductionMismatch, &m.claim()),
+    }
+}
+
+/// The condition of the `if` at the head of `stmt`, as EasyCrypt prints it.
+fn head_cond(stmt: &[Instr]) -> String {
+    stmt.first()
+        .and_then(|i| i.cond.as_ref())
+        .map_or_else(String::new, |c| c.pp.clone())
+}
+
+/// Both programs are empty: the quick close (unless the arm's start tried it), then the leaf
+/// procedure with no pair, whose failed parts admit `reduction-ec-failed`.
+fn leaf(p: &mut Prover<'_>, arm_start: bool) -> R<()> {
+    if !arm_start && p.quick_close_program()? {
+        return Ok(());
+    }
+    p.leaf_of(0, None)
+}
+
+/// A structural step whose shape is right: `tactic` leaves its side goal in front of the program
+/// goal. A refusal admits `reduction-mismatch` with `refused` (else `claim`); the side goal is a
+/// bullet ([`side_goal`]), and the program goal goes on in the next.
+fn step(p: &mut Prover<'_>, path: &str, tactic: &str, claim: &str, refused: Option<&str>) -> R<()> {
+    let before = p.count();
+    if !p.send(tactic, Want::Full)? {
+        return p.admit_reduction(AdmitReason::ReductionMismatch, refused.unwrap_or(claim));
+    }
+    if p.count() == before {
+        // EasyCrypt discharged the side goal itself
+        return walk(p, path, false);
+    }
+    p.bullet(|p| side_goal(p, path, claim))?;
+    p.bullet(|p| walk(p, path, false))
+}
+
+/// A side goal of a step: `auto => />.`, then [`Prover::close_side_goal`], which admits
+/// `reduction-ec-failed` on a reduction.
+fn side_goal(p: &mut Prover<'_>, path: &str, claim: &str) -> R<()> {
+    p.walk.arm = path.to_string();
+    if p.try_close(&["auto => />."])? {
+        return Ok(());
+    }
+    p.close_side_goal(0, claim, false)
+}
+
+/// The assumption game's tail branch: decided by `rcondf{2}`, then `rcondt{2}`, each with the
+/// closers in a combined sentence; else `rcondt{2} ^if.` as a step; refused: an undecided tail
+/// branch.
+fn tail_branch(p: &mut Prover<'_>, path: &str) -> R<()> {
+    for d in ["rcondf", "rcondt"] {
+        if decide(p, d, 2)? {
+            return walk(p, path, false);
+        }
+    }
+    step(
+        p,
+        path,
+        "rcondt{2} ^if.",
+        "tail-branch",
+        Some("undecided-tail-branch"),
+    )
+}
+
+/// `d{side} ^if; 1: auto => <close>.` with the closers in order: whether one was accepted with
+/// its side goal closed.
+fn decide(p: &mut Prover<'_>, d: &str, side: u8) -> R<bool> {
+    let before = p.count();
+    for close in CLOSERS {
+        let sentence = format!("{d}{{{side}}} ^if; 1: auto => {close}.");
+        if p.attempt(&[&sentence], Want::Full, |p| {
+            p.count() == before && p.front().is_some_and(goals::is_program)
+        })? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Two exit guards: side 1, then side 2, each decided in the order of [`exit_decisions`]. A side
+/// that neither decision takes undoes both, and the guards are split by `if.` (not a mismatch).
+fn exit_guards(p: &mut Prover<'_>, path: &str, conds: &[String; 2]) -> R<()> {
+    let snap = p.snap();
+    for (side, cond) in [1u8, 2].into_iter().zip(conds) {
+        let mut decided = false;
+        for d in exit_decisions(cond, None) {
+            if decide(p, d, side)? {
+                decided = true;
+                break;
+            }
+        }
+        if !decided {
+            p.rollback(snap)?;
+            return branches(p, path);
+        }
+    }
+    walk(p, path, false)
+}
+
+/// Two `if`s: `if.`, its condition goal as a side goal, then the *then* arm `<path>.t` and the
+/// *else* arm `<path>.e`, each starting with the quick close.
+fn branches(p: &mut Prover<'_>, path: &str) -> R<()> {
+    let before = p.count();
+    if !p.attempt(&["if."], Want::Full, |p| p.count() == before + 2)? {
+        return p.admit_reduction(AdmitReason::ReductionMismatch, "if-conditions");
+    }
+    p.bullet(|p| side_goal(p, path, "if-conditions"))?;
+    p.bullet(|p| walk(p, &format!("{path}.t"), true))?;
+    p.bullet(|p| walk(p, &format!("{path}.e"), true))
+}
+
+/// Two samplings: `seq 1 1 : (#pre /\ x{1} = y{2}).` as a step, unless `#pre` speaks about a
+/// sampled variable (§10.3): then a `seq-post` admit and no `seq`.
+fn samplings(p: &mut Prover<'_>, path: &str) -> R<()> {
+    match p.front().and_then(synchronized_sampling) {
+        Some(SyncSampling::Seq(post)) => {
+            step(p, path, &format!("seq 1 1 : {post}."), "seq-coupling", None)
+        }
+        Some(SyncSampling::Admit(claim)) => p.admit_reduction(AdmitReason::SeqPost, &claim),
+        None => p.admit_reduction(AdmitReason::ReductionMismatch, "seq-coupling"),
+    }
+}
+
+impl Prover<'_> {
+    /// Closes the front goal with an admit of the reduction walk: the arm path as id, no Domino
+    /// view.
+    pub(super) fn admit_reduction(&mut self, reason: AdmitReason, claim: &str) -> R<()> {
+        self.admit_reduction_part(&Part::Whole, reason, claim)
+    }
+
+    /// [`Self::admit_reduction`] of `part` of a leaf's claims.
+    pub(super) fn admit_reduction_part(
+        &mut self,
+        part: &Part,
+        reason: AdmitReason,
+        claim: &str,
+    ) -> R<()> {
+        let arm = self.walk.arm.clone();
+        self.admit_of_part(part, reason, &arm, claim, DominoView::NotApplicable)
+    }
+}
 
 /// The shape of the two program heads, after `sp` (an assignment is not a head).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -271,7 +458,7 @@ fn sets_game_flag(instr: &Instr, assumption: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::easycrypt::json::{Instr, parse_response};
+    use crate::easycrypt::json::{parse_response, Instr};
 
     const A: &str = "Comp_MAC";
 

@@ -1,0 +1,56 @@
+theorem RedTwoCalls {
+    const b: Bool;
+    const n: Integer;
+
+    instance mac_real = MacGame {
+        params {
+            n: n,
+            ideal: false,
+        }
+    }
+
+    instance mac_ideal = MacGame {
+        params {
+            n: n,
+            ideal: true,
+        }
+    }
+
+    instance mod_real = ModGame {
+        params {
+            n: n,
+            ideal: false,
+            flip: b,
+        }
+    }
+
+    instance mod_ideal = ModGame {
+        params {
+            n: n,
+            ideal: true,
+            flip: b,
+        }
+    }
+
+    assumptions {
+        MacAssumption: mac_real ~ mac_ideal
+    }
+
+    gamehops {
+        reduction mod_real mod_ideal {
+            assumption MacAssumption
+
+            map mac_real mod_real {
+                mac: mac
+            }
+
+            map mac_ideal mod_ideal {
+                mac: mac
+            }
+        }
+    }
+
+    propositions {
+        Free: mod_real ~ mod_ideal
+    }
+}

@@ -459,7 +459,7 @@ impl JobKind<'_> {
     fn run_failed(self) -> &'static str {
         match self {
             JobKind::Equivalence => "lockstep execution failed",
-            JobKind::Reduction(_) => "the blind walk failed",
+            JobKind::Reduction(_) => "the reduction walk failed",
             JobKind::SideInvariants(_) | JobKind::PackageInvariants(_) => {
                 "one-sided execution failed"
             }
@@ -1719,6 +1719,18 @@ impl WalkedTree {
 }
 
 /// The invariant operator of `oracle`'s lemma in reduction `red`: `inv_<L>_<R>`, or `_L`/`_R`.
+/// The assumption theory `Comp_<A>` of a reduction's oracle lemma, which the reduction walk
+/// reads the assumption game's guards by (story 106); empty for any other job.
+fn assumption_theory(kind: JobKind<'_>, oracle: &str) -> String {
+    let JobKind::Reduction(red) = kind else {
+        return String::new();
+    };
+    red.oracle_lemmas
+        .iter()
+        .find(|o| o.oracle == oracle)
+        .map_or_else(String::new, |o| o.assumption.clone())
+}
+
 fn reduction_invariant_op(red: &ReductionReport, oracle: &str) -> InvariantOp {
     let name = red
         .oracle_lemmas
@@ -2181,6 +2193,10 @@ where
         binders: Vec::new(),
         last_smt: None,
         admit_smt: None,
+        walk: reduction_walk::Walk {
+            assumption: assumption_theory(kind, oracle),
+            arm: String::new(),
+        },
     };
     let proved = prover.oracle(|goal: &Goal| {
         // a side tree or package tree comes from the listing of the lemma's own program
@@ -2368,8 +2384,8 @@ impl EquivalenceTactics {
             out.push('\n');
         }
         if self.proof_file.starts_with("Red_") {
-            // a reduction's oracle is walked blind (story 103)
-            let _ = writeln!(out, "  {}: blind walk, no joint tree", o.oracle);
+            // a reduction's oracle is proved by the reduction walk (story 106)
+            let _ = writeln!(out, "  {}: reduction walk", o.oracle);
         } else {
             let _ = writeln!(
                 out,

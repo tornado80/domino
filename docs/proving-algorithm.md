@@ -20,7 +20,7 @@ placeholder proof where a proof job will work. Everything below happens after tr
 | Frame lemma | `Frame_<V>_<O>.ec` | `hoare[…]` | None | Translation writes the proof; the job checks it |
 | Start lemma | `PkgInv_<V>_init.ec`, `SideInvInit_<C>.ec` | `hoare[init : true ==> …]` | None | Job tries two proofs |
 | Equivalence glue | `Eq_<L>_<R>.ec` | Joins the lemmas with `conseq` | None | Translation; no job sends it |
-| Reduction oracle lemma | `Red_<L>_<R>_<O>.ec` (or `_<O>_L`/`_<O>_R`) | `equiv[…]`: equal results and `inv_<L>_<R>` | None: the blind walk (7.4) from `proc; inline *.`, no lockstep execution, no solver. The reduction walk (§10) replaces it with story 106 | Reduction proof job (`--gamehop` on a reduction hop) |
+| Reduction oracle lemma | `Red_<L>_<R>_<O>.ec` (or `_<O>_L`/`_<O>_R`) | `equiv[…]`: equal results and `inv_<L>_<R>` | None: the reduction walk (§10) from `proc; inline *.`, no lockstep execution, no solver | Reduction proof job (`--gamehop` on a reduction hop) |
 | Reduction run lemma, proposition lemmas | `Red_<L>_<R>.ec`, `Prop_<name>.ec` | `run_<L>_<R>`, bound lemmas | None | Translation; no `admit` |
 
 An oracle lemma assumes the side invariants of both sides. The glue joins it with the
@@ -80,7 +80,7 @@ the live session.
 | Interrupt after a timeout | Resend every 5 s for 30 s | No answer in that time means EasyCrypt is unresponsive |
 | `--leaf-budget` | Off | Time to take one leaf apart, from the formula on |
 | `--smt-retry-timeout` | Off | The `smt` timeout of one retry. `--ec-timeout` must be at least this plus 10 s |
-| Blind walk budget | 64 | Depth of one blind walk path |
+| Blind walk budget | 64 | Depth of one blind walk path (the blind walk only; the reduction walk has no budget, §10.1) |
 | Formula opening | 64 steps | One `open_part` loop |
 | Key pairs of a case split | 1 to 6 | More than 6, or none: no split |
 | Key pairs of a named split | At most 2 | One-program judgements only |
@@ -380,7 +380,8 @@ admit. (* domino: J7 StateRelation_rel; domino-verified-ec-failed; smt: timeout 
 
 The fields are the id, the claim, the reason, then `Domino: <view>` for the four reasons that do
 not state a view, then the `smt` outcome when a part fallback ran. The ids are `J<n>` (joint
-path), `S<n>` (stuck point), `N<n>` (node), or `router`.
+path), `S<n>` (stuck point), `N<n>` (node), `router`, or an arm path of the reduction walk (`R`,
+`R.t`, `R.t.e`, §10.4).
 
 | Reason | Meaning |
 |---|---|
@@ -391,6 +392,8 @@ path), `S<n>` (stuck point), `N<n>` (node), or `router`.
 | `program-mismatch` | EasyCrypt's program did not match, and the blind walk found nothing |
 | `seq-post` | A synchronized sampling had assignments before it after `sp`, or `#pre` mentions the sampled variable (story 104) |
 | `router` | A goal of the router prelude |
+| `reduction-mismatch` | The reduction walk met code without the shape of a reduction (§10) |
+| `reduction-ec-failed` | The reduction walk's step was right, and EasyCrypt did not close its side goal or leaf part (§10) |
 | `interrupted` | A goal still open when the oracle was sealed |
 
 ### 9.2 Every place each reason is emitted
@@ -412,6 +415,9 @@ path), `S<n>` (stuck point), `N<n>` (node), or `router`.
 | `seq-post` | Synchronized sampling after `sp` | A pair below | `sampling` | Verified, fixed |
 | `seq-post` | Synchronized sampling into a variable `#pre` mentions (a `pvar` in that memory, or `glob` of a module holding it) | A pair below | `sampling: <x>{<side>} in #pre` | Verified, fixed |
 | `router` | Prelude side goal | `router` | `router-condition`, `both-aborted`, `already-aborted` | n/a |
+| `reduction-mismatch` | Reduction walk: a shape of §10.2 it does not expect, a structural tactic EasyCrypt refused, a tail branch no direction decides | Arm path | `left-only-if`, `right-only-if`, `one-sided-sampling`, `loop`, `heads <k>/<k>`, `undecided-tail-branch`, or the step's claim | n/a |
+| `reduction-ec-failed` | Reduction walk: a side goal of a correct step (`close_side_goal` on `Judgement::Reduction`), or a leaf part (the leaf procedure) | Arm path | `assumption-guard`, `tail-branch`, `if-conditions`, `seq-coupling`, `leaf`, or the leaf part | n/a |
+| `seq-post` | Reduction walk: a synchronized sampling into a variable `#pre` mentions (§10.3) | Arm path | `sampling: <x>{<side>} in #pre` | n/a |
 | `interrupted` | The seal | `N<n>` or `router` | `open-goal` | n/a |
 
 "Fixed" means the code writes `Verified` without reading a verdict for that exact formula. It
@@ -488,9 +494,9 @@ These are sent to the live EasyCrypt only:
 
 ## 10. The reduction walk
 
-**Status:** designed, not built. Epic `docs/stories/easycrypt/epic-the-reduction-walk.md`
-(stories 104–107), ADR 0024. Until story 106 is done, a reduction's oracle lemma is proved by the
-blind walk (§7.4). Story 106 removes this status line and updates §1.1, §1.5, §9.1 and §9.2.
+Built in story 106 (`src/easycrypt/tactics/reduction_walk.rs`, `prove_reduction`); epic
+`docs/stories/easycrypt/epic-the-reduction-walk.md`, ADR 0024. The report line of an oracle is
+`<O>: reduction walk`.
 
 The reduction walk proves a reduction's oracle lemma
 `equiv[Game_<L>.<O> ~ Red_<L>_<R>(<A>.Game_<A>).<O> : ={arg} /\ inv ==> ={res} /\ inv]`. It uses

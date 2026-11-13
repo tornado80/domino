@@ -1,0 +1,22 @@
+package Mac {
+    params {
+        ideal: Bool,
+        n: Integer,
+    }
+
+    state {
+        key: Maybe(Bits(n)),
+    }
+
+    /* Story 106: samples the key. */
+    oracle Init() {
+        k <-$ Bits(n);
+        key <- Some(k);
+    }
+
+    /* Story 106: aborts (the result is None) when the key is missing. */
+    oracle Mac(m: Bits(n)) -> Bool {
+        k <- Unwrap(key);
+        return ((k == m) == ideal);
+    }
+}

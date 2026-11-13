@@ -264,12 +264,16 @@ files); the router, the joining file and the proposition files have none.
 **The reduction proof job** (story 103, ADR 0023). A reduction hop is a game hop:
 `domino easycrypt prove --gamehop N` on it, or a run without `--gamehop`, which proves the hops in
 order, runs the proof job of `JobKind::Reduction`. For each oracle file it sends
-`proc; inline *.`, then walks the program blind (`docs/proving-algorithm.md` §7.4): `sp k l` with
-the counts of EasyCrypt's goal, the quick close `auto => /#`, `rcondt`/`rcondf`, `if`,
-`if{1}`/`if{2}`, and `seq` at samplings; at a leaf it unfolds `inv_<L>_<R>` (or `_L`/`_R`, by
-the name rule) and splits it into conjuncts. There is no lockstep execution, no solver and no
-side-invariant file. A step that nothing closes is admitted `program-mismatch` (a loop stops the
-walk there); a conjunct that fails is admitted with its reason. `--oracle` (`<O>`, or `<O>_L`/
+`proc; inline *.`, then runs the **reduction walk** (story 106, ADR 0024,
+`docs/proving-algorithm.md` §10): after `sp k l` with the counts of EasyCrypt's goal it reads the
+shape of the two program heads and sends the one step that shape calls for: `rcondt{2} ^if` at a
+guard of the assumption game, `rcondf{2}`/`rcondt{2}` at its tail branch, `rcondt`/`rcondf` at two
+exit guards, `if.` at two real decisions (each arm starts with the quick close `auto => /#`), and
+`seq 1 1` at two samplings; at a leaf it unfolds `inv_<L>_<R>` (or `_L`/`_R`, by the name rule)
+and splits it into conjuncts. There is no lockstep execution, no solver and no side-invariant
+file. A shape the walk does not expect is admitted `reduction-mismatch`, a side goal or leaf part
+that nothing closes `reduction-ec-failed`; the id is the arm path (`R`, `R.t`, `R.t.e`). The
+report line of an oracle is `<O>: reduction walk`. `--oracle` (`<O>`, or `<O>_L`/
 `<O>_R`), `--jobs`, `--force` and resume work as for an equivalence, with the records in
 `session/Red_<L>_<R>/` and the pages in `progress/Red_<L>_<R>/`; an interrupted oracle is walked
 again from the start. The overwrite guard of `export` (ADR 0004) lists a proved `Red_*` oracle

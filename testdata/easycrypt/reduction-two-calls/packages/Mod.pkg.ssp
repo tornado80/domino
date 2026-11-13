@@ -1,0 +1,18 @@
+package Mod {
+    params {
+        flip: Bool,
+        n: Integer,
+    }
+
+    import oracles {
+        Init(),
+        Mac(m: Bits(n)) -> Bool,
+    }
+
+    /* Story 106: two calls to the assumption game in one oracle. */
+    oracle Query(m: Bits(n)) -> Bool {
+        invoke Init();
+        x <- invoke Mac(m);
+        return (x == flip);
+    }
+}
