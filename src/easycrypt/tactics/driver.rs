@@ -2832,10 +2832,14 @@ pub(super) fn synchronized_sampling(goal: &Goal) -> Option<SyncSampling> {
         (goals::ProgramSide::Left, x, 1),
         (goals::ProgramSide::Right, y, 2),
     ] {
-        if goals::sampled_in_pre(goal, side, lvalue) {
+        if let Some(var) = goals::sampled_var_in_pre(goal, side, lvalue) {
+            let name = if var.pp.is_empty() {
+                &lvalue.pp
+            } else {
+                &var.pp
+            };
             return Some(SyncSampling::Admit(format!(
-                "sampling: {}{{{n}}} in #pre",
-                lvalue.pp
+                "sampling: {name}{{{n}}} in #pre"
             )));
         }
     }

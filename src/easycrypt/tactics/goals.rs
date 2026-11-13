@@ -74,15 +74,24 @@ pub(crate) enum ProgramSide {
 /// `glob` of `M` or of a module that contains `M`. A sampling into such a variable writes
 /// over a value `#pre` speaks about, so `seq 1 1 : (#pre /\ …)` cannot hold. False for a goal
 /// that is not an `equivS` or has no precondition. A stub hides what is below it.
+#[allow(dead_code)] // the reduction walk (story 106) calls it
 pub(crate) fn sampled_in_pre(goal: &Goal, side: ProgramSide, lvalue: &LValue) -> bool {
-    let (Some(pre), Some((left, right))) = (goal.concl.pre.as_deref(), sides(goal)) else {
-        return false;
-    };
+    sampled_var_in_pre(goal, side, lvalue).is_some()
+}
+
+/// The first variable of `lvalue` that [`sampled_in_pre`] finds in the precondition.
+pub(crate) fn sampled_var_in_pre<'l>(
+    goal: &Goal,
+    side: ProgramSide,
+    lvalue: &'l LValue,
+) -> Option<&'l Form> {
+    let pre = goal.concl.pre.as_deref()?;
+    let (left, right) = sides(goal)?;
     let mem = match side {
         ProgramSide::Left => &left.mem,
         ProgramSide::Right => &right.mem,
     };
-    lvalue.vars.iter().any(|var| mentions_var(pre, var, mem))
+    lvalue.vars.iter().find(|var| mentions_var(pre, var, mem))
 }
 
 fn mentions_var(form: &Form, var: &Form, mem: &str) -> bool {
@@ -100,12 +109,22 @@ fn names_var(form: &Form, var: &Form, mem: &str) -> bool {
             .module
             .as_deref()
             .zip(var_module(var))
-            .is_some_and(|(glob, module)| {
-                let glob = glob.strip_prefix("Top.").unwrap_or(glob);
-                module == glob || module.starts_with(&format!("{glob}."))
-            }),
+            .is_some_and(|(glob, module)| glob_holds(glob, module)),
         _ => false,
     }
+}
+
+/// Whether `glob G` holds the state of `module`: `G` is the module or contains it. EasyCrypt
+/// prints `G` relative to the scope, so a suffix of the module's path matches too
+/// (`MAC` for `Pkg_MAC.MAC`); a functor's arguments (`M(A)`) are dropped.
+fn glob_holds(glob: &str, module: &str) -> bool {
+    let glob = strip_top(glob.split('(').next().unwrap_or(glob));
+    let segments: Vec<&str> = module.split('.').collect();
+    (1..=segments.len()).any(|end| (0..end).any(|start| segments[start..end].join(".") == glob))
+}
+
+fn strip_top(path: &str) -> &str {
+    path.strip_prefix("Top.").unwrap_or(path)
 }
 
 /// The module of a global `pvar` (`Pkg_MAC.MAC` for the path `Top.Pkg_MAC.MAC./k`).
@@ -115,7 +134,7 @@ fn var_module(var: &Form) -> Option<&str> {
     }
     let path = var.path.as_deref()?;
     let (module, _) = path.rsplit_once("./")?;
-    Some(module.strip_prefix("Top.").unwrap_or(module))
+    Some(strip_top(module))
 }
 
 /// The number of assignments at the start of a statement list: what `sp k l` consumes.
@@ -264,7 +283,7 @@ fn global_var(form: &Form) -> Option<(String, &str)> {
         return None;
     }
     let path = form.path.as_deref()?;
-    let var = path.strip_prefix("Top.").unwrap_or(path).replace("./", ".");
+    let var = strip_top(path).replace("./", ".");
     Some((var, form.mem.as_deref()?))
 }
 
@@ -1266,7 +1285,13 @@ pub(super) mod tests {
     fn a_glob_of_the_module_in_the_precondition_holds_its_state_field() {
         let k = r#"{"kind":"pvar","scope":"global","path":"Top.Pkg_MAC.MAC./k"}"#;
         let glob = |m: &str| format!(r#"{{"kind":"glob","module":"{m}","mem":"&2"}}"#);
-        for module in ["Pkg_MAC.MAC", "Pkg_MAC"] {
+        for module in [
+            "Pkg_MAC.MAC",
+            "Pkg_MAC",
+            "Top.Pkg_MAC.MAC",
+            "MAC",
+            "Pkg_MAC.MAC(A)",
+        ] {
             let pre = app("Top.Comp.inv", &[glob(module)]);
             let goal = sampling_goal(
                 &pre,
