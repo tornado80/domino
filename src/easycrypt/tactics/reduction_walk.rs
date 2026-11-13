@@ -127,7 +127,7 @@ fn tail_branch(p: &mut Prover<'_>, path: &str) -> R<()> {
 /// `dirs[0]` the predicted one (story 108 §3.1). On its own the cheap closer `/>` goes first in
 /// both directions, then `/#`; `follow`ing a decision already made on the other side, `dirs[0]`
 /// is tried with both closers before the other direction.
-pub(crate) fn decision_order(
+fn decision_order(
     side: u8,
     dirs: [&'static str; 2],
     follow: bool,
@@ -177,11 +177,12 @@ fn decide(
 /// and the guards are split by `if.` (not a mismatch).
 fn exit_guards(p: &mut Prover<'_>, path: &str, conds: &[String; 2]) -> R<()> {
     let snap = p.snap();
-    let Some(left) = decide(p, 1, exit_decisions(&conds[0], None), false)? else {
-        p.rollback(snap)?;
-        return branches(p, path);
+    let left = decide(p, 1, exit_decisions(&conds[0], None), false)?;
+    let decided = match left {
+        Some(d) => decide(p, 2, following(d), true)?.is_some(),
+        None => false,
     };
-    if decide(p, 2, following(left), true)?.is_none() {
+    if !decided {
         p.rollback(snap)?;
         return branches(p, path);
     }
