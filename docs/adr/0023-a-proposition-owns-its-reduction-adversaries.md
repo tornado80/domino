@@ -3,7 +3,8 @@
 **Status:** accepted. Supersedes ADR 0022 decisions 2, 3, 4, 5 and 8, the part of decision 1 about
 the reduction adversary, and its rejection of "one reduction equivalence by anti-unification".
 Implemented by `docs/stories/easycrypt/epic-reductions-without-an-experiment.md` (stories 101 to
-103). Grilling of 2026-11-10/11, Decisions 1 to 9.
+103). Grilling of 2026-11-10/11, Decisions 1 to 9. Decision 5 ("with the blind walk") is
+superseded by ADR 0024.
 
 ADR 0022 gave each reduction a **reduction experiment** `RedExp_<hop>(A).run(consts..)`, because an
 EasyCrypt adversary cannot read a lemma argument. Its bound lemma is therefore not stated on the

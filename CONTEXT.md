@@ -274,6 +274,13 @@ result, and the router's **abort-flag guard**. It decides nothing Domino would c
 an EasyCrypt proof has to step over it like any other branch.
 _Avoid_: plumbing branch, plumbing node.
 
+**Assumption guard** — the assumption game's abort-flag guard around a call that the reduction
+router forwards to the assumption game. It is on the right side of a reduction's oracle lemma only;
+the game on the left has no such branch. It is always passed: before the first forwarded call of an
+oracle, the invariant makes the assumption game's abort flag false, and the reduction code makes a
+later forwarded call only when the earlier forwarded calls returned a value.
+_Avoid_: additional abort condition, assumption abort check.
+
 **Exit path** — the exit guards and the router's tail branch that are still in a leaf's EasyCrypt
 programs after lockstep execution has stopped. Each of them has only one way it can go, so a proof
 decides each one before it reasons about the leaf's postcondition.
@@ -431,6 +438,12 @@ Oracles already done are never re-proved, whatever the mode.
 **Tactics run** — the proving pass of one proof job against a live EasyCrypt. Its defining
 property: the proof file on disk always holds what has been proved so far, so stopping it early
 costs no proved oracle. _Avoid_: proof translation.
+
+**Reduction walk** — how a tactics run proves a reduction's oracle lemma. Both sides have the same
+code, except for the assumption game's guards and tail branches on the right. Thus, the walk expects
+every sampling and every branch to be synchronized, and decides each assumption guard and each tail
+branch of the assumption game on the right alone. Any other shape is a mismatch.
+_Distinguish_: the **blind walk**, which tries every tactic at each step and expects no shape.
 
 **Leaf** — a joint node with no further branching: both programs have run to their end and only
 the postcondition is left to prove.

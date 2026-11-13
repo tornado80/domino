@@ -20,7 +20,7 @@ placeholder proof where a proof job will work. Everything below happens after tr
 | Frame lemma | `Frame_<V>_<O>.ec` | `hoare[…]` | None | Translation writes the proof; the job checks it |
 | Start lemma | `PkgInv_<V>_init.ec`, `SideInvInit_<C>.ec` | `hoare[init : true ==> …]` | None | Job tries two proofs |
 | Equivalence glue | `Eq_<L>_<R>.ec` | Joins the lemmas with `conseq` | None | Translation; no job sends it |
-| Reduction oracle lemma | `Red_<L>_<R>_<O>.ec` (or `_<O>_L`/`_<O>_R`) | `equiv[…]`: equal results and `inv_<L>_<R>` | None: the blind walk (7.4) from `proc; inline *.`, no lockstep execution, no solver | Reduction proof job (`--gamehop` on a reduction hop) |
+| Reduction oracle lemma | `Red_<L>_<R>_<O>.ec` (or `_<O>_L`/`_<O>_R`) | `equiv[…]`: equal results and `inv_<L>_<R>` | None: the blind walk (7.4) from `proc; inline *.`, no lockstep execution, no solver. The reduction walk (§10) replaces it with story 106 | Reduction proof job (`--gamehop` on a reduction hop) |
 | Reduction run lemma, proposition lemmas | `Red_<L>_<R>.ec`, `Prop_<name>.ec` | `run_<L>_<R>`, bound lemmas | None | Translation; no `admit` |
 
 An oracle lemma assumes the side invariants of both sides. The glue joins it with the
@@ -482,3 +482,163 @@ These are sent to the live EasyCrypt only:
   oracle files it depends on can have them.
 - **The glue is not checked by a proof job.** A problem in `Eq_<L>_<R>.ec` appears only when you
   compile it.
+
+## 10. The reduction walk
+
+**Status:** designed, not built. Epic `docs/stories/easycrypt/epic-the-reduction-walk.md`
+(stories 104–107), ADR 0024. Until story 106 is done, a reduction's oracle lemma is proved by the
+blind walk (§7.4). Story 106 removes this status line and updates §1.1, §1.5, §9.1 and §9.2.
+
+The reduction walk proves a reduction's oracle lemma
+`equiv[Game_<L>.<O> ~ Red_<L>_<R>(<A>.Game_<A>).<O> : ={arg} /\ inv ==> ={res} /\ inv]`. It uses
+no joint tree and no solver. It depends on one fact: **both sides run the same code**, except that
+the right side has, around each call that the reduction router forwards to the assumption game:
+
+- the **assumption guard** `if (!<A>.Game_<C>.abort_flag) { … }`;
+- copies of the arguments and the results (assignments);
+- the assumption game's **tail branch** `if (<r> = None) { <A>.Game_<C>.abort_flag <- true; }`.
+
+The invariant `game_abort = red_abort /\ (assm_abort => red_abort) /\ (equal states)` makes the first
+assumption guard of an oracle true. A later guard of the same oracle is true because the reduction
+code makes the next forwarded call only on the path where the earlier results were values.
+
+The walk reads the shape of each program head from EasyCrypt's goal JSON (ADR 0002) and sends the
+one step that the shape calls for. It never searches. A shape that it does not expect is a
+**mismatch**: that goal is admitted and the walk goes on with the other open goals.
+
+### 10.1 The algorithm
+
+```text
+oracle:
+    send "proc; inline *."
+        refused → admit program-mismatch (N0, claim "proc; inline *.")
+    A := the theory of the reduction's assumption composition
+    walk("R", arm_start = true)
+
+walk(path, arm_start):
+    if arm_start:
+        quick close "auto => /#." under the short timeout. Closed: done
+    sp_front                                       -- "sp k l." with the counts of the goal
+    (l, r) := the first statements of the left and the right program
+    match classify(l, r, A):                       -- §10.2, first matching rule wins
+
+        Leaf →                                     -- both programs empty
+            quick close "auto => /#." (unless arm_start already tried it). Closed: done
+            leaf procedure with no pair (§6); a part that fails → admit reduction-ec-failed
+
+        AssumptionGuard →
+            step("rcondt{2} ^if.", claim "assumption-guard")
+            walk(path, false)
+
+        TailBranch →
+            for (d, close) in [(rcondf, />), (rcondf, /#), (rcondt, />), (rcondt, /#)]:
+                accepted "d{2} ^if; 1: auto => close." → walk(path, false), done
+            step("rcondt{2} ^if.", claim "tail-branch")   -- full side-goal sequence, last try
+                refused → admit reduction-mismatch (path, "undecided-tail-branch"), done
+            walk(path, false)
+
+        ExitGuards →                               -- both heads are exit guards
+            for side in [1, 2]:
+                for d in exit_decisions(cond of side), for close in [/>, /#]:
+                    accepted "d{side} ^if; 1: auto => close." → next side
+                not decided → undo both sides, go to Branches
+            walk(path, false)
+
+        Branches →                                 -- both heads are if
+            step("if.", claim "if-conditions")     -- leaves the then arm and the else arm
+            + walk(path + ".t", true)
+            + walk(path + ".e", true)
+
+        Samplings(x, y) →
+            x{1} or y{2} in #pre (§10.3) → admit seq-post (path, "sampling: x{1} in #pre"), done
+            step("seq 1 1 : (#pre /\ x{1} = y{2}).", claim "seq-coupling")
+            walk(path, false)
+
+        Mismatch(m) →
+            admit reduction-mismatch (path, claim of m), done
+
+step(tactic, claim):                               -- the shape is right: only its side goal is open
+    send tactic
+        refused → admit reduction-mismatch (path, claim), stop this goal
+    side goal (the first new goal):
+        "auto => />."                    closed: done
+        close_side_goal: quick close, then the fallback sequence of §7.1
+        nothing closed → admit reduction-ec-failed (path, claim)
+    the program goal continues
+```
+
+The walk ends: each step removes at least one statement or splits a goal into two smaller ones,
+and a loop is a mismatch. So it has no step budget.
+
+### 10.2 The shapes
+
+The walk classifies the first statement of each side after `sp`. The first rule that matches wins.
+
+| Order | Left head | Right head | Shape |
+|---|---|---|---|
+| 1 | none | none | `Leaf` |
+| 2 | any | assumption guard of `<A>` | `AssumptionGuard` |
+| 3 | any | tail branch of `<A>` | `TailBranch` |
+| 4, 5 | `while` | any (or the other way) | mismatch `loop` |
+| 6 | exit guard | exit guard | `ExitGuards` |
+| 7 | `if` | `if` | `Branches` |
+| 8 | `rnd` x | `rnd` y | `Samplings(x, y)` |
+| 9 | `if` | not `if` | mismatch `left-only-if` |
+| 10 | not `if` | `if` | mismatch `right-only-if` |
+| 11 | `rnd` | not `rnd` (or the other way) | mismatch `one-sided-sampling` |
+| 12 | anything else | | mismatch `heads <left kind>/<right kind>` |
+
+- **Assumption guard:** an `if` whose condition is `!<A>.Game_<C>.abort_flag`.
+- **Tail branch of `<A>`:** an `if` whose condition is `<r> = None…`, whose *then* block is only
+  `<A>.Game_<C>.abort_flag <- true`, and whose *else* block is empty. The reduction router's own tail
+  branch sets `Red_<L>_<R>.abort_flag`, so it is not one; it is an exit guard on both sides.
+- **Exit guard:** an `if` whose condition reads only translation locals (`ec_…`), abort flags,
+  `None`, `true` and `false`. A package variable makes it a real decision, for example
+  `key0 <> None` in the MAC package.
+
+EasyCrypt gives a condition as printed text only (`cond.pp`), so the rules read that text.
+
+### 10.3 A sampled variable in `#pre`
+
+EasyCrypt renames an inlined local only when its name clashes. A variable that the code samples into
+again (an argument, an assigned local, or a state field) keeps its name. Then
+`seq 1 1 : (#pre /\ x{1} = y{2})` asks for a `#pre` that the sampling made false. Before it sends the
+`seq`, the walk checks `#pre` for `x` in memory `&1` and `y` in memory `&2`: the variable itself, or
+for a state field `M.x`, `glob M`. If it finds one, it admits `seq-post` and sends no `seq`. The
+equivalence path (§5, synchronized sampling) runs the same check.
+
+### 10.4 Admits
+
+| Reason | When | Id | Claim | Domino view |
+|---|---|---|---|---|
+| `reduction-mismatch` | A shape of §10.2 that the walk does not expect; a structural tactic that EasyCrypt refuses; a tail branch that no direction decides | Arm path, `R`, `R.t`, `R.t.e` | `left-only-if`, `right-only-if`, `one-sided-sampling`, `loop`, `heads <k>/<k>`, `undecided-tail-branch`, or the step's claim | n/a |
+| `reduction-ec-failed` | A side goal of a correct step, or a leaf part, that nothing closed | Arm path | `assumption-guard`, `tail-branch`, `if-conditions`, `seq-coupling`, `leaf`, or the leaf part | n/a |
+| `seq-post` | §10.3 | Arm path | `sampling: <x>{<side>} in #pre` | n/a |
+
+A `reduction-mismatch` tells you that the code does not have the shape of a reduction: look at the
+translation or at the packages. A `reduction-ec-failed` tells you that the shape is right and the
+proof needs work: try the goal with `easycrypt llm -upto`.
+
+Example comment: `admit. (* domino: R.t.e left-only-if; reduction-mismatch *)`.
+
+### 10.5 What the walk writes
+
+For `Red_H7_1_H7_0_Send2`, the start of the proof is expected to look like this. A step and its side
+goal are two sentences; each side goal is a bullet. The closer in a bullet is the first one that
+EasyCrypt accepts. The closers below are expected, not measured (story 107 measures them).
+
+```text
+proc; inline *.
+sp 1 1.
+if.                                      (router guards: exit guards, not decided → Branches)
++ auto => />.                            (if-conditions)
++ sp 3 3.                                (then arm: neither game aborted)
+  …
+  seq 1 1 : (#pre /\ ni1{1} = ni1{2}).   (the nonce)
+  + auto => />.                          (seq-coupling)
+  + …
+    rcondt{2} ^if.                       (assumption guard around Init)
+    + auto => /#.                        (assumption-guard: needs the invariant)
+    + …
++ auto => /#.                            (else arm: both games aborted, quick close)
+```
