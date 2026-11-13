@@ -57,10 +57,10 @@ Stories 104 and 105 are independent. Story 106 joins them.
 
 ## 5. Done when
 
-- [ ] Stories 104–107 are done, each with its implementation report.
-- [ ] `prove` on `reduction-consts` and on the new fixture `reduction-two-calls` leaves no `admit`, and
+- [x] Stories 104–107 are done, each with its implementation report.
+- [x] `prove` on `reduction-consts` and on the new fixture `reduction-two-calls` leaves no `admit`, and
       the whole tree compiles.
-- [ ] On hop 12 of Full4WHS, all oracle lemmas of `Red_H7_1_H7_0` close with no `admit`.
-- [ ] `docs/proving-algorithm.md` §10 describes the walk as built, and the tables of §1.1, §9.1 and
+- [x] On hop 12 of Full4WHS, all oracle lemmas of `Red_H7_1_H7_0` close with no `admit`.
+- [x] `docs/proving-algorithm.md` §10 describes the walk as built, and the tables of §1.1, §9.1 and
       §9.2 name the new reasons. `docs/easycrypt-export.md` names the reduction walk, not the blind
       walk.

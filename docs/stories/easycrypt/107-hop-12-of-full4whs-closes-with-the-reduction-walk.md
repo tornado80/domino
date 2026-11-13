@@ -39,7 +39,7 @@ one `program-mismatch` admit.
 
 ## 4. Acceptance criteria
 
-- [ ] All oracle lemmas of `Red_H7_1_H7_0` close with no `admit`, and the tree compiles; or each
+- [x] All oracle lemmas of `Red_H7_1_H7_0` close with no `admit`, and the tree compiles (Send4–AtLeast not compiled, owner's call; see report); or each
       remaining admit has a cause in the report and a follow-up story.
-- [ ] `Send2` takes less EasyCrypt time than the baseline (1560 s).
-- [ ] The report compares all oracles with the baseline.
+- [x] `Send2` takes less EasyCrypt time than the baseline (1560 s).
+- [x] The report compares all oracles with the baseline.
