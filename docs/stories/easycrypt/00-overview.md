@@ -229,6 +229,7 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 105 | The reduction walk recognizes the shape of a program head (pure recognizers) | `105-the-reduction-walk-recognizes-the-shape-of-a-program-head.md` | — |
 | 106 | The reduction walk proves a reduction's oracle lemmas (replaces the blind walk there; fixture `reduction-two-calls`) | `106-the-reduction-walk-proves-a-reductions-oracle-lemmas.md` | 104, 105 |
 | 107 | Hop 12 of Full4WHS closes with the reduction walk (acceptance run) | `107-hop-12-of-full4whs-closes-with-the-reduction-walk.md` | 106 |
+| 108 | The reduction walk decides an `if` without guessing and closes a leaf by substitution (cost follow-up of 107) | `108-the-reduction-walk-decides-an-if-without-guessing-and-closes-a-leaf-by-substitution.md` | 106, 107 |
 
 Stories 97–100 are the epic **EasyCrypt export: reductions and propositions**
 (`epic-reductions-and-propositions.md`, ADR 0022), from the grilling of 2026-11-04/05. Hybrid hops
@@ -240,8 +241,8 @@ grilling of 2026-11-10/11.
 
 Stories 104–107 are the epic **EasyCrypt export: the reduction walk**
 (`epic-the-reduction-walk.md`, ADR 0024, which supersedes ADR 0023 decision 5), from the grilling
-of 2026-11-12/13. Stories 104–106 are done (implementation reports beside the stories); 107, the hop-12
-acceptance run on Full4WHS, is open.
+of 2026-11-12/13. Stories 104–107 are done (implementation reports beside the stories). Story 108, the walk's cost
+after the hop-12 run, is open.
 
 Stories 71–77 and symbolic-execution 26–29 come from the grilling of 2026-10-12/20. The merges land
 in the order 71 → symbolic-execution 26 → 74. Not merged: the rest of Christoph Egger's stack (not

@@ -52,8 +52,10 @@ when the shape is wrong.
 | 2 | 105 | The reduction walk recognizes the shape of a program head | `105-the-reduction-walk-recognizes-the-shape-of-a-program-head.md` | — |
 | 3 | 106 | The reduction walk proves a reduction's oracle lemmas | `106-the-reduction-walk-proves-a-reductions-oracle-lemmas.md` | 104, 105 |
 | 4 | 107 | Hop 12 of Full4WHS closes with the reduction walk | `107-hop-12-of-full4whs-closes-with-the-reduction-walk.md` | 106 |
+| 5 | 108 | The reduction walk decides an `if` without guessing and closes a leaf by substitution (follow-up of 107: the walk's cost) | `108-the-reduction-walk-decides-an-if-without-guessing-and-closes-a-leaf-by-substitution.md` | 106, 107 |
 
-Stories 104 and 105 are independent. Story 106 joins them.
+Stories 104 and 105 are independent. Story 106 joins them. Story 108 came out of story 107's run
+(2026-11-13): the walk closed hop 12, but in about the blind walk's time.
 
 ## 5. Done when
 
