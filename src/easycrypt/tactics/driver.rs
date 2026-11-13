@@ -2121,7 +2121,15 @@ impl Prover<'_> {
         if self.count() < before {
             return Ok(());
         }
-        self.premises = vec!["hpre".to_string()];
+        let substituted = self.as_role(Role::Reduce, |p| p.substitute_premise("hpre"))?;
+        if self.count() < before {
+            return Ok(());
+        }
+        self.premises = if substituted {
+            Vec::new()
+        } else {
+            vec!["hpre".to_string()]
+        };
         self.binders.clear();
         self.deadline = leaf_deadline(self.leaf_budget, std::time::Instant::now());
         let result = self.as_role(Role::Split, |p| p.open_part(node, pair, Part::Whole));
@@ -2219,6 +2227,21 @@ impl Prover<'_> {
             self.unfold_premise(premise)?;
         }
         Ok(reduced)
+    }
+
+    /// Story 108 §3.3, a reduction leaf only: `move: <premise> => />.` substitutes the equalities
+    /// of the two states that the invariant states, and closes the parts that become trivial.
+    /// Whether it was accepted with at most one goal left (then the premise is gone); refused,
+    /// or on any other judgement (whose parts Domino's verdict and the fallbacks read), nothing
+    /// is sent or kept.
+    fn substitute_premise(&mut self, premise: &str) -> R<bool> {
+        if self.judgement != Judgement::Reduction {
+            return Ok(false);
+        }
+        let before = self.count();
+        self.attempt(&[&format!("move: {premise} => />.")], Want::Head, |p| {
+            p.count() < before || (p.count() == before && p.front().is_some_and(goals::is_ambient))
+        })
     }
 
     /// Opens the front ambient goal, which belongs to `part`, until it is leaf parts: binders

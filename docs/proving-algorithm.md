@@ -217,6 +217,10 @@ section 9.3. If it closes the goal, the leaf is done. Otherwise the invariant is
 `hpre`: `rewrite /inv /… in hpre.` with all operators, and if that is refused, with only the head
 operator. Unfolding is best effort, and a failure here does not stop the leaf.
 
+A reduction leaf (§10, story 108) then substitutes before it splits: `move: hpre => />.` replaces
+the equalities of the two states and closes the parts that become trivial; refused, it is undone
+and the leaf goes on with `hpre`. Every other judgement keeps `hpre`.
+
 ### 6.3 Open the formula into leaf parts
 
 This loop runs at most 64 steps on each goal.
@@ -527,38 +531,45 @@ oracle:
 walk(path, arm_start):
     if arm_start:
         quick close "auto => /#." under the short timeout. Closed: done
-    sp_front                                       -- "sp k l." with the counts of the goal
-    (l, r) := the first statements of the left and the right program
+    -- no sp here: an rcond needs none (^if finds the first if, its side goal takes the
+    -- assignments before it), and a leaf's auto takes them
+    (l, r) := the first statements of the left and the right program that are not assignments
     match classify(l, r, A):                       -- §10.2, first matching rule wins
 
         Leaf →                                     -- both programs empty
             quick close "auto => /#." (unless arm_start already tried it). Closed: done
-            leaf procedure with no pair (§6); a part that fails → admit reduction-ec-failed
+            leaf procedure with no pair (§6), with "move: hpre => />." after the unfolding
+            (§6.2); a part that fails → admit reduction-ec-failed
 
         AssumptionGuard →
             step("rcondt{2} ^if.", claim "assumption-guard")
             walk(path, false)
 
         TailBranch →
-            for (d, close) in [(rcondf, />), (rcondf, /#), (rcondt, />), (rcondt, /#)]:
+            for (d, close) in [(rcondf, />), (rcondt, />), (rcondf, /#), (rcondt, /#)]:
                 accepted "d{2} ^if; 1: auto => close." → walk(path, false), done
             step("rcondt{2} ^if.", claim "tail-branch")   -- full side-goal sequence, last try
                 refused → admit reduction-mismatch (path, "undecided-tail-branch"), done
             walk(path, false)
 
         ExitGuards →                               -- both heads are exit guards
-            for side in [1, 2]:
-                for d in exit_decisions(cond of side), for close in [/>, /#]:
-                    accepted "d{side} ^if; 1: auto => close." → next side
-                not decided → undo both sides, go to Branches
+            [a, b] := exit_decisions(cond of side 1)
+            side 1: for (d, close) in [(a, />), (b, />), (a, /#), (b, /#)]:
+                accepted "d{1} ^if; 1: auto => close." → left := d, next side
+            side 2 repeats the left decision (both sides run the same code):
+                for (d, close) in [(left, />), (left, /#), (other, />), (other, /#)]:
+                    accepted "d{2} ^if; 1: auto => close." → decided
+            a side not decided → undo both sides, go to Branches
             walk(path, false)
 
         Branches →                                 -- both heads are if
+            sp_front                               -- "sp k l.": only before a two-sided step
             step("if.", claim "if-conditions")     -- leaves the then arm and the else arm
             + walk(path + ".t", true)
             + walk(path + ".e", true)
 
         Samplings(x, y) →
+            sp_front                               -- "sp k l.", then the check reads #pre
             x{1} or y{2} in #pre (§10.3) → admit seq-post (path, "sampling: x{1} in #pre"), done
             step("seq 1 1 : (#pre /\ x{1} = y{2}).", claim "seq-coupling")
             walk(path, false)
@@ -581,7 +592,8 @@ and a loop is a mismatch. So it has no step budget.
 
 ### 10.2 The shapes
 
-The walk classifies the first statement of each side after `sp`. The first rule that matches wins.
+The walk classifies the first statement of each side that is not an assignment (the head that
+`sp` would leave; no `sp` is sent for it). The first rule that matches wins.
 
 | Order | Left head | Right head | Shape |
 |---|---|---|---|

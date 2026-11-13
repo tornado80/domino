@@ -27,9 +27,6 @@ pub(crate) struct Walk {
     pub arm: String,
 }
 
-/// The closers of a combined decision `d{i} ^if; 1: auto => <close>.`, in order.
-const CLOSERS: [&str; 2] = ["/>", "/#"];
-
 /// Proves a reduction's oracle lemma after `proc; inline *.` (§10.1), from the arm `R`.
 pub(super) fn prove_reduction(p: &mut Prover<'_>) -> R<()> {
     walk(p, "R", true)
@@ -41,8 +38,10 @@ fn walk(p: &mut Prover<'_>, path: &str, arm_start: bool) -> R<()> {
     if arm_start && p.quick_close_program()? {
         return Ok(());
     }
-    if !p.front().is_some_and(goals::is_program) || !p.sp_front()? {
-        return p.admit_reduction(AdmitReason::ReductionMismatch, "sp");
+    // no `sp` here (story 108 §3.2): the heads are read after the leading assignments, and
+    // only a two-sided step (`if.`, `seq`) sends `sp` before it
+    if !p.front().is_some_and(goals::is_program) {
+        return p.admit_reduction(AdmitReason::ReductionMismatch, "not-a-program");
     }
     // the heads in full: a stub would hide a statement or a variable of `#pre` (story 104)
     p.full_front()?;
@@ -61,9 +60,15 @@ fn walk(p: &mut Prover<'_>, path: &str, arm_start: bool) -> R<()> {
     }
 }
 
+/// `stmt` from its head on: its leading assignments skipped.
+fn from_head(stmt: &[Instr]) -> &[Instr] {
+    &stmt[goals::leading_assignments(stmt)..]
+}
+
 /// The condition of the `if` at the head of `stmt`, as EasyCrypt prints it.
 fn head_cond(stmt: &[Instr]) -> String {
-    stmt.first()
+    from_head(stmt)
+        .first()
         .and_then(|i| i.cond.as_ref())
         .map_or_else(String::new, |c| c.pp.clone())
 }
@@ -103,14 +108,11 @@ fn side_goal(p: &mut Prover<'_>, path: &str, claim: &str) -> R<()> {
     p.close_side_goal(0, claim, false)
 }
 
-/// The assumption game's tail branch: decided by `rcondf{2}`, then `rcondt{2}`, each with the
-/// closers in a combined sentence; else `rcondt{2} ^if.` as a step; refused: an undecided tail
-/// branch.
+/// The assumption game's tail branch: decided on side 2 in the order of [`decision_order`]
+/// (`rcondf` first); else `rcondt{2} ^if.` as a step; refused: an undecided tail branch.
 fn tail_branch(p: &mut Prover<'_>, path: &str) -> R<()> {
-    for d in ["rcondf", "rcondt"] {
-        if decide(p, d, 2)? {
-            return walk(p, path, false);
-        }
+    if decide(p, 2, ["rcondf", "rcondt"], false)?.is_some() {
+        return walk(p, path, false);
     }
     step(
         p,
@@ -121,37 +123,67 @@ fn tail_branch(p: &mut Prover<'_>, path: &str) -> R<()> {
     )
 }
 
-/// `d{side} ^if; 1: auto => <close>.` with the closers in order: whether one was accepted with
-/// its side goal closed.
-fn decide(p: &mut Prover<'_>, d: &str, side: u8) -> R<bool> {
+/// The sentences `d{side} ^if; 1: auto => <close>.` of a decision, each with its direction `d`,
+/// `dirs[0]` the predicted one (story 108 §3.1). On its own the cheap closer `/>` goes first in
+/// both directions, then `/#`; `follow`ing a decision already made on the other side, `dirs[0]`
+/// is tried with both closers before the other direction.
+pub(crate) fn decision_order(
+    side: u8,
+    dirs: [&'static str; 2],
+    follow: bool,
+) -> Vec<(&'static str, String)> {
+    let [a, b] = dirs;
+    let order = if follow {
+        [(a, "/>"), (a, "/#"), (b, "/>"), (b, "/#")]
+    } else {
+        [(a, "/>"), (b, "/>"), (a, "/#"), (b, "/#")]
+    };
+    order
+        .into_iter()
+        .map(|(d, close)| (d, format!("{d}{{{side}}} ^if; 1: auto => {close}.")))
+        .collect()
+}
+
+/// The directions of a decision that repeats `d`: `d` first, then the other one.
+fn following(d: &str) -> [&'static str; 2] {
+    if d == "rcondt" {
+        ["rcondt", "rcondf"]
+    } else {
+        ["rcondf", "rcondt"]
+    }
+}
+
+/// Decides the `if` at the head of `side` by the sentences of [`decision_order`]: the direction
+/// of the first one accepted with its side goal closed.
+fn decide(
+    p: &mut Prover<'_>,
+    side: u8,
+    dirs: [&'static str; 2],
+    follow: bool,
+) -> R<Option<&'static str>> {
     let before = p.count();
-    for close in CLOSERS {
-        let sentence = format!("{d}{{{side}}} ^if; 1: auto => {close}.");
+    for (d, sentence) in decision_order(side, dirs, follow) {
         if p.attempt(&[&sentence], Want::Full, |p| {
             p.count() == before && p.front().is_some_and(goals::is_program)
         })? {
-            return Ok(true);
+            return Ok(Some(d));
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
-/// Two exit guards: side 1, then side 2, each decided in the order of [`exit_decisions`]. A side
-/// that neither decision takes undoes both, and the guards are split by `if.` (not a mismatch).
+/// Two exit guards: side 1 in the order of [`exit_decisions`], then side 2 repeating side 1's
+/// decision first (both sides run the same code). A side that no decision takes undoes both,
+/// and the guards are split by `if.` (not a mismatch).
 fn exit_guards(p: &mut Prover<'_>, path: &str, conds: &[String; 2]) -> R<()> {
     let snap = p.snap();
-    for (side, cond) in [1u8, 2].into_iter().zip(conds) {
-        let mut decided = false;
-        for d in exit_decisions(cond, None) {
-            if decide(p, d, side)? {
-                decided = true;
-                break;
-            }
-        }
-        if !decided {
-            p.rollback(snap)?;
-            return branches(p, path);
-        }
+    let Some(left) = decide(p, 1, exit_decisions(&conds[0], None), false)? else {
+        p.rollback(snap)?;
+        return branches(p, path);
+    };
+    if decide(p, 2, following(left), true)?.is_none() {
+        p.rollback(snap)?;
+        return branches(p, path);
     }
     walk(p, path, false)
 }
@@ -159,6 +191,9 @@ fn exit_guards(p: &mut Prover<'_>, path: &str, conds: &[String; 2]) -> R<()> {
 /// Two `if`s: `if.`, its condition goal as a side goal, then the *then* arm `<path>.t` and the
 /// *else* arm `<path>.e`, each starting with the quick close.
 fn branches(p: &mut Prover<'_>, path: &str) -> R<()> {
+    if !p.sp_front()? {
+        return p.admit_reduction(AdmitReason::ReductionMismatch, "sp");
+    }
     let before = p.count();
     if !p.attempt(&["if."], Want::Full, |p| p.count() == before + 2)? {
         return p.admit_reduction(AdmitReason::ReductionMismatch, "if-conditions");
@@ -171,6 +206,10 @@ fn branches(p: &mut Prover<'_>, path: &str) -> R<()> {
 /// Two samplings: `seq 1 1 : (#pre /\ x{1} = y{2}).` as a step, unless `#pre` speaks about a
 /// sampled variable (§10.3): then a `seq-post` admit and no `seq`.
 fn samplings(p: &mut Prover<'_>, path: &str) -> R<()> {
+    // the `sp` of the sampling first: story 104's check reads `#pre` after it
+    if !p.sp_front()? {
+        return p.admit_reduction(AdmitReason::ReductionMismatch, "sp");
+    }
     match p.front().and_then(synchronized_sampling) {
         Some(SyncSampling::Seq(post)) => {
             step(p, path, &format!("seq 1 1 : {post}."), "seq-coupling", None)
@@ -199,7 +238,8 @@ impl Prover<'_> {
     }
 }
 
-/// The shape of the two program heads, after `sp` (an assignment is not a head).
+/// The shape of the two program heads, read after the leading assignments (an assignment is
+/// not a head; story 108 §3.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Head {
     /// Both programs are empty.
@@ -247,7 +287,7 @@ impl Mismatch {
 
 /// The shape of the heads of `left` and `right` (story 105 §3, the first matching rule wins).
 pub(crate) fn classify(left: &[Instr], right: &[Instr], assumption: &str) -> Head {
-    let (l, r) = (left.first(), right.first());
+    let (l, r) = (from_head(left).first(), from_head(right).first());
     let (lk, rk) = (kind_of(l), kind_of(r));
     if l.is_none() && r.is_none() {
         return Head::Leaf;
@@ -593,15 +633,15 @@ mod tests {
     #[test]
     fn other_heads_are_a_mismatch_with_both_kinds() {
         let (l, _) = goal!("assumption-guard.json"); // a call
-        let (asg, _) = goal!("tail-branch.json"); // an assignment left after `sp`
-        let head = classify(&l, &asg, A);
+        let (asg, _) = goal!("tail-branch.json"); // only an assignment: no head
+        let head = classify(&asg, &l, A);
         let heads = Mismatch::Heads {
-            left: "call".to_string(),
-            right: "asgn".to_string(),
+            left: "none".to_string(),
+            right: "call".to_string(),
         };
         assert_eq!(head, Head::Mismatch(heads.clone()));
-        assert_eq!(heads.claim(), "heads call/asgn");
-        let none = classify(&l, &[], A);
+        assert_eq!(heads.claim(), "heads none/call");
+        let none = classify(&l, &asg, A);
         assert_eq!(
             none,
             Head::Mismatch(Mismatch::Heads {
@@ -627,5 +667,68 @@ mod tests {
         assert!(is_game_flag("Top.Comp_MAC.Game_MAC.abort_flag", A));
         assert!(!is_game_flag("Comp_MAC.Game_MAC.X.abort_flag", A));
         assert_eq!(drop_type_annotations("x = None<:int"), "x = None<:int");
+    }
+
+    /// Story 108 §3.2: the heads are read after the leading assignments, as `sp` would leave them.
+    #[test]
+    fn leading_assignments_do_not_change_the_shape_of_the_heads() {
+        let (asg, _) = goal!("tail-branch.json");
+        assert_eq!(asg[0].kind, "asgn");
+        let with = |stmt: &[Instr]| [asg.clone(), asg.clone(), stmt.to_vec()].concat();
+        for name in [
+            "root.json",
+            "nonce.json",
+            "assumption-guard.json",
+            "tail-branch.json",
+            "mac-key.json",
+        ] {
+            let (l, r) = sides(
+                &std::fs::read_to_string(format!(
+                    "{}/testdata/easycrypt/reduction-walk-goals/{name}",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap(),
+            );
+            let bare = classify(&l, &r, A);
+            assert_eq!(classify(&with(&l), &with(&r), A), bare, "{name}");
+            assert_eq!(head_cond(&with(&l)), head_cond(&l), "{name}");
+        }
+        assert_eq!(classify(&with(&[]), &asg, A), Head::Leaf);
+    }
+
+    /// Story 108 §3.1 item 1: `/>` in both directions before any `/#`, the predicted one first.
+    #[test]
+    fn a_decision_tries_the_cheap_closer_in_both_directions_first() {
+        let order: Vec<String> = decision_order(1, ["rcondf", "rcondt"], false)
+            .into_iter()
+            .map(|(_, s)| s)
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "rcondf{1} ^if; 1: auto => />.",
+                "rcondt{1} ^if; 1: auto => />.",
+                "rcondf{1} ^if; 1: auto => /#.",
+                "rcondt{1} ^if; 1: auto => /#.",
+            ]
+        );
+    }
+
+    /// Story 108 §3.1 item 2: side 2 repeats side 1's decision with both closers first.
+    #[test]
+    fn the_right_exit_guard_repeats_the_left_decision_first() {
+        let order = decision_order(2, following("rcondt"), true);
+        let sentences: Vec<&str> = order.iter().map(|(_, s)| s.as_str()).collect();
+        assert_eq!(
+            sentences,
+            [
+                "rcondt{2} ^if; 1: auto => />.",
+                "rcondt{2} ^if; 1: auto => /#.",
+                "rcondf{2} ^if; 1: auto => />.",
+                "rcondf{2} ^if; 1: auto => /#.",
+            ]
+        );
+        assert_eq!(order[0].0, "rcondt");
+        assert_eq!(following("rcondf"), ["rcondf", "rcondt"]);
     }
 }

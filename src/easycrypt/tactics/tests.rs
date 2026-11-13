@@ -3849,6 +3849,48 @@ fn leaf_pair(left_aborts: bool, invariant: Verdict, relations: &[(&str, Verdict)
     p
 }
 
+/// Story 108 §3.3: a reduction leaf substitutes `hpre` by `move: hpre => />.` after `auto` and
+/// the unfolding; an equivalence leaf keeps `hpre` and never sends it.
+#[test]
+fn only_a_reduction_leaf_substitutes_its_premise() {
+    let atom = r#"{"kind":"app","pp":"a","op":"Top.a"}"#;
+    let goals = [
+        ("start", proof_of(&program_with_ifs(&[], &[]), 1)),
+        ("one", proof_of(&formula(atom), 1)),
+    ];
+    let arms = r#"
+    "auto => &1 &2 hpre.") g=one; ans;;
+    "move: hpre => />.") g=none; ans;;
+    "smt().") g=none; ans;;"#;
+    let leaf = |judgement| {
+        run_fake(&goals, "start", arms, vec![], &[], |p| {
+            p.judgement = judgement;
+            p.leaf_of(0, None).unwrap();
+            assert_eq!(p.count(), 0);
+        })
+    };
+    let run = leaf(super::driver::Judgement::Reduction);
+    let sent = |run: &LeafRun| -> Vec<String> {
+        run.requests
+            .iter()
+            .filter_map(|r| r.split_once(' ').map(|(_, s)| s.to_string()))
+            .filter(|s| s != "start.")
+            .collect()
+    };
+    assert_eq!(
+        sent(&run),
+        ["auto => &1 &2 hpre.", "move: hpre => />."],
+        "{}",
+        run.script
+    );
+    assert!(run.admits.is_empty());
+    let run = leaf(super::driver::Judgement::Equiv);
+    let sent = sent(&run);
+    assert!(!sent.iter().any(|s| s == "move: hpre => />."), "{sent:?}");
+    assert_eq!(sent[0], "auto => &1 &2 hpre.");
+    assert!(run.admits.is_empty());
+}
+
 #[test]
 fn the_exit_path_tries_the_predicted_decision_first_then_the_other_one() {
     let goals = [
@@ -6665,6 +6707,23 @@ mod reduction_jobs {
         assert!(pkgen.contains("+ proc; inline. admit."), "{pkgen}");
     }
 
+    /// The texts of every `ec-transcript.jsonl` below `dir`.
+    fn transcripts(dir: &Path) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut todo = vec![dir.to_path_buf()];
+        while let Some(d) = todo.pop() {
+            for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    todo.push(path);
+                } else if path.file_name().is_some_and(|n| n == "ec-transcript.jsonl") {
+                    found.push(std::fs::read_to_string(path).unwrap_or_default());
+                }
+            }
+        }
+        found
+    }
+
     /// The small reduction fixture `testdata/easycrypt/<name>` with theorem `theorem`, exported
     /// into a fresh directory.
     fn export_fixture(
@@ -6714,11 +6773,62 @@ mod reduction_jobs {
         assert!(result.render().contains("Query: reduction walk"));
         assert!(text.matches("rcondt{2} ^if").count() >= 2, "{text}");
         assert!(text.contains("seq 1 1"), "{text}");
+        // story 108: no `sp` in front of an `rcond`, and the leaf substitutes `hpre`
+        let lines: Vec<&str> = text
+            .lines()
+            .map(|l| l.trim_start_matches(['-', '+', ' ']))
+            .collect();
+        for w in lines.windows(2) {
+            assert!(
+                !(w[0].starts_with("sp ") && w[1].starts_with("rcond")),
+                "{text}"
+            );
+        }
+        let transcripts = transcripts(out.path());
+        assert!(!transcripts.is_empty(), "no transcript");
+        // a failed `rcond… /#.` is a wrong guess when the other direction then closes by `/#`;
+        // both directions failing is an undecided guard, which goes to `if.`
+        let rconds: Vec<(String, bool)> = transcripts
+            .iter()
+            .flat_map(|t| t.lines())
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter_map(|r| {
+                let sentence = r["sentence"].as_str()?.to_string();
+                let ok = r["response"]["status"] == "ok";
+                (sentence.starts_with("rcond") && sentence.ends_with("/#."))
+                    .then_some((sentence, ok))
+            })
+            .collect();
+        for w in rconds.windows(2) {
+            assert!(w[0].1 || !w[1].1, "a wrong guess: {w:?}");
+        }
         for file in [&red.router_file, oracle_file, &red.file] {
             let text = std::fs::read_to_string(out.path().join(file)).unwrap();
             assert!(!text.contains("admit"), "{file}: {text}");
             compiles(out.path(), file);
         }
+
+        // story 108 §3.3: without the quick close every leaf goes through the leaf procedure,
+        // which substitutes `hpre`
+        let (project, exported, out) = export_fixture("reduction-two-calls", "RedTwoCalls");
+        let theorem = project.get_theorem("RedTwoCalls").unwrap();
+        let options = TacticsOptions {
+            quick_close: false,
+            ..hop(0)
+        };
+        let result = run_tactics(
+            theorem,
+            project,
+            &exported,
+            out.path(),
+            &backend(),
+            &options,
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(out.path().join(oracle_file)).unwrap();
+        assert_eq!(result.admit_count(), 0, "{}\n{text}", result.render());
+        assert!(text.contains("move: hpre => />."), "{text}");
+        compiles(out.path(), oracle_file);
     }
 
     /// Story 106 §4: one `if (true) { }` added to the left game's oracle gives exactly one
