@@ -1,0 +1,80 @@
+{
+ "version": "domino-json/3",
+ "state": 1,
+ "status": "ok",
+ "messages": [],
+ "proof": {
+  "front": {
+   "id": 1,
+   "tvars": [],
+   "hyps": [],
+   "concl": {
+    "kind": "equivS",
+    "pp": "",
+    "left": {
+     "mem": "&1",
+     "stmt": [
+      {
+       "kind": "if",
+       "pp": "if (key0 <> None<:bits_n>) { ... }",
+       "cond": {
+        "kind": "app",
+        "pp": "key0 <> None<:bits_n>"
+       },
+       "then": [
+        {
+         "kind": "asgn",
+         "pp": "ec_result5 <- Some (mac (oget key0) msg);",
+         "lvalue": {
+          "kind": "var",
+          "pp": "ec_result5"
+         }
+        }
+       ],
+       "else": []
+      }
+     ],
+     "stmt_pp": ""
+    },
+    "right": {
+     "mem": "&2",
+     "stmt": [
+      {
+       "kind": "if",
+       "pp": "if (key0 <> None<:bits_n>) { ... }",
+       "cond": {
+        "kind": "app",
+        "pp": "key0 <> None<:bits_n>"
+       },
+       "then": [
+        {
+         "kind": "asgn",
+         "pp": "ec_result5 <- Some (mac (oget key0) msg);",
+         "lvalue": {
+          "kind": "var",
+          "pp": "ec_result5"
+         }
+        }
+       ],
+       "else": []
+      }
+     ],
+     "stmt_pp": ""
+    },
+    "pre": {
+     "kind": "app",
+     "pp": "true"
+    },
+    "post": {
+     "kind": "app",
+     "pp": "true"
+    }
+   },
+   "text": "",
+   "types": []
+  },
+  "kinds": [
+   "program"
+  ]
+ }
+}

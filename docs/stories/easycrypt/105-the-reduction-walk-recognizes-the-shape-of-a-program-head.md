@@ -83,20 +83,20 @@ memory note "EC leaf experiments": copy the files, admit the earlier closers, an
 Save the JSON answers of `Want::Full` under `testdata/easycrypt/reduction-walk-goals/`, with a README
 that says from which line and which code they come.
 
-- [ ] Root (after `proc; inline *.`): rule 6, the router guards are exit guards on both sides.
-- [ ] The nonce (line 53 of the 2026-11-11 file): rule 8 with `x = y = ni1`.
-- [ ] After `if (hon)` (*then* arm): rule 2 on the guard around `Init`.
-- [ ] After `rcondt{2}` and the `Init` body: rule 3 on `if (ec_result4 = None<:unit>)`.
-- [ ] Inside `Mac`: rule 7 on `if (key0 <> None<:bits_n>)` (a real decision, not rule 6).
-- [ ] `if (Comp_H7.Cloned_Pkg_PRF.PRF.d_H.[kid1] <> None<:bool>)`: not an exit guard.
-- [ ] Hand-made variants of a saved goal (one statement removed or added in the JSON): rules 4, 9,
+- [x] Root (after `proc; inline *.`): rule 6, the router guards are exit guards on both sides.
+- [x] The nonce (line 53 of the 2026-11-11 file): rule 8 with `x = y = ni1`.
+- [x] After `if (hon)` (*then* arm): rule 2 on the guard around `Init`.
+- [x] After `rcondt{2}` and the `Init` body: rule 3 on `if (ec_result4 = None<:unit>)`.
+- [x] Inside `Mac`: rule 7 on `if (key0 <> None<:bits_n>)` (a real decision, not rule 6).
+- [x] `if (Comp_H7.Cloned_Pkg_PRF.PRF.d_H.[kid1] <> None<:bool>)`: not an exit guard.
+- [x] Hand-made variants of a saved goal (one statement removed or added in the JSON): rules 4, 9,
       10, 11 and 12, each with its claim text.
-- [ ] `is_tail_branch` is false for the reduction router's own tail branch (its *then* block sets
+- [x] `is_tail_branch` is false for the reduction router's own tail branch (its *then* block sets
       `Red_<L>_<R>.abort_flag`, not `<A>.Game_<C>.abort_flag`).
 
 ## 5. Acceptance criteria
 
-- [ ] All tests of §4 green, with filtered test runs only. `cargo clippy` clean.
+- [x] All tests of §4 green, with filtered test runs only. `cargo clippy` clean.
 - [ ] Complexity: every function within budget (`.sdlc-workspace/crap-coverage.sh <filter>`).
 
 ## 6. Rejected alternatives

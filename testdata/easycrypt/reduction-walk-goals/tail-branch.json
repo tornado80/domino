@@ -1,0 +1,79 @@
+{
+ "version": "domino-json/3",
+ "state": 1,
+ "status": "ok",
+ "messages": [],
+ "proof": {
+  "front": {
+   "id": 1,
+   "tvars": [],
+   "hyps": [],
+   "concl": {
+    "kind": "equivS",
+    "pp": "",
+    "left": {
+     "mem": "&1",
+     "stmt": [
+      {
+       "kind": "asgn",
+       "pp": "ec_r10 <- None<:bits_n>;",
+       "lvalue": {
+        "kind": "var",
+        "pp": "ec_r10"
+       }
+      }
+     ],
+     "stmt_pp": ""
+    },
+    "right": {
+     "mem": "&2",
+     "stmt": [
+      {
+       "kind": "if",
+       "pp": "if (ec_result4 = None<:unit>) { ... }",
+       "cond": {
+        "kind": "app",
+        "pp": "ec_result4 = None<:unit>"
+       },
+       "then": [
+        {
+         "kind": "asgn",
+         "pp": "Comp_MAC.Game_MAC.abort_flag <- true;",
+         "lvalue": {
+          "kind": "var",
+          "pp": "Comp_MAC.Game_MAC.abort_flag"
+         }
+        }
+       ],
+       "else": []
+      },
+      {
+       "kind": "if",
+       "pp": "if (!ec_done0) { ... }",
+       "cond": {
+        "kind": "app",
+        "pp": "!ec_done0"
+       },
+       "then": [],
+       "else": []
+      }
+     ],
+     "stmt_pp": ""
+    },
+    "pre": {
+     "kind": "app",
+     "pp": "true"
+    },
+    "post": {
+     "kind": "app",
+     "pp": "true"
+    }
+   },
+   "text": "",
+   "types": []
+  },
+  "kinds": [
+   "program"
+  ]
+ }
+}

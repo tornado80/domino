@@ -65,6 +65,7 @@ mod fixed;
 mod goals;
 mod live;
 mod oracles;
+mod reduction_walk;
 mod script;
 
 use std::fmt::Write as _;

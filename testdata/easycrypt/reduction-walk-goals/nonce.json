@@ -1,0 +1,78 @@
+{
+ "version": "domino-json/3",
+ "state": 1,
+ "status": "ok",
+ "messages": [],
+ "proof": {
+  "front": {
+   "id": 1,
+   "tvars": [],
+   "hyps": [],
+   "concl": {
+    "kind": "equivS",
+    "pp": "",
+    "left": {
+     "mem": "&1",
+     "stmt": [
+      {
+       "kind": "rnd",
+       "pp": "ni1 <$ dbits_n;",
+       "lvalue": {
+        "kind": "var",
+        "pp": "ni1"
+       }
+      },
+      {
+       "kind": "if",
+       "pp": "if (hon) { ... }",
+       "cond": {
+        "kind": "app",
+        "pp": "hon"
+       },
+       "then": [],
+       "else": []
+      }
+     ],
+     "stmt_pp": ""
+    },
+    "right": {
+     "mem": "&2",
+     "stmt": [
+      {
+       "kind": "rnd",
+       "pp": "ni1 <$ dbits_n;",
+       "lvalue": {
+        "kind": "var",
+        "pp": "ni1"
+       }
+      },
+      {
+       "kind": "if",
+       "pp": "if (hon) { ... }",
+       "cond": {
+        "kind": "app",
+        "pp": "hon"
+       },
+       "then": [],
+       "else": []
+      }
+     ],
+     "stmt_pp": ""
+    },
+    "pre": {
+     "kind": "app",
+     "pp": "true"
+    },
+    "post": {
+     "kind": "app",
+     "pp": "true"
+    }
+   },
+   "text": "",
+   "types": []
+  },
+  "kinds": [
+   "program"
+  ]
+ }
+}

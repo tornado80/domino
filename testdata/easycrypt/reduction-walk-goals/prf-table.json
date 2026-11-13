@@ -1,0 +1,62 @@
+{
+ "version": "domino-json/3",
+ "state": 1,
+ "status": "ok",
+ "messages": [],
+ "proof": {
+  "front": {
+   "id": 1,
+   "tvars": [],
+   "hyps": [],
+   "concl": {
+    "kind": "equivS",
+    "pp": "",
+    "left": {
+     "mem": "&1",
+     "stmt": [
+      {
+       "kind": "if",
+       "pp": "if (Comp_H7.Cloned_Pkg_PRF.PRF.d_H.[kid1] <> None<:bool>) { ... }",
+       "cond": {
+        "kind": "app",
+        "pp": "Comp_H7.Cloned_Pkg_PRF.PRF.d_H.[kid1] <> None<:bool>"
+       },
+       "then": [],
+       "else": []
+      }
+     ],
+     "stmt_pp": ""
+    },
+    "right": {
+     "mem": "&2",
+     "stmt": [
+      {
+       "kind": "if",
+       "pp": "if (Comp_H7.Cloned_Pkg_PRF.PRF.d_H.[kid1] <> None<:bool>) { ... }",
+       "cond": {
+        "kind": "app",
+        "pp": "Comp_H7.Cloned_Pkg_PRF.PRF.d_H.[kid1] <> None<:bool>"
+       },
+       "then": [],
+       "else": []
+      }
+     ],
+     "stmt_pp": ""
+    },
+    "pre": {
+     "kind": "app",
+     "pp": "true"
+    },
+    "post": {
+     "kind": "app",
+     "pp": "true"
+    }
+   },
+   "text": "",
+   "types": []
+  },
+  "kinds": [
+   "program"
+  ]
+ }
+}

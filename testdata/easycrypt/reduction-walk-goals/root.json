@@ -1,0 +1,118 @@
+{
+ "version": "domino-json/3",
+ "state": 1,
+ "status": "ok",
+ "messages": [],
+ "proof": {
+  "front": {
+   "id": 1,
+   "tvars": [],
+   "hyps": [],
+   "concl": {
+    "kind": "equivS",
+    "pp": "",
+    "left": {
+     "mem": "&1",
+     "stmt": [
+      {
+       "kind": "if",
+       "pp": "if (!Comp_H7.Game_H7.abort_flag) { ... }",
+       "cond": {
+        "kind": "app",
+        "pp": "!Comp_H7.Game_H7.abort_flag"
+       },
+       "then": [
+        {
+         "kind": "asgn",
+         "pp": "ec_done0 <- false;",
+         "lvalue": {
+          "kind": "var",
+          "pp": "ec_done0"
+         }
+        }
+       ],
+       "else": []
+      },
+      {
+       "kind": "if",
+       "pp": "if (ec_result = None<:bits_n * bits_n>) { ... }",
+       "cond": {
+        "kind": "app",
+        "pp": "ec_result = None<:bits_n * bits_n>"
+       },
+       "then": [
+        {
+         "kind": "asgn",
+         "pp": "Comp_H7.Game_H7.abort_flag <- true;",
+         "lvalue": {
+          "kind": "var",
+          "pp": "Comp_H7.Game_H7.abort_flag"
+         }
+        }
+       ],
+       "else": []
+      }
+     ],
+     "stmt_pp": ""
+    },
+    "right": {
+     "mem": "&2",
+     "stmt": [
+      {
+       "kind": "if",
+       "pp": "if (!Red_H7_1_H7_0.abort_flag) { ... }",
+       "cond": {
+        "kind": "app",
+        "pp": "!Red_H7_1_H7_0.abort_flag"
+       },
+       "then": [
+        {
+         "kind": "asgn",
+         "pp": "ec_done0 <- false;",
+         "lvalue": {
+          "kind": "var",
+          "pp": "ec_done0"
+         }
+        }
+       ],
+       "else": []
+      },
+      {
+       "kind": "if",
+       "pp": "if (ec_result = None<:bits_n * bits_n>) { ... }",
+       "cond": {
+        "kind": "app",
+        "pp": "ec_result = None<:bits_n * bits_n>"
+       },
+       "then": [
+        {
+         "kind": "asgn",
+         "pp": "Red_H7_1_H7_0.abort_flag <- true;",
+         "lvalue": {
+          "kind": "var",
+          "pp": "Red_H7_1_H7_0.abort_flag"
+         }
+        }
+       ],
+       "else": []
+      }
+     ],
+     "stmt_pp": ""
+    },
+    "pre": {
+     "kind": "app",
+     "pp": "true"
+    },
+    "post": {
+     "kind": "app",
+     "pp": "true"
+    }
+   },
+   "text": "",
+   "types": []
+  },
+  "kinds": [
+   "program"
+  ]
+ }
+}
