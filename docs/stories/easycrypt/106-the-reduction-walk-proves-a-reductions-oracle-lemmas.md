@@ -72,28 +72,28 @@ recognizers of story 105 and the check of story 104.
 
 ## 4. Tests first
 
-- [ ] Unit test: `AdmitReason::ALL` has the two reasons, and the comment of a `reduction-mismatch`
+- [x] Unit test: `AdmitReason::ALL` has the two reasons, and the comment of a `reduction-mismatch`
       admit is `admit. (* domino: R.t.e left-only-if; reduction-mismatch *)`.
-- [ ] Unit test: on `Judgement::Reduction`, `close_side_goal` admits `reduction-ec-failed` (with a
+- [x] Unit test: on `Judgement::Reduction`, `close_side_goal` admits `reduction-ec-failed` (with a
       prover whose session refuses every sentence).
-- [ ] Unit test: after `export` of `reduction-consts`, the report entry of `prove` says
+- [x] Unit test: after `export` of `reduction-consts`, the report entry of `prove` says
       `reduction walk`, not `blind walk`.
-- [ ] Live test (needs `DOMINO_EASYCRYPT`): `prove --gamehop 0` on `reduction-consts` closes the
+- [x] Live test (needs `DOMINO_EASYCRYPT`): `prove --gamehop 0` on `reduction-consts` closes the
       oracle lemma with no `admit`, and the whole tree compiles. (Story 103's test, kept.)
-- [ ] **New fixture** `testdata/easycrypt/reduction-two-calls/`: a reduction whose package oracle
+- [x] **New fixture** `testdata/easycrypt/reduction-two-calls/`: a reduction whose package oracle
       forwards two calls in one oracle to the assumption game (an `Init` that samples a key, then a
       `Mac` that returns `None` when the key is missing). Live test: no `admit`, the proof has
       `rcondt{2}` at both assumption guards and a `seq 1 1` at the key, and the tree compiles.
-- [ ] Live test, mismatch: export `reduction-two-calls`, then add one `if (true) { }` to the left
+- [x] Live test, mismatch: export `reduction-two-calls`, then add one `if (true) { }` to the left
       game's oracle in the exported `Comp_<L>.ec`, then `prove`. Exactly one `reduction-mismatch`
       admit with the claim `left-only-if`, and the other arm of the split before it has no admit.
 
 ## 5. Acceptance criteria
 
-- [ ] All tests of §4 green, with filtered test runs only. `cargo clippy` clean.
+- [x] All tests of §4 green, with filtered test runs only. `cargo clippy` clean.
 - [ ] Complexity: every touched function within budget (`.sdlc-workspace/crap-coverage.sh <filter>`).
       `driver.rs` does not grow.
-- [ ] No `prove` run on a 4WHS-size project in this story (story 107 does that).
+- [x] No `prove` run on a 4WHS-size project in this story (story 107 does that).
 
 ## 6. Rejected alternatives
 
