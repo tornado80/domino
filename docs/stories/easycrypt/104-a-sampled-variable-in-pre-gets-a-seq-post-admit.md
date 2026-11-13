@@ -56,20 +56,20 @@ correct; the reason was wrong.
 
 ## 4. Tests first
 
-- [ ] Unit test: a goal whose `pre` has `pvar key` in memory `&2`, and a right head `key <$ dbits_n`:
+- [x] Unit test: a goal whose `pre` has `pvar key` in memory `&2`, and a right head `key <$ dbits_n`:
       the check is true for side 2 and false for side 1.
-- [ ] Unit test: a goal whose `pre` has `(glob Pkg_MAC.MAC){2}` and a right head
+- [x] Unit test: a goal whose `pre` has `(glob Pkg_MAC.MAC){2}` and a right head
       `Pkg_MAC.MAC.k <$ d`: the check is true.
-- [ ] Unit test: the `Send2` goal at the nonce (`ni1 <$ dbits_n` on both sides, `ni1` not in `pre`):
+- [x] Unit test: the `Send2` goal at the nonce (`ni1 <$ dbits_n` on both sides, `ni1` not in `pre`):
       the check is false.
-- [ ] Unit test: `sampling()` on the first goal writes `seq-post` with the claim
+- [x] Unit test: `sampling()` on the first goal writes `seq-post` with the claim
       `sampling: key{2} in #pre` and sends no `seq` (with a goal handed to the function, no
       EasyCrypt).
 
 ## 5. Acceptance criteria
 
-- [ ] All tests of §4 green, with filtered test runs only. `cargo clippy` clean.
-- [ ] Complexity: every touched function within budget (`.sdlc-workspace/crap-coverage.sh <filter>`).
+- [x] All tests of §4 green, with filtered test runs only. `cargo clippy` clean.
+- [x] Complexity: every touched function within budget (`.sdlc-workspace/crap-coverage.sh <filter>`).
 
 ## 6. Rejected alternatives
 
