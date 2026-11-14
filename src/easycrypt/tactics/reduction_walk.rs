@@ -36,10 +36,10 @@ pub(super) fn prove_reduction(p: &mut Prover<'_>) -> R<()> {
 /// forks (`if.`, `seq`), at a leaf, and before a mismatch admit. A decision (`rcond`) keeps one
 /// program goal, and the quick close comes at the next head instead.
 pub(crate) fn quick_closes_before(head: &Head) -> bool {
-    !matches!(
-        head,
-        Head::AssumptionGuard | Head::TailBranch | Head::ExitGuards
-    )
+    match head {
+        Head::Leaf | Head::Branches | Head::Samplings { .. } | Head::Mismatch(_) => true,
+        Head::AssumptionGuard | Head::TailBranch | Head::ExitGuards => false,
+    }
 }
 
 /// Proves the program goal in front, which is the arm `path`.
