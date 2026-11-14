@@ -577,6 +577,30 @@ const FALLBACKS: usize = 5;
 /// split.
 const PART_FALLBACKS: usize = 4;
 
+/// A sentence of the part fallback sequence ([`Prover::atom`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PartFallback {
+    /// `smt().`
+    Smt,
+    /// `smt(<hints>).`
+    Hints,
+    /// The crush `move: <premises> => />; smt(<hints>).`
+    Crush,
+}
+
+/// The part fallbacks in the order they are tried. With no premises there is no crush; a
+/// reduction leaf part starts with it (story 109 §3.1: its parts are mostly map equalities that
+/// differ only by `{1}`/`{2}`, which `smt()` times out on and the crush substitutes), the other
+/// judgements try it last (stories 65, 86–93).
+pub(super) fn part_fallback_order(judgement: Judgement, premises: bool) -> Vec<PartFallback> {
+    use PartFallback::{Crush, Hints, Smt};
+    match (premises, judgement) {
+        (false, _) => vec![Smt, Hints],
+        (true, Judgement::Reduction) => vec![Crush, Smt, Hints],
+        (true, _) => vec![Smt, Hints, Crush],
+    }
+}
+
 /// Timeouts of the prover.
 #[derive(Debug, Clone, Copy)]
 pub struct Timeouts {
@@ -2332,17 +2356,22 @@ impl Prover<'_> {
         Ok(())
     }
 
-    /// The part fallback sequence (story 65): `smt().`, `smt(<hints>).`, then the premises the
-    /// leaf procedure introduced moved back and crushed (`move: <premises> => />; smt(<hints>).`,
-    /// skipped when there are none), the last of them retried on a timeout
+    /// The part fallback sequence (story 65) in the order of [`part_fallback_order`]: `smt().`,
+    /// `smt(<hints>).`, then the premises the leaf procedure introduced moved back and crushed
+    /// (`move: <premises> => />; smt(<hints>).`, skipped when there are none; first on a
+    /// reduction, story 109), the last of them retried on a timeout
     /// ([`Self::retry_close`]), then the key case split ([`Self::key_case_split`]). Else an admit
     /// that keeps the unfoldings and introductions already made, with the last fallback's
     /// outcome.
     fn atom(&mut self, node: usize, pair: Option<&PairRecord>, part: &Part) -> R<()> {
-        let mut fallbacks = vec!["smt().".to_string(), self.hint_sentence()];
-        if !self.premises.is_empty() {
-            fallbacks.push(self.closing_sentence());
-        }
+        let fallbacks: Vec<String> = part_fallback_order(self.judgement, !self.premises.is_empty())
+            .into_iter()
+            .map(|f| match f {
+                PartFallback::Smt => "smt().".to_string(),
+                PartFallback::Hints => self.hint_sentence(),
+                PartFallback::Crush => self.closing_sentence(),
+            })
+            .collect();
         let last = fallbacks.len();
         let mut outcome = None;
         for (k, sentence) in (1..).zip(&fallbacks) {

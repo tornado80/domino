@@ -283,6 +283,13 @@ Fallback 3 is skipped when there are no premises to move, but every leaf has at 
 in practice it always runs. The retry runs only with `--smt-retry-timeout`, only after fallback 3
 failed with `smt: timeout`, and only while the leaf budget lasts.
 
+**A reduction leaf part** (story 109) starts with the crush when there are premises: 3, 1, 2,
+then the retry (still the crush with the longer timeout, after fallback 2 failed with
+`smt: timeout`), then 4. Its parts are mostly map equalities whose sides differ only by `{1}` and
+`{2}`: `smt()` times out on them, and the crush's `/>` substitutes the premises' equalities.
+Equivalences, side invariants and package invariants keep the order 1, 2, 3. The order is
+`part_fallback_order` in `driver.rs`.
+
 The leaf budget is checked in the opening loop, before the retry, before a named split and before
 each case. It is not checked between fallbacks 1 to 3.
 
@@ -526,31 +533,33 @@ oracle:
     send "proc; inline *."
         refused → admit program-mismatch (N0, claim "proc; inline *.")
     A := the theory of the reduction's assumption composition
-    walk("R", arm_start = true)
+    walk("R")
 
-walk(path, arm_start):
-    if arm_start:
-        quick close "auto => /#." under the short timeout. Closed: done
+walk(path):
     -- no sp here: an rcond needs none (^if finds the first if, its side goal takes the
     -- assignments before it), and a leaf's auto takes them
     (l, r) := the first statements of the left and the right program that are not assignments
-    match classify(l, r, A):                       -- §10.2, first matching rule wins
+    head := classify(l, r, A)                      -- §10.2, first matching rule wins
+    head is Leaf, Branches, Samplings or Mismatch (story 109, quick_closes_before):
+        quick close "auto => /#." under the short timeout. Closed: done
+    -- not before a decision (AssumptionGuard, TailBranch, ExitGuards): its rcond keeps one
+    -- program goal, and the quick close comes at the next head, before the walk forks
+    match head:
 
         Leaf →                                     -- both programs empty
-            quick close "auto => /#." (unless arm_start already tried it). Closed: done
             leaf procedure with no pair (§6), with "move: hpre => />." after the unfolding
             (§6.2); a part that fails → admit reduction-ec-failed
 
         AssumptionGuard →
             step("rcondt{2} ^if.", claim "assumption-guard")
-            walk(path, false)
+            walk(path)
 
         TailBranch →
             for (d, close) in [(rcondf, />), (rcondt, />), (rcondf, /#), (rcondt, /#)]:
-                accepted "d{2} ^if; 1: auto => close." → walk(path, false), done
+                accepted "d{2} ^if; 1: auto => close." → walk(path), done
             step("rcondt{2} ^if.", claim "tail-branch")   -- full side-goal sequence, last try
                 refused → admit reduction-mismatch (path, "undecided-tail-branch"), done
-            walk(path, false)
+            walk(path)
 
         ExitGuards →                               -- both heads are exit guards
             [a, b] := exit_decisions(cond of side 1)
@@ -559,22 +568,22 @@ walk(path, arm_start):
             side 2 repeats the left decision (both sides run the same code):
                 for (d, close) in [(left, />), (left, /#), (other, />), (other, /#)]:
                     accepted "d{2} ^if; 1: auto => close." → decided
-            a side not decided → undo both sides, go to Branches
-            walk(path, false)
+            a side not decided → undo both sides, quick close (closed: done), go to Branches
+            walk(path)
 
         Branches →                                 -- both heads are if
             sp_front                               -- "sp k l.": only before a two-sided step
             step("if.", claim "if-conditions")     -- leaves the then arm and the else arm
-            + walk(path + ".t", true)
-            + walk(path + ".e", true)
+            + walk(path + ".t")
+            + walk(path + ".e")
 
         Samplings(x, y) →
             sp_front                               -- "sp k l.", then the check reads #pre
             x{1} or y{2} in #pre (§10.3) → admit seq-post (path, "sampling: x{1} in #pre"), done
             step("seq 1 1 : (#pre /\ x{1} = y{2}).", claim "seq-coupling")
-            walk(path, false)
+            walk(path)
 
-        Mismatch(m) →
+        Mismatch(m) →                              -- after the quick close failed
             admit reduction-mismatch (path, claim of m), done
 
 step(tactic, claim):                               -- the shape is right: only its side goal is open

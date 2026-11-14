@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use super::driver::{pair_view, Part, SmtOutcome};
+use super::driver::{pair_view, part_fallback_order, Judgement, Part, PartFallback, SmtOutcome};
 use super::*;
 use crate::debug::driver::{ClaimVerdict, PartVerdict, TerminalView, Verdict};
 use crate::debug::lockstep::{PairRecord, PairSide, EQUAL_OUTPUT};
@@ -6754,9 +6754,23 @@ mod reduction_jobs {
         run_tactics(theorem, project, exported, out, &backend(), &hop(0)).unwrap()
     }
 
+    /// Story 109 §3.1: in `transcripts`, a leaf part with premises starts with the crush.
+    fn crush_first(transcripts: &[String]) {
+        let fallbacks = transcripts
+            .iter()
+            .flat_map(|t| t.lines())
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|r| r["ctx"]["role"] == "part-fallback");
+        for r in fallbacks {
+            if r["sentence"].as_str().unwrap_or("").starts_with("move:") {
+                assert_eq!(r["ctx"]["n"], 1, "the crush is not first: {r}");
+            }
+        }
+    }
+
     /// Story 106 §4: `prove --gamehop 0` on `reduction-two-calls` (two calls to the assumption
-    /// game in one oracle) leaves no admit; the proof decides both assumption guards by
-    /// `rcondt{2}` and couples the key by `seq 1 1`; the tree compiles.
+    /// game in one oracle) leaves no admit and the tree compiles; without the quick close the
+    /// proof decides both assumption guards by `rcondt{2}` and couples the key by `seq 1 1`.
     #[test]
     fn prove_closes_the_reduction_two_calls_oracle_lemma_and_the_tree_compiles() {
         if !crate::easycrypt::session::json_binary_configured() {
@@ -6771,8 +6785,9 @@ mod reduction_jobs {
         eprintln!("{}\n{text}", result.render());
         assert_eq!(result.admit_count(), 0, "{}\n{text}", result.render());
         assert!(result.render().contains("Query: reduction walk"));
-        assert!(text.matches("rcondt{2} ^if").count() >= 2, "{text}");
-        assert!(text.contains("seq 1 1"), "{text}");
+        // story 109 §3.2: the quick close before the fork after the first guard's `rcondt`
+        // closes the arm
+        assert!(text.contains("rcondt{2} ^if"), "{text}");
         // story 108: no `sp` in front of an `rcond`, and the leaf substitutes `hpre`
         let lines: Vec<&str> = text
             .lines()
@@ -6802,6 +6817,24 @@ mod reduction_jobs {
         for w in rconds.windows(2) {
             assert!(w[0].1 || !w[1].1, "a wrong guess: {w:?}");
         }
+        // story 109 §3.2: no program-goal quick close directly before an `rcond` decision;
+        // §3.1: a leaf part with premises starts with the crush
+        let records: Vec<serde_json::Value> = transcripts
+            .iter()
+            .flat_map(|t| t.lines())
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .filter(|r: &serde_json::Value| {
+                !r["sentence"].as_str().unwrap_or("").starts_with("pragma")
+            })
+            .collect();
+        for w in records.windows(2) {
+            // a quick close that did not close leaves its goal: followed by an `rcond`, it
+            // was a program goal's
+            let quick = w[0]["ctx"]["role"] == "quick-close" && w[0]["response"]["status"] != "ok";
+            let rcond = w[1]["sentence"].as_str().unwrap_or("").starts_with("rcond");
+            assert!(!(quick && rcond), "a quick close before an rcond: {w:?}");
+        }
+        crush_first(&transcripts);
         for file in [&red.router_file, oracle_file, &red.file] {
             let text = std::fs::read_to_string(out.path().join(file)).unwrap();
             assert!(!text.contains("admit"), "{file}: {text}");
@@ -6828,6 +6861,9 @@ mod reduction_jobs {
         let text = std::fs::read_to_string(out.path().join(oracle_file)).unwrap();
         assert_eq!(result.admit_count(), 0, "{}\n{text}", result.render());
         assert!(text.contains("move: hpre => />."), "{text}");
+        assert!(text.matches("rcondt{2} ^if").count() >= 2, "{text}");
+        assert!(text.contains("seq 1 1"), "{text}");
+        crush_first(&self::transcripts(out.path()));
         compiles(out.path(), oracle_file);
     }
 
@@ -6847,7 +6883,22 @@ mod reduction_jobs {
         assert_eq!(text.matches(marker).count(), 1, "{text}");
         let text = text.replace(marker, &format!("if (true) {{ }}\n      {marker}"));
         std::fs::write(&comp, text).unwrap();
-        let result = prove_hop0(project, "RedTwoCalls", &exported, out.path());
+        // story 109 §3.2: the quick close before a mismatch closes `if (true) { }`; without it
+        // the walk shows the mismatch
+        let options = TacticsOptions {
+            quick_close: false,
+            ..hop(0)
+        };
+        let theorem = project.get_theorem("RedTwoCalls").unwrap();
+        let result = run_tactics(
+            theorem,
+            project,
+            &exported,
+            out.path(),
+            &backend(),
+            &options,
+        )
+        .unwrap();
         let admits: Vec<&Admit> = result.equivalences[0]
             .oracles
             .iter()
@@ -7006,4 +7057,28 @@ fn the_reduction_walk_splits_two_branches_and_admits_by_arm_path() {
         ]
     );
     assert!(run.script.contains("if."), "{}", run.script);
+}
+
+/// Story 109 §3.1: a reduction leaf part with premises starts with the crush.
+#[test]
+fn a_reduction_leaf_part_with_premises_starts_with_the_crush() {
+    use PartFallback::{Crush, Hints, Smt};
+    assert_eq!(
+        part_fallback_order(Judgement::Reduction, true),
+        [Crush, Smt, Hints]
+    );
+    assert_eq!(
+        part_fallback_order(Judgement::Reduction, false),
+        [Smt, Hints]
+    );
+}
+
+/// Story 109 §3.1: the part fallbacks of the other judgements do not change.
+#[test]
+fn the_part_fallbacks_of_equivalences_and_invariants_are_unchanged() {
+    use PartFallback::{Crush, Hints, Smt};
+    for j in [Judgement::Equiv, Judgement::Hoare, Judgement::Package] {
+        assert_eq!(part_fallback_order(j, true), [Smt, Hints, Crush], "{j:?}");
+        assert_eq!(part_fallback_order(j, false), [Smt, Hints], "{j:?}");
+    }
 }

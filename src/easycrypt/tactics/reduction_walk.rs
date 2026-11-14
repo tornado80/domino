@@ -29,15 +29,22 @@ pub(crate) struct Walk {
 
 /// Proves a reduction's oracle lemma after `proc; inline *.` (§10.1), from the arm `R`.
 pub(super) fn prove_reduction(p: &mut Prover<'_>) -> R<()> {
-    walk(p, "R", true)
+    walk(p, "R")
+}
+
+/// Whether the walk tries the quick close before the step of `head` (story 109 §3.2): where it
+/// forks (`if.`, `seq`), at a leaf, and before a mismatch admit. A decision (`rcond`) keeps one
+/// program goal, and the quick close comes at the next head instead.
+pub(crate) fn quick_closes_before(head: &Head) -> bool {
+    !matches!(
+        head,
+        Head::AssumptionGuard | Head::TailBranch | Head::ExitGuards
+    )
 }
 
 /// Proves the program goal in front, which is the arm `path`.
-fn walk(p: &mut Prover<'_>, path: &str, arm_start: bool) -> R<()> {
+fn walk(p: &mut Prover<'_>, path: &str) -> R<()> {
     p.walk.arm = path.to_string();
-    if arm_start && p.quick_close_program()? {
-        return Ok(());
-    }
     // no `sp` here (story 108 §3.2): the heads are read after the leading assignments, and
     // only a two-sided step (`if.`, `seq`) sends `sp` before it
     if !p.front().is_some_and(goals::is_program) {
@@ -49,8 +56,12 @@ fn walk(p: &mut Prover<'_>, path: &str, arm_start: bool) -> R<()> {
         return p.admit_reduction(AdmitReason::ReductionMismatch, "not-a-program-pair");
     };
     let conds = [head_cond(&left.stmt), head_cond(&right.stmt)];
-    match classify(&left.stmt, &right.stmt, &p.walk.assumption) {
-        Head::Leaf => leaf(p, arm_start),
+    let head = classify(&left.stmt, &right.stmt, &p.walk.assumption);
+    if quick_closes_before(&head) && p.quick_close_program()? {
+        return Ok(());
+    }
+    match head {
+        Head::Leaf => p.leaf_of(0, None),
         Head::AssumptionGuard => step(p, path, "rcondt{2} ^if.", "assumption-guard", None),
         Head::TailBranch => tail_branch(p, path),
         Head::ExitGuards => exit_guards(p, path, &conds),
@@ -73,15 +84,6 @@ fn head_cond(stmt: &[Instr]) -> String {
         .map_or_else(String::new, |c| c.pp.clone())
 }
 
-/// Both programs are empty: the quick close (unless the arm's start tried it), then the leaf
-/// procedure with no pair, whose failed parts admit `reduction-ec-failed`.
-fn leaf(p: &mut Prover<'_>, arm_start: bool) -> R<()> {
-    if !arm_start && p.quick_close_program()? {
-        return Ok(());
-    }
-    p.leaf_of(0, None)
-}
-
 /// A structural step whose shape is right: `tactic` leaves its side goal in front of the program
 /// goal. A refusal admits `reduction-mismatch` with `refused` (else `claim`); the side goal is a
 /// bullet ([`side_goal`]), and the program goal goes on in the next.
@@ -92,10 +94,10 @@ fn step(p: &mut Prover<'_>, path: &str, tactic: &str, claim: &str, refused: Opti
     }
     if p.count() == before {
         // EasyCrypt discharged the side goal itself
-        return walk(p, path, false);
+        return walk(p, path);
     }
     p.bullet(|p| side_goal(p, path, claim))?;
-    p.bullet(|p| walk(p, path, false))
+    p.bullet(|p| walk(p, path))
 }
 
 /// A side goal of a step: `auto => />.`, then [`Prover::close_side_goal`], which admits
@@ -112,7 +114,7 @@ fn side_goal(p: &mut Prover<'_>, path: &str, claim: &str) -> R<()> {
 /// (`rcondf` first); else `rcondt{2} ^if.` as a step; refused: an undecided tail branch.
 fn tail_branch(p: &mut Prover<'_>, path: &str) -> R<()> {
     if decide(p, 2, ["rcondf", "rcondt"], false)?.is_some() {
-        return walk(p, path, false);
+        return walk(p, path);
     }
     step(
         p,
@@ -127,11 +129,7 @@ fn tail_branch(p: &mut Prover<'_>, path: &str) -> R<()> {
 /// `dirs[0]` the predicted one (story 108 §3.1). On its own the cheap closer `/>` goes first in
 /// both directions, then `/#`; `follow`ing a decision already made on the other side, `dirs[0]`
 /// is tried with both closers before the other direction.
-fn decision_order(
-    side: u8,
-    dirs: [&'static str; 2],
-    follow: bool,
-) -> Vec<(&'static str, String)> {
+fn decision_order(side: u8, dirs: [&'static str; 2], follow: bool) -> Vec<(&'static str, String)> {
     let [a, b] = dirs;
     let order = if follow {
         [(a, "/>"), (a, "/#"), (b, "/>"), (b, "/#")]
@@ -184,13 +182,17 @@ fn exit_guards(p: &mut Prover<'_>, path: &str, conds: &[String; 2]) -> R<()> {
     };
     if !decided {
         p.rollback(snap)?;
+        // the guards are split: a fork, so the quick close first (story 109 §3.2)
+        if p.quick_close_program()? {
+            return Ok(());
+        }
         return branches(p, path);
     }
-    walk(p, path, false)
+    walk(p, path)
 }
 
 /// Two `if`s: `if.`, its condition goal as a side goal, then the *then* arm `<path>.t` and the
-/// *else* arm `<path>.e`, each starting with the quick close.
+/// *else* arm `<path>.e`, each walked from its heads.
 fn branches(p: &mut Prover<'_>, path: &str) -> R<()> {
     if !p.sp_front()? {
         return p.admit_reduction(AdmitReason::ReductionMismatch, "sp");
@@ -200,8 +202,8 @@ fn branches(p: &mut Prover<'_>, path: &str) -> R<()> {
         return p.admit_reduction(AdmitReason::ReductionMismatch, "if-conditions");
     }
     p.bullet(|p| side_goal(p, path, "if-conditions"))?;
-    p.bullet(|p| walk(p, &format!("{path}.t"), true))?;
-    p.bullet(|p| walk(p, &format!("{path}.e"), true))
+    p.bullet(|p| walk(p, &format!("{path}.t")))?;
+    p.bullet(|p| walk(p, &format!("{path}.e")))
 }
 
 /// Two samplings: `seq 1 1 : (#pre /\ x{1} = y{2}).` as a step, unless `#pre` speaks about a
@@ -517,6 +519,24 @@ mod tests {
                 $name
             )))
         };
+    }
+
+    /// Story 109 §3.2: the quick close comes where the walk forks, at a leaf and before a
+    /// mismatch admit; not before a decision, which keeps one program goal.
+    #[test]
+    fn the_quick_close_comes_before_a_fork_a_leaf_or_a_mismatch_only() {
+        let s = String::new();
+        for head in [
+            Head::Leaf,
+            Head::Branches,
+            Head::Samplings { x: s.clone(), y: s },
+            Head::Mismatch(Mismatch::LeftOnlyIf),
+        ] {
+            assert!(quick_closes_before(&head), "{head:?}");
+        }
+        for head in [Head::AssumptionGuard, Head::TailBranch, Head::ExitGuards] {
+            assert!(!quick_closes_before(&head), "{head:?}");
+        }
     }
 
     #[test]
