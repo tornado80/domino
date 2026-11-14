@@ -53,9 +53,11 @@ when the shape is wrong.
 | 3 | 106 | The reduction walk proves a reduction's oracle lemmas | `106-the-reduction-walk-proves-a-reductions-oracle-lemmas.md` | 104, 105 |
 | 4 | 107 | Hop 12 of Full4WHS closes with the reduction walk | `107-hop-12-of-full4whs-closes-with-the-reduction-walk.md` | 106 |
 | 5 | 108 | The reduction walk decides an `if` without guessing and closes a leaf by substitution (follow-up of 107: the walk's cost) | `108-the-reduction-walk-decides-an-if-without-guessing-and-closes-a-leaf-by-substitution.md` | 106, 107 |
+| 6 | 109 | The reduction walk crushes a leaf part first and quick-closes only where it forks (follow-up of 108: the walk's cost) | `109-the-reduction-walk-crushes-a-leaf-part-first-and-quick-closes-only-where-it-forks.md` | 108 |
 
 Stories 104 and 105 are independent. Story 106 joins them. Story 108 came out of story 107's run
-(2026-11-13): the walk closed hop 12, but in about the blind walk's time.
+(2026-11-13): the walk closed hop 12, but in about the blind walk's time. Story 109 came out of
+the run of the five Full4WHS reduction hops with story 108 (2026-11-14).
 
 ## 5. Done when
 
