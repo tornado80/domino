@@ -67,14 +67,23 @@ timeout and `--test-threads=1`). Live EasyCrypt tests ran with
 | `writers::easycrypt::export -- --skip 4whs` (live; includes `story96_full_tree_compiles_in_dependency_order`, the new `story112_full_tree_compiles_in_dependency_order`, kem-dem and the other story fixtures) | 26 passed |
 | `cargo clippy --workspace --all-targets` | clean |
 
-**Not run (owner's rule: no export of big projects):**
+**The 4WHS export checks (§4 regression test, §5 byte-identity), run on 2026-11-15 at the owner's
+request.** `domino` was built at `e57bf382` (before this story, from a `git archive` copy) and at
+`df7ee197`. Each binary exported both projects into its own directory (memory-capped, about 10 s
+and 0.75 GB per export), and `diff -r` compared the trees:
 
-- §4, the 4WHS regression test. I checked it by inspection instead. I scanned every `<-$` in
-  `example-projects/4WHS/packages`: there are 20. None samples into a state field or an argument,
-  and none samples into a local that an earlier statement of the same oracle writes. No sampling
-  sits in a `for` loop. So no sampling there gets a temporary, and the output should be unchanged.
-  The check: export 4WHS before and after the change and run `diff`.
-- §5, "the export of `ec4whs/4WHS` (`Full4WHS`) is byte-identical". Deferred, as above.
+| Project | Theorems | Files (before / after) | `diff -r` |
+|---|---|---|---|
+| `example-projects/4WHS` (§4) | `Full4WHS`, `Simple4WHS` | 377 / 377 | identical |
+| `ec4whs/4WHS` (§5) | `Full4WHS`, `Simple4WHS` | 364 / 364 | identical |
+
+Each export has 26 sampling lines and no `ec_s<N>` temporary, as the inspection predicted (of the
+20 `<-$` in `example-projects/4WHS/packages`, none targets a state field, an argument or an
+already-written local, and none sits in a `for` loop). The printed export report differs only in the
+output path it names.
+
+**Not run:**
+
 - The proof runs of story 111 §7, with this story's admit criteria from §5. They are deferred to the
   session that runs them now that both stories are committed. The `domino-ec` binary must be
   rebuilt from this branch and installed first, the way earlier runs did it:
@@ -119,7 +128,7 @@ Two sub-agents reviewed the diff: one on standards, one on spec.
 
 ## Open
 
-- The 4WHS and Full4WHS byte-identity checks, and the proof runs (story 111 §7). This story's
+- The proof runs (story 111 §7). The 4WHS and Full4WHS byte-identity checks are done (§Tests). This story's
   criteria for them: no `seq-post` admit with a claim `sampling: key{…} in #pre` or `key0{…}`, and
   no `program-mismatch` at the `MAC.Init` sampling in hop 11 `Send3` and in `SideInv_H7` `Send2`.
 - The `SideInv_H7` admits are attributed to this cause only by inference (story §1). The proof run

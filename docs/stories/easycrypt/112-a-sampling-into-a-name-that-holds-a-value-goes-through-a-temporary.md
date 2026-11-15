@@ -148,7 +148,7 @@ EasyCrypt, and alignment already reports it as `unknown-ec-instruction`.
 - [x] Unit test: the EasyCrypt listing (`lower.rs`) of the `story96` oracle has the same sampling
       and copy as the module.
 - [x] Compile test: `story96_full_tree_compiles_in_dependency_order` stays green.
-- [ ] Regression test: the export of `example-projects/4WHS` gives the same text as before. No
+- [x] Regression test: the export of `example-projects/4WHS` gives the same text as before. No
       sampling there gets a temporary.
 
 ## 5. Acceptance criteria
@@ -157,7 +157,7 @@ EasyCrypt, and alignment already reports it as `unknown-ec-instruction`.
 - [ ] Complexity: the sampling arm of `translate_stmt`, `SampleTemps` and every other touched
       function within budget (`.sdlc-workspace/crap-coverage.sh <filter>`). If `translate_stmt` goes
       over budget, move the sampling arm into a function of its own.
-- [ ] The export of `ec4whs/4WHS` (theorem `Full4WHS`) is byte-identical to the export before the
+- [x] The export of `ec4whs/4WHS` (theorem `Full4WHS`) is byte-identical to the export before the
       story.
 - [ ] The proof runs: see story 111 §7. They run once, after Stories 111 and 112 are both merged.
       For this story: no `seq-post` admit with a claim `sampling: key{…} in #pre` or
