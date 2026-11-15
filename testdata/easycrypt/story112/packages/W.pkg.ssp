@@ -1,0 +1,51 @@
+package W {
+    params {
+        n: Integer,
+    }
+
+    state {
+        S: Bits(n),
+    }
+
+    /*
+     * Story 112: which samplings go through a temporary `ec_s<N>`.
+     * `St` samples into a state field, `Assigned` into a local it assigned
+     * before, and `Branch` into a local it may have assigned in a `then`
+     * branch: these three get a temporary. `Fresh` samples into a local
+     * with no earlier write, and `SamplesW` into a local that only the other
+     * oracle `WritesW` writes: these two do not.
+     */
+    oracle St() -> Bits(n) {
+        S <-$ Bits(n);
+        return S;
+    }
+
+    oracle Assigned(a: Bits(n)) -> Bits(n) {
+        x <- a;
+        x <-$ Bits(n);
+        return x;
+    }
+
+    oracle Branch(a: Bits(n), b: Bool) -> Bits(n) {
+        if b {
+            y <- a;
+        }
+        y <-$ Bits(n);
+        return y;
+    }
+
+    oracle Fresh() -> Bits(n) {
+        z <-$ Bits(n);
+        return z;
+    }
+
+    oracle WritesW(a: Bits(n)) -> Bits(n) {
+        w <- a;
+        return w;
+    }
+
+    oracle SamplesW() -> Bits(n) {
+        w <-$ Bits(n);
+        return w;
+    }
+}

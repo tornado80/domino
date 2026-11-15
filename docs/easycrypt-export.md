@@ -123,6 +123,20 @@ an init procedure.
 It's also easier to wrap all variables in a package state into a record type in EasyCrypt.
 These record types can be defined in Types.ec as well. 
 
+A sampling is usually exported as it is: `x <-$ Bits(n)` becomes `x <$ dbits_n;`. Two kinds of
+target go through a proc-local temporary `ec_s<N>`, declared with the other locals:
+
+- A table entry, which EasyCrypt cannot sample into: `T[k] <-$ Bits(n)` becomes
+  `ec_s1 <$ dbits_n; T.[k] <- ec_s1;`.
+- A name that already holds a value (story 112): an oracle argument, a state field, or a local that
+  an earlier statement of the oracle writes (on any branch). `key <-$ Bits(n)`, with `key` an
+  argument, becomes `ec_s1 <$ dbits_n; key <- ec_s1;`. The prover's `seq` post at the sampling is
+  `#pre /\ …`, and `#pre` can hold a fact about the old value of `key` (after `sp`, for example
+  `key{2} = kmac{2}`). A sampling straight into `key` would make that post false; the temporary
+  keeps the old value's facts true until the copy, which `sp` takes.
+
+A local with no earlier write in the oracle is sampled into directly, so most modules do not change.
+
 ### Games (or compositions)
 Each game in Domino instantiates some packages (even several instances of the same 
 package) with concrete values or game parameters. It also describes the call graph 

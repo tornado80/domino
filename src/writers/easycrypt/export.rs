@@ -1457,6 +1457,14 @@ mod tests {
         assert_tree_compiles(&exported, "story96");
     }
 
+    // Story 112: samplings into a state field and into locals written
+    // before go through an `ec_s<N>` temporary.
+    #[test]
+    fn story112_full_tree_compiles_in_dependency_order() {
+        let exported = export("testdata/easycrypt/story112", "Story112").unwrap();
+        assert_tree_compiles(&exported, "story112");
+    }
+
     #[test]
     fn kem_dem_cca_ssp_full_tree_compiles_in_dependency_order() {
         let exported = export(

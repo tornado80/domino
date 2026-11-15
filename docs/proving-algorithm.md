@@ -401,7 +401,7 @@ path), `S<n>` (stuck point), `N<n>` (node), `router`, or an arm path of the redu
 | `domino-inconclusive` | Domino could not decide, and EasyCrypt did not close it |
 | `domino-verified-ec-failed` | Domino decided it, and EasyCrypt did not close it |
 | `program-mismatch` | EasyCrypt's program did not match, and the blind walk found nothing |
-| `seq-post` | A synchronized sampling had assignments before it after `sp`, or `#pre` mentions the sampled variable (story 104) |
+| `seq-post` | A synchronized sampling had assignments before it after `sp`, or `#pre` mentions the sampled variable (story 104). Since story 112 the export prevents the second case for an argument, a state field and a local written before (`ec_s<N> <$ d; x <- ec_s<N>;`); the check stays for other shapes |
 | `router` | A goal of the router prelude |
 | `reduction-mismatch` | The reduction walk met code without the shape of a reduction (§10) |
 | `reduction-ec-failed` | The reduction walk's step was right, and EasyCrypt did not close its side goal or leaf part (§10) |
@@ -424,7 +424,7 @@ path), `S<n>` (stuck point), `N<n>` (node), `router`, or an arm path of the redu
 | `program-mismatch` | `proc; inline.` refused | `N0` | `proc; inline.` | n/a |
 | `program-mismatch` | Blind walk ran out of options | `N<n>` | `program` | Inconclusive. An independent sampling no longer gets it from its `is_lossless` side goal: `Types.ec` declares `op [lossless] dbits_n` (story 111). |
 | `seq-post` | Synchronized sampling after `sp` | A pair below | `sampling` | Verified, fixed |
-| `seq-post` | Synchronized sampling into a variable `#pre` mentions (a `pvar` in that memory, or `glob` of a module holding it) | A pair below | `sampling: <x>{<side>} in #pre` | Verified, fixed |
+| `seq-post` | Synchronized sampling into a variable `#pre` mentions (a `pvar` in that memory, or `glob` of a module holding it) | A pair below | `sampling: <x>{<side>} in #pre` | Verified, fixed. Since story 112 the export samples an argument, a state field and a local written before through a temporary `ec_s<N>`, so these no longer reach the check; it stays for a shape the export does not see. |
 | `router` | Prelude side goal | `router` | `router-condition`, `both-aborted`, `already-aborted` | n/a |
 | `reduction-mismatch` | Reduction walk: a shape of §10.2 it does not expect, a structural tactic EasyCrypt refused, a tail branch no direction decides | Arm path | `left-only-if`, `right-only-if`, `one-sided-sampling`, `loop`, `heads <k>/<k>`, `undecided-tail-branch`, or the step's claim | n/a |
 | `reduction-ec-failed` | Reduction walk: a side goal of a correct step (`close_side_goal` on `Judgement::Reduction`), or a leaf part (the leaf procedure) | Arm path | `assumption-guard`, `tail-branch`, `if-conditions`, `seq-coupling`, `leaf`, or the leaf part | n/a |
@@ -438,8 +438,9 @@ checked the formula EasyCrypt showed.
 One case is defensive. `not-explored` needs a tree from a stopped or path-limited run, and a
 `prove` run sets no path limit and does not walk a stopped tree. `seq-post` with the claim
 `sampling` needs EasyCrypt to leave an assignment at the head right after `sp`; `seq-post` with the
-claim `sampling: <x>{<side>} in #pre` occurs (an oracle that samples into its argument, a local it
-assigned before, or a state field under `glob`).
+claim `sampling: <x>{<side>} in #pre` is now defensive too: the export samples an argument, a
+local assigned before, or a state field through a temporary (story 112), and the check stays for a
+shape the export does not see.
 
 ### 9.3 How the reason of an EasyCrypt failure is chosen
 

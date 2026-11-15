@@ -1,0 +1,75 @@
+theorem Story112 {
+    const n: Integer;
+
+    instance L = G {
+        params {
+            n: n,
+        }
+    }
+
+    instance R = G {
+        params {
+            n: n,
+        }
+    }
+
+    gamehops {
+        equivalence L R {
+            invariant: [ ./theorem/invariant.smt2 ]
+            St: {
+                randomness: simple
+
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+            Assigned: {
+                randomness: simple
+
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+            Branch: {
+                randomness: simple
+
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+            Fresh: {
+                randomness: simple
+
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+            WritesW: {
+                randomness: simple
+
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+            SamplesW: {
+                randomness: simple
+
+                lemmas {
+                    equal-aborts: []
+                    invariant:    [no-abort]
+                    same-output:  [no-abort]
+                }
+            }
+        }
+    }
+}

@@ -838,15 +838,23 @@ impl OracleNaming for PackageScope {
     }
 }
 
-/// `ec_s<N>` proc-local declarations for a sample into a table entry
-/// (`T[k] <-$ τ`, which EasyCrypt cannot express directly), appended to
-/// [`EcProc::locals`] afterwards. Every other generated local —
+/// `ec_s<N>` proc-local declarations for a sample through a temporary —
+/// into a table entry (`T[k] <-$ τ`, which EasyCrypt cannot express
+/// directly), or into a name that already holds a value (story 112) —
+/// appended to [`EcProc::locals`] afterwards. Every other generated local —
 /// `ec_result`, `ec_done`, the `ec_r<N>` invoke temporaries — arrives from
 /// `easycryptify` as an ordinary Domino local.
 #[derive(Default)]
 pub(super) struct SampleTemps {
     ctr: usize,
     pub(super) decls: Vec<(String, EcType)>,
+    /// The EasyCrypt names (as [`OracleNaming::target`] spells them) the
+    /// translated statements have written so far, in program order, on any
+    /// branch (story 112 §3.1). An over-approximation, which is harmless: a
+    /// name in it only makes a later sampling into it use a temporary. The
+    /// debugger listing shares one `SampleTemps` across its inlined frames;
+    /// its names are unique across the listing, so frames do not mix.
+    written: HashSet<String>,
 }
 
 /// Translates one statement of an `easycryptify`-lowered oracle body with
@@ -921,12 +929,21 @@ impl OracleTranslator<'_> {
         }
     }
 
+    /// The target name of a write to `id`, recorded as written (story 112).
+    fn written_name(&mut self, id: &Identifier) -> Result<String, EcExportError> {
+        let name = self.resolve_name(id)?;
+        self.temps.written.insert(name.clone());
+        Ok(name)
+    }
+
+    /// The lvalue of an assignment or an invoke binding. Every name in it is
+    /// recorded as written.
     fn translate_pattern(&mut self, pattern: &Pattern) -> Result<EcLvalue, EcExportError> {
         Ok(match pattern {
-            Pattern::Ident(id) => EcLvalue::Var(self.resolve_name(id)?),
+            Pattern::Ident(id) => EcLvalue::Var(self.written_name(id)?),
             Pattern::Tuple(ids) => EcLvalue::Tuple(
                 ids.iter()
-                    .map(|id| self.resolve_name(id))
+                    .map(|id| self.written_name(id))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             Pattern::Table { .. } => {
@@ -995,33 +1012,7 @@ impl OracleTranslator<'_> {
                         },
 
                         AssignmentRhs::Sample { ty, .. } => {
-                            let distr = self.sample_distr(ty, span)?;
-                            match pattern {
-                                Pattern::Ident(id) => {
-                                    let name = self.resolve_name(id)?;
-                                    out.push(EcStmt::Sample {
-                                        lhs: EcLvalue::Var(name),
-                                        distr,
-                                    });
-                                }
-                                Pattern::Table { ident, index } => {
-                                    let sample_ty = translate_type(ty, span)?;
-                                    let tmp = self.declare_sample_temp(sample_ty);
-                                    out.push(EcStmt::Sample {
-                                        lhs: EcLvalue::Var(tmp.clone()),
-                                        distr,
-                                    });
-                                    let key = self.translate_e(index, span)?;
-                                    let map = self.resolve_name(ident)?;
-                                    out.push(EcStmt::Assign {
-                                        lhs: EcLvalue::MapSet { map, key },
-                                        rhs: EcExpr::Var(tmp),
-                                    });
-                                }
-                                Pattern::Tuple(_) => {
-                                    unreachable!("the parser rejects a tuple-pattern sample")
-                                }
-                            }
+                            out.extend(self.translate_sample(pattern, ty, span)?);
                         }
 
                         AssignmentRhs::Invoke { args, edge, .. } => {
@@ -1049,6 +1040,61 @@ impl OracleTranslator<'_> {
             }
         }
         Ok(out)
+    }
+
+    /// `x <-$ τ` or `T[k] <-$ τ`. A table entry is sampled through a
+    /// temporary, `ec_s<N> <$ d; T.[k] <- ec_s<N>;`, since EasyCrypt cannot
+    /// sample into one. So is a name that already holds a value — an oracle
+    /// argument, a state field, or a local written before (story 112):
+    /// `#pre` can hold a fact about the old value of `x`, and a sampling
+    /// straight into `x` would make the prover's `seq` post false. Every
+    /// other target is sampled into directly, `x <$ d;`.
+    fn translate_sample(
+        &mut self,
+        pattern: &Pattern,
+        ty: &Type,
+        span: SourceSpan,
+    ) -> Result<Vec<EcStmt>, EcExportError> {
+        let distr = self.sample_distr(ty, span)?;
+        let lhs = match pattern {
+            Pattern::Ident(id) => {
+                let name = self.resolve_name(id)?;
+                if !self.holds_a_value(id, &name) {
+                    self.temps.written.insert(name.clone());
+                    let lhs = EcLvalue::Var(name);
+                    return Ok(vec![EcStmt::Sample { lhs, distr }]);
+                }
+                EcLvalue::Var(name)
+            }
+            Pattern::Table { ident, index } => {
+                let key = self.translate_e(index, span)?;
+                let map = self.resolve_name(ident)?;
+                EcLvalue::MapSet { map, key }
+            }
+            Pattern::Tuple(_) => unreachable!("the parser rejects a tuple-pattern sample"),
+        };
+        let tmp = self.declare_sample_temp(translate_type(ty, span)?);
+        Ok(vec![
+            EcStmt::Sample {
+                lhs: EcLvalue::Var(tmp.clone()),
+                distr,
+            },
+            EcStmt::Assign {
+                lhs,
+                rhs: EcExpr::Var(tmp),
+            },
+        ])
+    }
+
+    /// Whether the sampling target `id`, spelled `name`, holds a value
+    /// before the sampling (story 112 §3.2).
+    fn holds_a_value(&self, id: &Identifier, name: &str) -> bool {
+        matches!(
+            id,
+            Identifier::PackageIdentifier(
+                PackageIdentifier::OracleArg(_) | PackageIdentifier::State(_)
+            )
+        ) || self.temps.written.contains(name)
     }
 
     /// `T[k] <- rhs` (§3.4). `rhs` is `Some(_)` or `None`: `easycryptify`
@@ -1897,8 +1943,80 @@ mod tests {
     #[test]
     fn the_body_still_writes_to_the_argument() {
         let proc = story96_init_proc();
-        for write in ["key <$ ", "h <- h + 1;", "(h, extra) <- "] {
+        for write in ["key <- ec_s1;", "h <- h + 1;", "(h, extra) <- "] {
             assert!(proc.contains(write), "no `{write}` in:\n{proc}");
+        }
+    }
+
+    // --- story 112: a sampling into a name that holds a value -------------
+
+    /// The `proc d_<oracle>(` of `dir`'s first variant, header to `return`.
+    fn story_proc(dir: &str, theorem: &str, oracle: &str) -> String {
+        let variants = load_variants(dir, theorem);
+        let rendered = render_file(&variants[0].file);
+        let header = format!("proc d_{oracle}(");
+        let start = rendered
+            .find(&header)
+            .unwrap_or_else(|| panic!("no `{header}` in:\n{rendered}"));
+        let rest = &rendered[start..];
+        let end = rest
+            .find("return ")
+            .unwrap_or_else(|| panic!("no `return` in:\n{rest}"));
+        rest[..end].to_string()
+    }
+
+    fn story112_proc(oracle: &str) -> String {
+        story_proc("testdata/easycrypt/story112", "Story112", oracle)
+    }
+
+    #[test]
+    fn a_sampling_into_an_argument_goes_through_a_temporary() {
+        let proc = story96_init_proc();
+        assert!(
+            proc.contains("ec_s1 <$ dbits_n;") && proc.contains("key <- ec_s1;"),
+            "got:\n{proc}"
+        );
+        assert!(!proc.contains("key <$"), "got:\n{proc}");
+        let decls: Vec<_> = var_lines(&proc)
+            .into_iter()
+            .filter(|line| line.starts_with("var ec_s1 :"))
+            .collect();
+        assert_eq!(decls, vec!["var ec_s1 : bits_n;"], "got:\n{proc}");
+    }
+
+    #[test]
+    fn a_sampling_into_a_state_field_goes_through_a_temporary() {
+        let proc = story112_proc("St");
+        assert!(
+            proc.contains("ec_s1 <$ dbits_n;") && proc.contains("S <- ec_s1;"),
+            "got:\n{proc}"
+        );
+    }
+
+    #[test]
+    fn a_sampling_into_a_local_written_before_goes_through_a_temporary() {
+        let proc = story112_proc("Assigned");
+        assert!(
+            proc.contains("x <- a;")
+                && proc.contains("ec_s1 <$ dbits_n;")
+                && proc.contains("x <- ec_s1;"),
+            "got:\n{proc}"
+        );
+        let proc = story112_proc("Branch");
+        assert!(
+            proc.contains("ec_s1 <$ dbits_n;") && proc.contains("y <- ec_s1;"),
+            "got:\n{proc}"
+        );
+    }
+
+    #[test]
+    fn a_sampling_into_a_local_with_no_earlier_write_is_direct() {
+        for (oracle, var) in [("Fresh", "z"), ("SamplesW", "w")] {
+            let proc = story112_proc(oracle);
+            assert!(
+                proc.contains(&format!("{var} <$ dbits_n;")) && !proc.contains("ec_s"),
+                "oracle `{oracle}`, got:\n{proc}"
+            );
         }
     }
 }

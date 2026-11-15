@@ -1,0 +1,20 @@
+composition G {
+    const n: Integer;
+
+    instance w = W {
+        params {
+            n: n,
+        }
+    }
+
+    compose {
+        adversary: {
+            St: w,
+            Assigned: w,
+            Branch: w,
+            Fresh: w,
+            WritesW: w,
+            SamplesW: w,
+        },
+    }
+}

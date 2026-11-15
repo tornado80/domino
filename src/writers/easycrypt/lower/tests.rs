@@ -795,3 +795,25 @@ fn roles_and_frames_serialise_for_the_viewer() {
         })
     );
 }
+
+/// Story 112 §4: the listing of the story 96 oracle `Init`, which samples
+/// into its argument `key`, has the module's sampling and copy.
+#[test]
+fn a_sampling_into_an_argument_goes_through_the_same_temporary_as_the_module() {
+    const STORY96: &str = "testdata/easycrypt/story96";
+    let (th, _) = ec_theorem(STORY96, "Story96");
+    let game_inst = th.find_game_instance("L").unwrap();
+    for inl in [
+        inline_oracle_ec(game_inst, "Init").unwrap(),
+        package_oracle_ec(game_inst, "Init").unwrap(),
+    ] {
+        let text = &inl.listing.text;
+        let sample = text.find("ec_s1 <$ dbits_n;");
+        let copy = text.find("key <- ec_s1;");
+        assert!(
+            matches!((sample, copy), (Some(s), Some(c)) if s < c),
+            "got:\n{text}"
+        );
+        assert!(!text.contains("key <$"), "got:\n{text}");
+    }
+}
