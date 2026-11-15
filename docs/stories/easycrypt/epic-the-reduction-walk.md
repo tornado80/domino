@@ -57,7 +57,8 @@ when the shape is wrong.
 
 Stories 104 and 105 are independent. Story 106 joins them. Story 108 came out of story 107's run
 (2026-11-13): the walk closed hop 12, but in about the blind walk's time. Story 109 came out of
-the run of the five Full4WHS reduction hops with story 108 (2026-11-14).
+the run of the five Full4WHS reduction hops with story 108 (2026-11-14); it is done (hop 12:
+0 admits, 1480 s EasyCrypt time, down from 2602 s).
 
 ## 5. Done when
 

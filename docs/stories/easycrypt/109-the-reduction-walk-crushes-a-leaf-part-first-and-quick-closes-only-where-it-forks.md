@@ -123,30 +123,30 @@ For hop 12 alone: about 575 s for §3.1 and about 250–330 s for §3.2.
 
 ## 4. Tests first
 
-- [ ] Unit test: the part fallback order of a `Reduction` leaf with premises is the crush,
+- [x] Unit test: the part fallback order of a `Reduction` leaf with premises is the crush,
       `smt().`, `smt(<hints>).`; with no premises `smt().`, `smt(<hints>).`.
-- [ ] Unit test: the part fallback order of `Equiv`, `Hoare` and `Package` is unchanged
+- [x] Unit test: the part fallback order of `Equiv`, `Hoare` and `Package` is unchanged
       (`smt().`, `smt(<hints>).`, the crush).
-- [ ] Unit test: the quick close comes before `Leaf`, `Branches`, `Samplings` and `Mismatch`, and
+- [x] Unit test: the quick close comes before `Leaf`, `Branches`, `Samplings` and `Mismatch`, and
       not before `AssumptionGuard`, `TailBranch` and `ExitGuards`.
-- [ ] Live test, `reduction-two-calls` (under `systemd-run --user --scope -p MemoryMax=6G`): 0
+- [x] Live test, `reduction-two-calls` (under `systemd-run --user --scope -p MemoryMax=6G`): 0
       admits; in the transcript no program-goal quick close comes directly before an `rcond`
       decision, and every leaf part with premises starts with the crush.
-- [ ] Live test, `reduction-consts`: 0 admits. The mismatch test of story 106 still gives exactly
+- [x] Live test, `reduction-consts`: 0 admits. The mismatch test of story 106 still gives exactly
       one `left-only-if` admit.
-- [ ] The equivalence tests of the leaf procedure, of the part fallbacks and of lockstep execution
+- [x] The equivalence tests of the leaf procedure, of the part fallbacks and of lockstep execution
       are unchanged and green (filtered runs).
 
 ## 5. Acceptance criteria
 
-- [ ] All tests of §4 green, with filtered test runs only. `cargo clippy -j 2` clean.
+- [x] All tests of §4 green, with filtered test runs only. `cargo clippy -j 2` clean.
 - [ ] Complexity: every touched function within budget (`.sdlc-workspace/crap-coverage.sh <filter>`).
-- [ ] Hop 12 of Full4WHS, all 12 oracles, on a copy of the Full4WHS translation outside
+- [x] Hop 12 of Full4WHS, all 12 oracles, on a copy of the Full4WHS translation outside
       `~/ec4whs`, `--jobs 2`, under a memory cap: no admit, and EasyCrypt time below 2000 s (story
       108: 2602 s). The report gives the two tables of §2 again for this run (parts by closer, and
       program-goal quick closes by place and outcome), and names any goal the quick close closed at
       an arm start in story 108's run that now needs more than its `rcond`s and one quick close.
-- [ ] `docs/proving-algorithm.md` §10 and §6 describe the walk as built.
+- [x] `docs/proving-algorithm.md` §10 and §6 describe the walk as built.
 
 ## 6. Rejected alternatives
 

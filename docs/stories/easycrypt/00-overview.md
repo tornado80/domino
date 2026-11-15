@@ -242,8 +242,8 @@ grilling of 2026-11-10/11.
 
 Stories 104–107 are the epic **EasyCrypt export: the reduction walk**
 (`epic-the-reduction-walk.md`, ADR 0024, which supersedes ADR 0023 decision 5), from the grilling
-of 2026-11-12/13. Stories 104–108 are done (implementation reports beside the stories). Story 109, the walk's
-remaining cost after the run of the five Full4WHS reduction hops, is open.
+of 2026-11-12/13. Stories 104–109 are done (implementation reports beside the stories). Story 109 cut hop 12's
+EasyCrypt time from 2602 s to 1480 s.
 
 Stories 71–77 and symbolic-execution 26–29 come from the grilling of 2026-10-12/20. The merges land
 in the order 71 → symbolic-execution 26 → 74. Not merged: the rest of Christoph Egger's stack (not
