@@ -261,8 +261,16 @@ is an **independent sampling** and is consumed on its side alone.
 
 **Stuck point** — a place on a joint path where lockstep execution cannot hand EasyCrypt a proof
 step: a paired sampling reached on one side before its partner, or a sampling whose pairing the
-solver cannot decide under the path condition. The proof admits it; the execution carries on past
-it with Domino's randomness semantics, so the paths below still get verdicts.
+solver cannot decide under the path condition. It exists only where no side's head is an
+independent sampling: if one side is independent, that side goes alone and nothing is stuck. The
+proof admits it, and the admit covers everything below it; the execution carries on past it with
+Domino's randomness semantics, so the paths below still get verdicts.
+
+**Crossed samplings** — both sides at a sampling, and the randomness mapping pairs each head, for
+certain, with a later draw of the other side. Neither side is independent, so neither can go first;
+a reorder of one side resolves it. A stuck point at the partner of a crossed sampling is a
+consequence of the cross, not a second problem.
+_Distinguish_: a pairing that holds on some executions only, which no reorder resolves.
 
 **Joint path** — one path of a lockstep execution: the sequence of joint decisions from the start
 of both oracles to a pair of terminals.

@@ -231,6 +231,7 @@ files, or read out of this repository's source. §8 lists the evidence.
 | 107 | Hop 12 of Full4WHS closes with the reduction walk (acceptance run) | `107-hop-12-of-full4whs-closes-with-the-reduction-walk.md` | 106 |
 | 108 | The reduction walk decides an `if` without guessing and closes a leaf by substitution (cost follow-up of 107) | `108-the-reduction-walk-decides-an-if-without-guessing-and-closes-a-leaf-by-substitution.md` | 106, 107 |
 | 109 | The reduction walk crushes a leaf part first and quick-closes only where it forks (cost follow-up of 108) | `109-the-reduction-walk-crushes-a-leaf-part-first-and-quick-closes-only-where-it-forks.md` | 108 |
+| 110 | A stuck point names its partner, a cross and the other head (reason with data; `other_head`; tree version 2; ADR 0025) | `110-a-stuck-point-names-its-partner.md` | — |
 | 111 | A Bits distribution is declared lossless (`op [lossless] dbits_n`; an independent sampling closes) | `111-a-bits-distribution-is-declared-lossless.md` | — |
 | 112 | A sampling into a name that holds a value goes through a temporary (`ec_s<N> <$ d; x <- ec_s<N>;`) | `112-a-sampling-into-a-name-that-holds-a-value-goes-through-a-temporary.md` | — |
 
@@ -250,9 +251,11 @@ EasyCrypt time from 2602 s to 1480 s.
 Stories 111 and 112 come from the grilling of 2026-11-14/15 on the `program-mismatch` admits of
 4WHS-mac and 4WHS-prf-mac (diagnosis of 2026-10-30). They are independent of each other. Each
 fixes one cause: 111 a lossless goal at an independent sampling, 112 a sampling into a name that
-`#pre` mentions. Their proof runs are made once, after both are merged (story 111 §7). Number 110
-is kept free for the story `109-a-stuck-point-names-its-partner.md`, which is not committed yet and
-needs a new number.
+`#pre` mentions. Their proof runs are made once, after both are merged (story 111 §7).
+
+Story 110 comes from the grilling of 2026-11-14 ("skippable randomness mapping") and ADR 0025. It
+changes only the debugger's stuck-point diagnosis, not the proofs. It is independent of 111 and
+112.
 
 Stories 71–77 and symbolic-execution 26–29 come from the grilling of 2026-10-12/20. The merges land
 in the order 71 → symbolic-execution 26 → 74. Not merged: the rest of Christoph Egger's stack (not
