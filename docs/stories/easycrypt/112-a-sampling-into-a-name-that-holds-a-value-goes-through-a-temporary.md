@@ -134,26 +134,26 @@ EasyCrypt, and alignment already reports it as `unknown-ec-instruction`.
 
 ## 4. Tests first
 
-- [ ] Unit test in `package.rs`: an oracle that samples into its argument renders
+- [x] Unit test in `package.rs`: an oracle that samples into its argument renders
       `ec_s1 <$ dbits_n; key <- ec_s1;`, and declares `ec_s1` once.
-- [ ] Unit test: a sampling into a state field renders through a temporary.
-- [ ] Unit test: a local that an earlier statement writes (an assignment, then a sampling) renders
+- [x] Unit test: a sampling into a state field renders through a temporary.
+- [x] Unit test: a local that an earlier statement writes (an assignment, then a sampling) renders
       through a temporary. A write in a `then` branch, then a sampling after the `if`, also does.
-- [ ] Unit test: a sampling into a local with no earlier write renders `x <$ d;` as before, with no
+- [x] Unit test: a sampling into a local with no earlier write renders `x <$ d;` as before, with no
       temporary. A local written in one oracle and sampled in another oracle of the same package
       does not get a temporary.
-- [ ] The `story96` fixture: `the_body_still_writes_to_the_argument` changes. The write to `key` is
+- [x] The `story96` fixture: `the_body_still_writes_to_the_argument` changes. The write to `key` is
       now the copy `key <- ec_s<N>`. `an_argument_that_the_body_writes_is_not_declared_again` stays
       green.
-- [ ] Unit test: the EasyCrypt listing (`lower.rs`) of the `story96` oracle has the same sampling
+- [x] Unit test: the EasyCrypt listing (`lower.rs`) of the `story96` oracle has the same sampling
       and copy as the module.
-- [ ] Compile test: `story96_full_tree_compiles_in_dependency_order` stays green.
+- [x] Compile test: `story96_full_tree_compiles_in_dependency_order` stays green.
 - [ ] Regression test: the export of `example-projects/4WHS` gives the same text as before. No
       sampling there gets a temporary.
 
 ## 5. Acceptance criteria
 
-- [ ] All tests of §4 green, with filtered test runs only. `cargo clippy` clean.
+- [x] All tests of §4 green, with filtered test runs only. `cargo clippy` clean.
 - [ ] Complexity: the sampling arm of `translate_stmt`, `SampleTemps` and every other touched
       function within budget (`.sdlc-workspace/crap-coverage.sh <filter>`). If `translate_stmt` goes
       over budget, move the sampling arm into a function of its own.
