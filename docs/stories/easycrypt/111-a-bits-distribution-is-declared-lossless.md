@@ -96,24 +96,24 @@ the other. In Full4WHS, this is only in the hops with `H7`, where `MAC.Init` sam
 
 ## 4. Tests first
 
-- [ ] Unit test in `render.rs`: an `OpDecl` with the tag `lossless` renders as
+- [x] Unit test in `render.rs`: an `OpDecl` with the tag `lossless` renders as
       `op [lossless] dbits_n : bits_n distr.`, and an `OpDecl` with no tag renders as before.
-- [ ] Unit test in `typesfile.rs`: `bits_type_items` for `Bits(n)` gives no `Axiom` item, and its
+- [x] Unit test in `typesfile.rs`: `bits_type_items` for `Bits(n)` gives no `Axiom` item, and its
       distribution item has the tag `lossless`. The same for `Bits(*)` (`dbits`) and a numeric
       count (`dbits_256`).
-- [ ] The seven golden `Types.ec` files are regenerated: the `op dbits…` line gets `[lossless]`,
+- [x] The seven golden `Types.ec` files are regenerated: the `op dbits…` line gets `[lossless]`,
       and the `axiom dbits…_ll` line goes away. Nothing else in them changes.
-- [ ] The compile tests `*_types_file_compiles` stay green.
-- [ ] A new compile test (fixture under `testdata/easycrypt/story111/`): a `Types.ec` as the writer
+- [x] The compile tests `*_types_file_compiles` stay green.
+- [x] A new compile test (fixture under `testdata/easycrypt/story111/`): a `Types.ec` as the writer
       emits it, and a second file that does `require import Types` and proves an `equiv` whose right
       side samples `dbits_n` once, with `seq 0 1 : (#pre); 1: auto => />.` It skips without
       `easycrypt`, as `assert_compiles` does.
-- [ ] The existing full-tree compile tests stay green. A hand-written proof that names
+- [x] The existing full-tree compile tests stay green. A hand-written proof that names
       `dbits_n_ll` still finds it.
 
 ## 5. Acceptance criteria
 
-- [ ] All tests of §4 green, with filtered test runs only. `cargo clippy` clean.
+- [x] All tests of §4 green, with filtered test runs only. `cargo clippy` clean.
 - [ ] Complexity: `bits_type_items`, `render_item` and every other touched function within budget
       (`.sdlc-workspace/crap-coverage.sh <filter>`).
 - [ ] The proof runs: see §7. They run once, after Stories 111 and 112 are both merged.

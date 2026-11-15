@@ -252,6 +252,7 @@ Stories 111 and 112 come from the grilling of 2026-11-14/15 on the `program-mism
 4WHS-mac and 4WHS-prf-mac (diagnosis of 2026-10-30). They are independent of each other. Each
 fixes one cause: 111 a lossless goal at an independent sampling, 112 a sampling into a name that
 `#pre` mentions. Their proof runs are made once, after both are merged (story 111 §7).
+Story 111 is done (implementation report beside the story); its proof runs wait for 112.
 
 Story 110 comes from the grilling of 2026-11-14 ("skippable randomness mapping") and ADR 0025. It
 changes only the debugger's stuck-point diagnosis, not the proofs. It is independent of 111 and
