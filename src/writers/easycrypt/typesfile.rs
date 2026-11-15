@@ -363,6 +363,16 @@ mod tests {
         );
     }
 
+    /// The story111 fixture's `Types.ec` is the writer's output, not a hand edit.
+    #[test]
+    fn story111_types_file_matches_writer_output() {
+        assert_golden(
+            "example-projects/hello-world",
+            "Proof",
+            "testdata/easycrypt/story111/Types.ec",
+        );
+    }
+
     #[test]
     fn rendering_is_deterministic() {
         let (theorem, types) = load_theorem_types("example-projects/4WHS", "Simple4WHS");
