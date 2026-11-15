@@ -11,7 +11,7 @@ use miette::SourceSpan;
 use crate::theorem::Theorem;
 use crate::types::{CountSpec, Type, TypeKind};
 
-use super::ast::{EcExpr, EcFile, EcItem, EcType, Require};
+use super::ast::{EcFile, EcItem, EcType, Require};
 use super::types::{bits_suffix, bits_type_name, func_op_name, translate_type};
 use super::EcExportError;
 
@@ -36,7 +36,7 @@ fn theorem_level_span() -> SourceSpan {
 ///
 /// Emits, in this order and deterministically (both maps below are
 /// `BTreeMap`s keyed by the emitted EasyCrypt name, never a `HashSet`
-/// iterated directly): one `type`/`zero`/`one`/`dbits`/`dbits_ll` block per
+/// iterated directly): one `type`/`zero`/`one`/`[lossless] dbits` block per
 /// distinct bits type, then one `op func_<name>` per theorem constant of
 /// `Fn` type. Theorem constants of `Integer`/`Boolean` type are not declared
 /// here (§3.4): width integers became types above, and the rest are lemma
@@ -55,6 +55,7 @@ pub fn build_types_file(
         items.push(EcItem::OpDecl {
             name: func_op_name(&name),
             ty: translate_type(&ty, span)?,
+            tags: vec![],
         });
     }
 
@@ -105,11 +106,17 @@ pub(crate) fn collect_fn_consts(consts: &[(String, Type)]) -> BTreeMap<String, T
         .collect()
 }
 
-/// The `type`/`op zero`/`op one`/`op dbits`/`axiom dbits_ll` block for one
+/// The `type`/`op zero`/`op one`/`op [lossless] dbits` block for one
 /// bits type (§3.4). `name` is already the full EasyCrypt type name
 /// (`bits_n`, `bits_256`, `bits`); `count` gives the suffix for its
 /// constants (`None` for `Bits(*)`, whose constants are bare `zero`/`one`/
 /// `dbits`).
+///
+/// The distribution is declared `op [lossless] dbits_n : bits_n distr.`
+/// (story 111), not with a separate `axiom dbits_n_ll`. EasyCrypt then
+/// declares `dbits_n_ll : is_lossless dbits_n` itself (same name as the old
+/// axiom) and puts it into the hint bases `random` and `lossless`, so `rnd`
+/// closes the lossless side goal of a one-sided sampling by itself.
 fn bits_type_items(name: &str, count: &CountSpec) -> Vec<EcItem> {
     let suffix = bits_suffix(count);
     let with_suffix = |base: &str| match &suffix {
@@ -127,21 +134,17 @@ fn bits_type_items(name: &str, count: &CountSpec) -> Vec<EcItem> {
         EcItem::OpDecl {
             name: zero,
             ty: EcType::Named(name.to_string()),
+            tags: vec![],
         },
         EcItem::OpDecl {
             name: one,
             ty: EcType::Named(name.to_string()),
+            tags: vec![],
         },
         EcItem::OpDecl {
-            name: dbits.clone(),
+            name: dbits,
             ty: EcType::Distr(Box::new(EcType::Named(name.to_string()))),
-        },
-        EcItem::Axiom {
-            name: format!("{dbits}_ll"),
-            formula: EcExpr::App {
-                head: "is_lossless".to_string(),
-                args: vec![EcExpr::Var(dbits)],
-            },
+            tags: vec!["lossless".to_string()],
         },
     ]
 }
@@ -242,22 +245,18 @@ mod tests {
                 },
                 EcItem::OpDecl {
                     name: "zero_n".to_string(),
-                    ty: EcType::Named("bits_n".to_string())
+                    ty: EcType::Named("bits_n".to_string()),
+                    tags: vec![],
                 },
                 EcItem::OpDecl {
                     name: "one_n".to_string(),
-                    ty: EcType::Named("bits_n".to_string())
+                    ty: EcType::Named("bits_n".to_string()),
+                    tags: vec![],
                 },
                 EcItem::OpDecl {
                     name: "dbits_n".to_string(),
-                    ty: EcType::Distr(Box::new(EcType::Named("bits_n".to_string())))
-                },
-                EcItem::Axiom {
-                    name: "dbits_n_ll".to_string(),
-                    formula: EcExpr::App {
-                        head: "is_lossless".to_string(),
-                        args: vec![EcExpr::Var("dbits_n".to_string())],
-                    },
+                    ty: EcType::Distr(Box::new(EcType::Named("bits_n".to_string()))),
+                    tags: vec!["lossless".to_string()],
                 },
             ]
         );
@@ -274,25 +273,32 @@ mod tests {
                 },
                 EcItem::OpDecl {
                     name: "zero".to_string(),
-                    ty: EcType::Named("bits".to_string())
+                    ty: EcType::Named("bits".to_string()),
+                    tags: vec![],
                 },
                 EcItem::OpDecl {
                     name: "one".to_string(),
-                    ty: EcType::Named("bits".to_string())
+                    ty: EcType::Named("bits".to_string()),
+                    tags: vec![],
                 },
                 EcItem::OpDecl {
                     name: "dbits".to_string(),
-                    ty: EcType::Distr(Box::new(EcType::Named("bits".to_string())))
-                },
-                EcItem::Axiom {
-                    name: "dbits_ll".to_string(),
-                    formula: EcExpr::App {
-                        head: "is_lossless".to_string(),
-                        args: vec![EcExpr::Var("dbits".to_string())],
-                    },
+                    ty: EcType::Distr(Box::new(EcType::Named("bits".to_string()))),
+                    tags: vec!["lossless".to_string()],
                 },
             ]
         );
+    }
+
+    #[test]
+    fn bits_type_items_numeric_width_is_lossless_with_no_axiom() {
+        let items = bits_type_items("bits_256", &CountSpec::Literal(256));
+        assert!(!items.iter().any(|i| matches!(i, EcItem::Axiom { .. })));
+        assert!(items.contains(&EcItem::OpDecl {
+            name: "dbits_256".to_string(),
+            ty: EcType::Distr(Box::new(EcType::Named("bits_256".to_string()))),
+            tags: vec!["lossless".to_string()],
+        }));
     }
 
     // --- golden files: real projects, run through the real transform ----------
@@ -384,5 +390,13 @@ mod tests {
     #[test]
     fn simple_4whs_types_file_compiles() {
         assert_compiles("testdata/easycrypt/story02/4WHS", "Types.ec");
+    }
+
+    /// Story 111: with `op [lossless] dbits_n`, a one-sided sampling's
+    /// `is_lossless` side goal closes under `seq 0 1 : (#pre); 1: auto => />.`
+    /// The fixture also names `dbits_n_ll` by hand, so the name still exists.
+    #[test]
+    fn independent_sampling_closes_with_lossless_bits_distribution() {
+        assert_compiles("testdata/easycrypt/story111", "IndependentSampling.ec");
     }
 }

@@ -42,10 +42,12 @@ pub enum EcItem {
         name: String,
         fields: Vec<(String, EcType)>,
     },
-    /// `op zero_n : bits_n.`
+    /// `op zero_n : bits_n.`, or with `tags` `op [lossless] dbits_n : bits_n distr.`
+    /// (story 111). `tags` is empty for a plain declaration.
     OpDecl {
         name: String,
         ty: EcType,
+        tags: Vec<String>,
     },
     OpDef {
         name: String,

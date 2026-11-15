@@ -504,10 +504,12 @@ fn kitchen_sink() -> EcFile {
             EcItem::OpDecl {
                 name: "zero_n".to_string(),
                 ty: EcType::Named("bits_n".to_string()),
+                tags: vec![],
             },
             EcItem::OpDecl {
                 name: "dbits".to_string(),
                 ty: EcType::Distr(Box::new(EcType::Named("bits_n".to_string()))),
+                tags: vec![],
             },
             EcItem::OpDecl {
                 name: "kitchen_fun_ty".to_string(),
@@ -515,6 +517,7 @@ fn kitchen_sink() -> EcFile {
                     Box::new(EcType::Fun(Box::new(EcType::Int), Box::new(EcType::Int))),
                     Box::new(EcType::Int),
                 ),
+                tags: vec![],
             },
             EcItem::OpDef {
                 name: "idfun_helper".to_string(),

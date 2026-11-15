@@ -67,6 +67,15 @@ generate two constant literals as 0_n and 1_n or 0_256 and 1_256 in Domino.
 In EasyCrypt, We can generate two constants zero_n and one_n (or zero_256 and one_256) for each 
 identifier and literal that domino has extracted.
 
+Each bits type also gets its sampling distribution, declared lossless (story 111):
+
+```
+op [lossless] dbits_n : bits_n distr.
+```
+
+EasyCrypt then declares `dbits_n_ll : is_lossless dbits_n` and puts it into the hint bases
+`random` and `lossless`, so `rnd` closes the lossless side goal of a one-sided sampling by itself.
+
 All the functions and types can be placed in a Types.ec file and imported into other files 
 we generate for each package and game and gamehop.
 

@@ -422,7 +422,7 @@ path), `S<n>` (stuck point), `N<n>` (node), `router`, or an arm path of the redu
 | `domino-verified-ec-failed` | Unreachable node | `N<n>` | `unreachable` | Verified, fixed |
 | `domino-verified-ec-failed` | Pruned combination | `N<parent>` | `pruned-combination` | Verified, fixed |
 | `program-mismatch` | `proc; inline.` refused | `N0` | `proc; inline.` | n/a |
-| `program-mismatch` | Blind walk ran out of options | `N<n>` | `program` | Inconclusive |
+| `program-mismatch` | Blind walk ran out of options | `N<n>` | `program` | Inconclusive. An independent sampling no longer gets it from its `is_lossless` side goal: `Types.ec` declares `op [lossless] dbits_n` (story 111). |
 | `seq-post` | Synchronized sampling after `sp` | A pair below | `sampling` | Verified, fixed |
 | `seq-post` | Synchronized sampling into a variable `#pre` mentions (a `pvar` in that memory, or `glob` of a module holding it) | A pair below | `sampling: <x>{<side>} in #pre` | Verified, fixed |
 | `router` | Prelude side goal | `router` | `router-condition`, `both-aborted`, `already-aborted` | n/a |

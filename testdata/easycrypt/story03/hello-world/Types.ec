@@ -8,6 +8,4 @@ op zero_n : bits_n.
 
 op one_n : bits_n.
 
-op dbits_n : bits_n distr.
-
-axiom dbits_n_ll : is_lossless dbits_n.
+op [lossless] dbits_n : bits_n distr.

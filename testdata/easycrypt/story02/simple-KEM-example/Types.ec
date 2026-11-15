@@ -8,9 +8,7 @@ op zero_256 : bits_256.
 
 op one_256 : bits_256.
 
-op dbits_256 : bits_256 distr.
-
-axiom dbits_256_ll : is_lossless dbits_256.
+op [lossless] dbits_256 : bits_256 distr.
 
 op func_decaps : bits_256 -> bits_256 -> bits_256.
 

@@ -69,13 +69,23 @@ fn render_require(r: &Require) -> String {
     format!("{keyword} {}.", r.names.join(" "))
 }
 
+/// `op name : ty.`, or `op [t1 t2] name : ty.` when `tags` is not empty (story 111).
+fn render_op_decl(name: &str, ty: &EcType, tags: &[String]) -> String {
+    let tags = if tags.is_empty() {
+        String::new()
+    } else {
+        format!("[{}] ", tags.join(" "))
+    };
+    format!("op {tags}{name} : {}.", render_type(ty))
+}
+
 fn render_item(item: &EcItem) -> String {
     match item {
         EcItem::Comment(s) => format!("(* {s} *)"),
         EcItem::TypeAbstract { name } => format!("type {name}."),
         EcItem::TypeAlias { name, ty } => format!("type {name} = {}.", render_type(ty)),
         EcItem::Record { name, fields } => render_record(name, fields),
-        EcItem::OpDecl { name, ty } => format!("op {name} : {}.", render_type(ty)),
+        EcItem::OpDecl { name, ty, tags } => render_op_decl(name, ty, tags),
         EcItem::OpDef {
             name,
             args,
@@ -1077,5 +1087,31 @@ fn render_expr_inner(e: &EcExpr) -> String {
         } => render_oracle_equiv(left, right, inv, assumed),
         EcExpr::OracleHoare { proc, pre, post } => render_oracle_hoare(proc, pre, post),
         EcExpr::RunEquiv { left, right, inv } => render_run_equiv(left, right, inv),
+    }
+}
+
+#[cfg(test)]
+mod op_decl_tests {
+    use super::*;
+
+    fn dbits_n(tags: &[&str]) -> EcItem {
+        EcItem::OpDecl {
+            name: "dbits_n".to_string(),
+            ty: EcType::Distr(Box::new(EcType::Named("bits_n".to_string()))),
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn op_decl_with_lossless_tag_renders_the_tag() {
+        assert_eq!(
+            render_item(&dbits_n(&["lossless"])),
+            "op [lossless] dbits_n : bits_n distr."
+        );
+    }
+
+    #[test]
+    fn op_decl_without_tags_renders_as_before() {
+        assert_eq!(render_item(&dbits_n(&[])), "op dbits_n : bits_n distr.");
     }
 }
