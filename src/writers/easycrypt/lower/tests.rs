@@ -817,3 +817,27 @@ fn a_sampling_into_an_argument_goes_through_the_same_temporary_as_the_module() {
         assert!(!text.contains("key <$"), "got:\n{text}");
     }
 }
+
+/// Story 112 §3.4: the listing records the locals written before a sampling
+/// as the module does, through branches too, and only per oracle.
+#[test]
+fn a_sampling_into_a_local_written_before_matches_the_module_in_the_listing() {
+    const STORY112: &str = "testdata/easycrypt/story112";
+    let (th, _) = ec_theorem(STORY112, "Story112");
+    let game_inst = th.find_game_instance("L").unwrap();
+    for (oracle, var, temp) in [
+        ("Assigned", "x", true),
+        ("Branch", "y", true),
+        ("Fresh", "z", false),
+        ("SamplesW", "w", false),
+    ] {
+        let text = inline_oracle_ec(game_inst, oracle).unwrap().listing.text;
+        let expected = if temp {
+            format!("{var} <- ec_s1;")
+        } else {
+            format!("{var} <$ dbits_n;")
+        };
+        assert!(text.contains(&expected), "oracle `{oracle}`, got:\n{text}");
+        assert_eq!(text.contains("ec_s1"), temp, "oracle `{oracle}`, got:\n{text}");
+    }
+}

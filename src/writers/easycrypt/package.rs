@@ -853,7 +853,9 @@ pub(super) struct SampleTemps {
     /// branch (story 112 §3.1). An over-approximation, which is harmless: a
     /// name in it only makes a later sampling into it use a temporary. The
     /// debugger listing shares one `SampleTemps` across its inlined frames;
-    /// its names are unique across the listing, so frames do not mix.
+    /// its local names are unique across the listing (`LocalNames`), so the
+    /// locals of two frames do not mix. A state field's qualified name is
+    /// shared by frames, but a state field always takes the temporary.
     written: HashSet<String>,
 }
 
@@ -930,7 +932,7 @@ impl OracleTranslator<'_> {
     }
 
     /// The target name of a write to `id`, recorded as written (story 112).
-    fn written_name(&mut self, id: &Identifier) -> Result<String, EcExportError> {
+    fn record_write(&mut self, id: &Identifier) -> Result<String, EcExportError> {
         let name = self.resolve_name(id)?;
         self.temps.written.insert(name.clone());
         Ok(name)
@@ -940,10 +942,10 @@ impl OracleTranslator<'_> {
     /// recorded as written.
     fn translate_pattern(&mut self, pattern: &Pattern) -> Result<EcLvalue, EcExportError> {
         Ok(match pattern {
-            Pattern::Ident(id) => EcLvalue::Var(self.written_name(id)?),
+            Pattern::Ident(id) => EcLvalue::Var(self.record_write(id)?),
             Pattern::Tuple(ids) => EcLvalue::Tuple(
                 ids.iter()
-                    .map(|id| self.written_name(id))
+                    .map(|id| self.record_write(id))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             Pattern::Table { .. } => {
@@ -1058,13 +1060,12 @@ impl OracleTranslator<'_> {
         let distr = self.sample_distr(ty, span)?;
         let lhs = match pattern {
             Pattern::Ident(id) => {
-                let name = self.resolve_name(id)?;
-                if !self.holds_a_value(id, &name) {
-                    self.temps.written.insert(name.clone());
-                    let lhs = EcLvalue::Var(name);
+                let holds_a_value = self.holds_a_value(id)?;
+                let lhs = EcLvalue::Var(self.record_write(id)?);
+                if !holds_a_value {
                     return Ok(vec![EcStmt::Sample { lhs, distr }]);
                 }
-                EcLvalue::Var(name)
+                lhs
             }
             Pattern::Table { ident, index } => {
                 let key = self.translate_e(index, span)?;
@@ -1086,15 +1087,20 @@ impl OracleTranslator<'_> {
         ])
     }
 
-    /// Whether the sampling target `id`, spelled `name`, holds a value
-    /// before the sampling (story 112 §3.2).
-    fn holds_a_value(&self, id: &Identifier, name: &str) -> bool {
-        matches!(
+    /// Whether the sampling target `id` holds a value before the sampling
+    /// (story 112 §3.2). The body is loop-free (`easycryptify` rejects every
+    /// surviving `for`), so program order is enough.
+    fn holds_a_value(&mut self, id: &Identifier) -> Result<bool, EcExportError> {
+        if matches!(
             id,
             Identifier::PackageIdentifier(
                 PackageIdentifier::OracleArg(_) | PackageIdentifier::State(_)
             )
-        ) || self.temps.written.contains(name)
+        ) {
+            return Ok(true);
+        }
+        let name = self.resolve_name(id)?;
+        Ok(self.temps.written.contains(&name))
     }
 
     /// `T[k] <- rhs` (§3.4). `rhs` is `Some(_)` or `None`: `easycryptify`
