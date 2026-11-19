@@ -1,0 +1,34 @@
+composition AssumptionReal {
+    const n: Integer;
+    const prf: fn Bits(n), Bits(n) -> Bits(n);
+    
+    instance Prf = PRF {
+        params {
+            n:   n,
+            prf: prf,
+        }
+    }
+    
+    instance key = KeyReal {
+        params {
+            n: n,
+        }
+    }
+    
+    instance keyB = KeyReal {
+        params {
+            n: n,
+        }
+    }
+
+    compose {
+        adversary: {
+            Eval: Prf,
+            Get:  key,
+            GetB: Get of keyB,
+        },
+        Prf: {
+            Set: key,
+        },
+    }
+}

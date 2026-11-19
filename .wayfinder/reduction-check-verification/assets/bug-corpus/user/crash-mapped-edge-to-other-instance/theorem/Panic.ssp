@@ -1,0 +1,27 @@
+theorem Panic {
+    instance PanicReal = PanicReal { params {} }
+    instance PanicIdeal = PanicIdeal { params {} }
+
+    instance AssumptionReal = AssumptionReal { params {} }
+    instance AssumptionIdeal = AssumptionIdeal { params {} }
+
+    assumptions {
+        Assumption: AssumptionReal ~ AssumptionIdeal
+    }
+
+    gamehops {
+        reduction PanicReal PanicIdeal {
+            assumption Assumption
+            map AssumptionReal PanicReal {
+                Importer: Importer
+                Provider: Provider
+                Wrong: Wrong
+            }
+            map AssumptionIdeal PanicIdeal {
+                Importer: Importer
+                Provider: Provider
+                Wrong: Wrong
+            }
+        }
+    }
+}

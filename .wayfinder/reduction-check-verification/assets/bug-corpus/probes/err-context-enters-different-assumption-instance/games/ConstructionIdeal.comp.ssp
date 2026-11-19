@@ -1,0 +1,46 @@
+composition ConstructionIdeal {
+    const n: Integer;
+    const m: Integer;
+    const prf: fn Bits(n), Bits(n) -> Bits(n);
+    const enc: fn Bits(n), Bits(n), Bits(n) -> Bits(m);
+    
+    instance Prf = PRF {
+        params {
+            n:   n,
+            prf: prf,
+        }
+    }
+    
+    instance key = KeyIdeal {
+        params {
+            n: n,
+        }
+    }
+    
+    instance Enc = Enc {
+        params {
+            n:   n,
+            m:   m,
+            enc: enc,
+        }
+    }
+    
+    instance keyB = KeyReal {
+        params {
+            n: n,
+        }
+    }
+
+    compose {
+        adversary: {
+            Eval: Prf,
+            Enc:  Enc,
+        },
+        Prf: {
+            Set: key,
+        },
+        Enc: {
+            Get: keyB,
+        }
+    }
+}

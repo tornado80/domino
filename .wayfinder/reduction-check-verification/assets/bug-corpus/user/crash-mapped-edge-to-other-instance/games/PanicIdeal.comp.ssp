@@ -1,0 +1,18 @@
+composition PanicIdeal {
+    instance Runner = Runner { params {} }
+    instance Importer = Importer { params { b: true } }
+    instance Provider = Provider { params {} }
+    instance Wrong = Provider { params {} }
+
+    compose {
+        adversary: {
+            Run: Runner
+        }
+        Runner: {
+            Eval: Importer
+        }
+        Importer: {
+            Oracle: Ideal of Wrong /* This is intentionally incorrect */
+        }
+    }
+}
